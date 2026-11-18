@@ -1,0 +1,1 @@
+[{"start":5382,"delete":0,"insert":["      private final ",{"copy":15201,"length":64},"\n"]},{"start":15201,"delete":14,"insert":"this."},{"start":15232,"delete":20,"insert":".setValue"}]

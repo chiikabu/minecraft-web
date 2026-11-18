@@ -1,0 +1,1 @@
+[{"start":1524,"delete":0,"insert":"   private static final int SPAWN_LOAD_RADIUS = Integer.getInteger(\"web263.playerSpawnRadius\", 3);\n"},{"start":6008,"delete":1,"insert":"SPAWN_LOAD_RADIUS"},{"start":7427,"delete":1,"insert":"SPAWN_LOAD_RADIUS"},{"start":7684,"delete":1,"insert":"SPAWN_LOAD_RADIUS"}]

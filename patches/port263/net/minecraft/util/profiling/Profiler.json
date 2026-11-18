@@ -1,0 +1,1 @@
+[{"start":153,"delete":0,"insert":"import java.util.function.Supplier;\n"},{"start":768,"delete":0,"insert":["   ",{"copy":535,"length":35},"useNested(final Supplier<ProfilerFiller> filler) {\n      return ACTIVE.get() != null ? () -> {} : use(filler.get());\n"]}]

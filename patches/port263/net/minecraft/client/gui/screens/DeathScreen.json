@@ -1,0 +1,1 @@
+[{"start":4086,"delete":0,"insert":"if (net.minecraft.client.Minecraft.workerWorldHost != null && net.minecraft.client.Minecraft.workerWorldHost.active()) {\n         net.minecraft.client.Minecraft.workerWorldHost.requestStop(new TitleScreen());\n      } else {\n         "},{"start":4134,"delete":0,"insert":"\n      }"}]

@@ -1,0 +1,1 @@
+[{"start":1614,"delete":0,"insert":"   @Override\n   public int getFlagMask() {\n      return this.goal.getFlagMask();\n   }\n\n"}]

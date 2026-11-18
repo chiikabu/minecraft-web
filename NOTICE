@@ -1,0 +1,117 @@
+minecraft-web
+Copyright 2026 chiikabu (https://github.com/chiikabu)
+
+Code in this repository is licensed under the Apache License, Version 2.0 (see LICENSE), except
+where a file or the notes below say otherwise.
+
+No Minecraft source, assets or binaries are included. "Minecraft" is a trademark of Mojang
+Synergies AB; this project is not affiliated with or endorsed by Mojang or Microsoft.
+
+Many classes under target_teavm_263/src/main/java and target_teavm_263/vendor/lwjgl carry the
+package and class names of libraries the game links against (Netty, Log4j, SLF4J, LWJGL, OSHI,
+ICU4J, JNA, lz4-java, Commons Compress, and Mojang's authlib, jtracy, logging and text2speech).
+They are small browser stand-ins written for this port that keep only the names and signatures
+the game needs, unless a file carries an upstream notice.
+
+
+The compiler-tooling and compiler-runtime directories contain modified TeaVM
+sources. TeaVM is Copyright Alexey Andreev and contributors, licensed under
+Apache-2.0. Original per-file notices are retained. These copies include local
+compiler and JavaScript long-runtime changes.
+
+The org/teavm/classlib sources also include modified TeaVM Java library
+implementations and browser-specific additions. Apache-2.0 and the original
+per-file copyright notices apply to the modified TeaVM sources.
+
+The modified org/threeten/bp/Duration.java also retains the ThreeTen notice:
+
+Copyright (c) 2007-present, Stephen Colebourne & Michael Nascimento Santos
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+ * Neither the name of JSR-310 nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The vendor/gson and vendor/guava directories contain modified Gson 2.14.0
+and Guava 33.6.0-jre sources under Apache-2.0. Original per-file notices are
+retained. These replacements adapt reflection and future state to the browser.
+
+The vendor/joml directory contains JOML 1.10.8 under the MIT License, with small changes to
+Options, MemUtil and Runtime. License and copyright notices are retained in-file.
+
+The xz-loader/c/xz directory contains the XZ Embedded decoder under 0BSD.
+Its per-file notices and COPYING are retained. Upstream is
+https://github.com/tukaani-project/xz-embedded.
+Building the decoder uses Zig's bundled C toolchain and WASI libc; their licenses
+accompany the Zig distribution.
+
+SLF4J API declarations retain the following upstream notice:
+
+Copyright (c) 2004-2022 QOS.ch Sarl (Switzerland)
+All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The PNG decoding code uses stb_image's integer luminance weights, component
+conversion and sample-depth scaling. The following upstream MIT notice applies to
+those portions:
+https://github.com/nothings/stb/blob/master/LICENSE
+
+Copyright (c) 2017 Sean Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The compiler patch (patches/compiler.patch) targets the Eaglercraft TeaVM fork at commit
+c0bac887ae63dba929ca546f07394eca3bd09b80, which build.py fetches from its public repository.
+Its Apache-2.0 license and copyright notices remain in those sources.

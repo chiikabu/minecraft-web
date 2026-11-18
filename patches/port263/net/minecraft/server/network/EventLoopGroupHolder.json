@@ -1,0 +1,1 @@
+[{"start":3983,"delete":0,"insert":"\n   public static boolean canBindListener() {\n      return true;\n   "},{"start":3985,"delete":0,"insert":"}\n"}]

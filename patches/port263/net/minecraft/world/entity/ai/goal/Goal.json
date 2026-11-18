@@ -1,0 +1,1 @@
+[{"start":338,"delete":0,"insert":"   private int flagMask;\n"},{"start":822,"delete":0,"insert":"      int mask = 0;\n\n      for (Goal.Flag flag : this.flags) {\n         mask |= 1 << flag.ordinal();\n      }\n\n      this.flagMask = mask;\n   }\n\n   public int getFlagMask() {\n      return this.flagMask;\n"}]

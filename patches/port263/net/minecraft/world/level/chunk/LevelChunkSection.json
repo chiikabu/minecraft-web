@@ -1,0 +1,1 @@
+[{"start":3425,"delete":0,"insert":["   }\n\n   public int sentNonEmptyBlockCount",{"copy":3459,"length":41},";\n"]},{"start":6536,"delete":0,"insert":"   public Holder<Biome> web263SingleBiome() {\n      return this.biomes.bitsPerEntry() == 0 ? this.biomes.get(0, 0, 0) : null;\n   }\n\n"}]

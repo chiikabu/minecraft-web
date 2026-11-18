@@ -1,0 +1,1 @@
+[{"start":485,"delete":0,"insert":"   @Override\n   public boolean acceptOutboundMessage(final Object msg) {\n      return msg instanceof Packet;\n   }\n\n"}]

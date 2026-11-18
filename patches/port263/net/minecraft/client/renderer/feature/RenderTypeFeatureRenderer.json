@@ -1,0 +1,1 @@
+[{"start":2547,"delete":0,"insert":"            FeatureRenderDispatcher.churnDrawsIssued++;\n            FeatureRenderDispatcher.churnDrawIndexCount += info.indexCount();\n"},{"start":2745,"delete":0,"insert":"         } else {\n            FeatureRenderDispatcher.churnDrawsEmpty++;\n"}]

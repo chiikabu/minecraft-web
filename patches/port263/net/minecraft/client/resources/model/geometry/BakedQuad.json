@@ -1,0 +1,1 @@
+[{"start":1135,"delete":0,"insert":"\n   public MaterialInfo materialInfo() {\n      this.materialInfo.sprite().contents().markAnimationActive();\n      return this.materialInfo;\n   }\n"}]

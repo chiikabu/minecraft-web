@@ -1,0 +1,1 @@
+[{"start":5287,"delete":0,"insert":["   }\n\n   public List<Beardifier.Rigid> web263Pieces() {\n      return this.pieces;\n   }\n\n   public List<JigsawJunction> web263Junctions() {\n      return this.junctions;\n   }\n\n   public @Nullable BoundingBox web263AffectedBox(",{"copy":7167,"length":33},";\n"]}]

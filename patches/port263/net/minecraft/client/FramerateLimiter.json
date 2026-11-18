@@ -1,0 +1,1 @@
+[{"start":582,"delete":0,"insert":"   public static volatile boolean externallyPaced;\n"},{"start":649,"delete":0,"insert":["      if (externallyPaced) {\n         ",{"copy":457,"length":34},"\n         return;\n      }\n"]},{"start":1765,"delete":51,"insert":""}]

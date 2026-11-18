@@ -1,0 +1,1 @@
+[{"start":1118,"delete":0,"insert":"<Predicate<String>>"},{"start":1122,"delete":20,"insert":"p -> s -> p.matcher(s).find()"},{"start":1240,"delete":0,"insert":"<Predicate<String>>"},{"start":1244,"delete":20,"insert":"p -> s -> p.matcher(s).find()"}]

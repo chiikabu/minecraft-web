@@ -1,0 +1,1 @@
+[{"start":2506,"delete":0,"insert":"   public SectionCopy[] web263Sections() {\n      return this.sections;\n   }\n\n   public int web263MinSectionX() {\n      return this.minSectionX;\n   }\n\n   public int web263MinSectionY() {\n      return this.minSectionY;\n   }\n\n   public int web263MinSectionZ() {\n      return this.minSectionZ;\n   }\n\n"}]

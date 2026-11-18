@@ -1,0 +1,8 @@
+# web263: read by the patched TeaVM AsyncMethodFinder (prepareAsyncFinderPatch in build.gradle.kts).
+# gate:N   - suspension does not propagate across call sites with more than N possible targets
+#            (generic Runnable.run / Function.apply sites, which fast analysis links to every
+#            implementation in the program); the gated edges are listed in build/async-report.txt.
+# gate-allow:CLASS - callers in CLASS or its nested classes are exempt: thread bodies are entered
+#            through java.lang.Thread and may really suspend (Thread.sleep in a watchdog).
+gate:8
+gate-allow:java.lang.Thread

@@ -1,0 +1,1 @@
+[{"start":3801,"delete":0,"insert":"ByteBuffer window = this.stagingBuffer.duplicate();\n         window.position((int)stagingBufferOffset);\n         window.limit((int)(stagingBufferOffset + copySize));\n         "},{"start":3861,"delete":18,"insert":"window"},{"start":3886,"delete":39,"insert":""}]

@@ -1,0 +1,11 @@
+{
+ "version": "26.3",
+ "vanilla_root": "build/no-vanilla-sources",
+ "client_jar": "build/client.jar",
+ "asset_index_id": "34",
+ "asset_index_dir": "build/assets/indexes",
+ "asset_object_dir": "build/assets/objects",
+ "java_release": 25,
+ "source_class_major": 69,
+ "target_class_major": 68
+}

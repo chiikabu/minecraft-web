@@ -1,0 +1,1 @@
+[{"start":374,"delete":0,"insert":"   @Nullable\n   private String cachedLine;\n\n"},{"start":576,"delete":9,"insert":"if (this"},{"start":586,"delete":16,"insert":"cachedLine == null) {"},{"start":612,"delete":0,"insert":"this.cachedLine = "},{"start":849,"delete":0,"insert":";"},{"start":856,"delete":0,"insert":"}\n\n      displayer.addPriorityLine(this.cachedLine"}]

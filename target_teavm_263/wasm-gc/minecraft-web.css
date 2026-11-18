@@ -1,0 +1,194 @@
+/* minecraft-web by chiikabu (https://github.com/chiikabu) */
+
+:root {
+	--mojang-red: #ef323d;
+	--mc-text: #ffffff;
+	--mc-shadow: #3f3f3f;
+	--mc-btn: #6f6f6f;
+	--mc-btn-hi: #a9a9a9;
+	--mc-btn-lo: #4a4a4a;
+	--mc-panel: rgba(16, 16, 16, 0.9);
+	--mc-yellow: #ffff55;
+	--mc-font: "Minecraft", "Minecraftia", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+html, body {
+	margin: 0; width: 100%; height: 100%; overflow: hidden;
+	background: var(--mojang-red); color: var(--mc-text);
+	font-family: var(--mc-font);
+	overscroll-behavior: none;
+	-webkit-tap-highlight-color: transparent;
+	-webkit-user-select: none; user-select: none;
+}
+#game_frame { width: 100%; height: 100%; display: block; border: 0; background: var(--mojang-red); }
+#log { display: none; }
+
+#boot {
+	--lh: 120px; --gu: 2px;
+	position: fixed; inset: 0; z-index: 2000;
+	background: var(--mojang-red);
+	transition: opacity .35s ease;
+}
+#boot.gone { opacity: 0; pointer-events: none; }
+#logo {
+	position: absolute; left: 50%; top: 50%;
+	width: calc(var(--lh) * 4); height: var(--lh);
+	transform: translate(-50%, -50%);
+	mix-blend-mode: plus-lighter;
+}
+#bar {
+	position: absolute; left: 50%; top: calc(83.25% - var(--gu) * 5);
+	transform: translateX(-50%);
+	box-sizing: border-box;
+	width: calc(var(--lh) * 4); height: calc(var(--gu) * 10);
+	border: var(--gu) solid #fff; padding: var(--gu);
+}
+#fill { height: 100%; width: 0; background: #fff; transition: width .25s linear; }
+#stage, #joining {
+	position: absolute; left: 0; right: 0; text-align: center;
+	font-size: 13px; letter-spacing: .02em;
+	color: rgba(255, 255, 255, .78);
+}
+#stage { top: calc(83.25% + var(--gu) * 5 + 12px); }
+#credit {
+	position: absolute; left: 0; right: 0; bottom: 12px; text-align: center;
+	font-size: 13px; letter-spacing: .02em; color: rgba(255, 255, 255, .78);
+}
+#credit a { color: #fff; }
+#joining { top: calc(50% + var(--lh) / 2 + 14px); color: #fff; font-size: 15px; }
+#boot.failed #stage { color: #fff; font-size: 15px; padding: 0 16px; }
+@media (prefers-reduced-motion: reduce) {
+	#boot, #fill { transition: none; }
+}
+
+.tc-btn {
+	font: 15px/1 var(--mc-font);
+	color: var(--mc-text);
+	text-shadow: 2px 2px 0 var(--mc-shadow);
+	background: var(--mc-btn);
+	border: 2px solid #000;
+	box-shadow: inset 2px 2px 0 var(--mc-btn-hi), inset -2px -3px 0 var(--mc-btn-lo);
+	padding: 9px 14px 10px;
+	cursor: pointer;
+	touch-action: manipulation;
+	white-space: nowrap;
+}
+.tc-btn:hover, .tc-btn:focus-visible { border-color: #fff; outline: none; }
+.tc-btn:active { box-shadow: inset 2px 2px 0 var(--mc-btn-lo), inset -2px -2px 0 var(--mc-btn-hi); }
+.tc-btn:disabled { color: #a0a0a0; text-shadow: none; cursor: default; border-color: #000; }
+.tc-btn.tc-small { font-size: 13px; padding: 6px 10px 7px; }
+.tc-btn.tc-wide { width: 100%; }
+
+#tc-toasts {
+	position: fixed; z-index: 1200;
+	top: calc(max(10px, env(safe-area-inset-top)) + 48px); right: max(10px, env(safe-area-inset-right));
+	display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+	pointer-events: none;
+}
+.tc-toast {
+	pointer-events: auto;
+	box-sizing: border-box; width: min(340px, calc(100vw - 20px));
+	background: var(--mc-panel);
+	border: 2px solid #000; box-shadow: inset 0 0 0 2px #555;
+	padding: 10px 12px;
+	animation: tc-in .25s ease-out;
+	transition: opacity .3s, transform .3s;
+}
+.tc-toast.out { opacity: 0; transform: translateX(16px); }
+.tc-toast-title { color: var(--mc-yellow); font-size: 14px; text-shadow: 2px 2px 0 #3f3f15; }
+.tc-toast-body { color: #fff; font-size: 13px; margin-top: 5px; line-height: 1.35; word-break: break-word; text-shadow: 1px 1px 0 var(--mc-shadow); }
+.tc-toast-actions { display: flex; gap: 6px; margin-top: 8px; }
+.tc-toast-actions:empty { display: none; }
+@keyframes tc-in { from { opacity: 0; transform: translateX(16px); } }
+
+.tc-dialog-back {
+	position: fixed; inset: 0; z-index: 1300;
+	background: rgba(0, 0, 0, .6);
+	display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.tc-dialog {
+	box-sizing: border-box; width: min(420px, 100%); max-height: 100%; overflow: auto;
+	display: flex; flex-direction: column; gap: 8px;
+	background: var(--mc-panel); border: 2px solid #000; box-shadow: inset 0 0 0 2px #555; padding: 16px;
+}
+.tc-dialog h2 { margin: 0 0 6px; text-align: center; font: 16px var(--mc-font); text-shadow: 2px 2px 0 var(--mc-shadow); }
+.tc-input {
+	font: 15px var(--mc-font); color: #fff; background: #000;
+	border: 2px solid #a0a0a0; padding: 8px; user-select: text; -webkit-user-select: text;
+}
+.tc-input:focus { border-color: #fff; outline: none; }
+.tc-row { display: flex; gap: 8px; }
+.tc-row > .tc-btn { flex: 1; }
+.tc-error { color: #ff5555; font-size: 13px; min-height: 1em; }
+.tc-worlds { display: flex; flex-direction: column; gap: 4px; min-height: 120px; max-height: 50vh; overflow: auto; font-size: 13px; }
+.tc-world {
+	display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 10px;
+	text-align: left; font: 14px var(--mc-font); color: #fff;
+	background: transparent; border: 2px solid transparent; padding: 6px; cursor: pointer;
+}
+.tc-world:hover, .tc-world:focus-visible { border-color: #a0a0a0; outline: none; }
+.tc-world img { grid-row: span 2; image-rendering: pixelated; }
+.tc-world-meta { color: #a0a0a0; font-size: 12px; }
+
+[aria-label="Touch controls"] > button { display: none !important; }
+
+#tc-touch {
+	--u: clamp(46px, 10.5vmin, 66px);
+	position: fixed; inset: 0; z-index: 1001; pointer-events: none;
+	font-family: var(--mc-font);
+}
+#tc-touch > * { pointer-events: auto; }
+#tc-touch .tc-pad, #tc-touch .tc-jump, #tc-touch .tc-inv, #tc-touch .tc-hotbar, #tc-touch .tc-top > .tc-t:nth-child(2) { display: none; }
+#tc-touch.playing .tc-pad { display: grid; }
+#tc-touch.playing .tc-jump, #tc-touch.playing .tc-inv, #tc-touch.playing .tc-hotbar { display: block; }
+#tc-touch.playing .tc-top > .tc-t:nth-child(2) { display: flex; }
+#tc-touch.playing .tc-kb { display: none; }
+#tc-touch .tc-when-playing, #tc-touch.playing .tc-when-menu { display: none; }
+#tc-touch.playing .tc-when-playing { display: block; }
+#tc-touch:not(.playing) .tc-top { left: max(10px, env(safe-area-inset-left)); transform: none; }
+
+.tc-t {
+	box-sizing: border-box; margin: 0; padding: 0;
+	display: flex; align-items: center; justify-content: center;
+	color: #fff; background: rgba(32, 32, 32, .42);
+	border: 2px solid rgba(255, 255, 255, .45);
+	touch-action: none; -webkit-user-select: none; user-select: none; cursor: pointer;
+}
+.tc-t svg { width: 46%; height: 46%; fill: rgba(255, 255, 255, .9); pointer-events: none; }
+.tc-t.on, .tc-t.latched { background: rgba(255, 255, 255, .38); border-color: #fff; }
+.tc-t[hidden] { visibility: hidden; display: flex !important; }
+
+.tc-pad {
+	position: absolute;
+	left: max(14px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom));
+	grid-template-columns: repeat(3, var(--u)); grid-template-rows: repeat(3, var(--u));
+	gap: 3px; touch-action: none;
+}
+.tc-pad .tc-sneak { border-radius: 50%; transform: scale(.72); }
+.tc-jump {
+	position: absolute;
+	right: max(18px, env(safe-area-inset-right)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + var(--u) * .6);
+	width: calc(var(--u) * 1.35); height: calc(var(--u) * 1.35); border-radius: 50%;
+}
+.tc-jump svg { width: 42%; height: 42%; }
+.tc-top {
+	position: absolute; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+	display: flex; gap: 8px;
+}
+.tc-small-btn { width: calc(var(--u) * .74); height: calc(var(--u) * .74); }
+.tc-kb { position: absolute; left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom)); }
+.tc-inv { position: absolute; bottom: max(2px, env(safe-area-inset-bottom)); width: 34px; height: 34px; }
+.tc-hotbar {
+	position: absolute; left: 50%; transform: translateX(-50%);
+	bottom: env(safe-area-inset-bottom);
+	background: transparent; touch-action: none;
+}
+.tc-field { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; font-size: 16px; }
+.tc-rotate {
+	display: none; position: absolute; inset: 0; z-index: 5;
+	align-items: center; justify-content: center; text-align: center; padding: 24px;
+	background: rgba(0, 0, 0, .78); font-size: 18px; text-shadow: 2px 2px 0 var(--mc-shadow);
+}
+@media (orientation: portrait) and (max-width: 700px) {
+	#tc-touch.playing .tc-rotate { display: flex; }
+}

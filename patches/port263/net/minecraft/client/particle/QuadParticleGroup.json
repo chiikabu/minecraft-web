@@ -1,0 +1,1 @@
+[{"start":933,"delete":0,"insert":"net.minecraft.client.renderer.LevelRenderer levelRenderer = net.minecraft.client.Minecraft.getInstance().levelRenderer;\n      "},{"start":1057,"delete":0,"insert":["\n            && !levelRenderer.isOccludedForParticles",{"copy":1021,"length":36}]}]

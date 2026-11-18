@@ -1,0 +1,1 @@
+[{"start":157,"delete":0,"insert":"import net.minecraft.client.web.WebRemoteSkins;\n"},{"start":2776,"delete":0,"insert":["      ",{"copy":1260,"length":53},"if (!minecraft.isLocalPlayer(this.profile.id())) {\n         PlayerSkin remote = WebRemoteSkins.get(this.profile);\n         if (remote != null) {\n            return remote;\n         }\n      }\n\n"]}]

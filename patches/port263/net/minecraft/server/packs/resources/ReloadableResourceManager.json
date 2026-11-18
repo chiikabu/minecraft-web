@@ -1,0 +1,1 @@
+[{"start":779,"delete":0,"insert":"   public static boolean forceProfiledReload;\n\n"},{"start":1811,"delete":0,"insert":"\n         "},{"start":1896,"delete":0,"insert":"forceProfiledReload || "},{"start":1919,"delete":0,"insert":"\n      "}]

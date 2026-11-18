@@ -1,0 +1,1 @@
+[{"start":6880,"delete":0,"insert":"   public static boolean isFogEnabled() {\n      return fogEnabled;\n   }\n\n"}]

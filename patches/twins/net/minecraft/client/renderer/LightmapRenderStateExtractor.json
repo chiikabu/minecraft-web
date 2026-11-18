@@ -1,0 +1,1 @@
+[{"start":774,"delete":0,"insert":"\n   static final float FULLBRIGHT_GAMMA = 16.0F;\n\n"},{"start":3378,"delete":0,"insert":"            float effectiveBrightness = brightnessOption >= 1.0F ? FULLBRIGHT_GAMMA : brightnessOption;\n"},{"start":3686,"delete":16,"insert":"effectiveBrightness"}]
