@@ -70,6 +70,7 @@ val replacedClasslibClasses = listOf(
 	"org/teavm/classlib/java/io/TBufferedReader",
 	"org/teavm/classlib/java/io/TReader",
 	"org/teavm/classlib/java/io/TRandomAccessFile",
+	"org/teavm/classlib/java/io/TFilterOutputStream",
 	"org/teavm/classlib/java/nio/TByteBuffer",
 	"org/teavm/classlib/impl/console/JsConsolePrintStream",
 	"org/teavm/classlib/java/util/TFormatter",

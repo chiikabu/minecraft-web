@@ -215,7 +215,12 @@
 	T.bootFailed = function (error) {
 		booting = false;
 		window.fetch = nativeFetch;
-		T.bootStage("Couldn't start: " + (error && error.message ? error.message : error), null);
+		var message = error && error.message ? error.message : String(error);
+		if (/out of memory/i.test(message) && /Firefox\//.test(navigator.userAgent)) {
+			T.bootStage("Firefox runs out of memory loading the game. Use Chrome, Edge, Brave, Opera or Safari.", null);
+		} else {
+			T.bootStage("Couldn't start: " + message, null);
+		}
 		var bootEl = document.getElementById("boot");
 		if (bootEl) { bootEl.classList.add("failed"); }
 	};

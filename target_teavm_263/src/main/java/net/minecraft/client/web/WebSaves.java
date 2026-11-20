@@ -41,6 +41,8 @@ public final class WebSaves {
 
 	private static final Map<String, int[]> pieceHashes = new HashMap<>();
 
+	private static final Map<String, Integer> restoredPieces = new HashMap<>();
+
 	private static boolean enabled;
 	private static int sinceFlush;
 
@@ -76,6 +78,10 @@ public final class WebSaves {
 					writeFile(key, data.copyToJavaArray());
 				} else {
 					writePiece(path, index, data.copyToJavaArray());
+					Integer seen = restoredPieces.get(path);
+					if (seen == null || seen <= index) {
+						restoredPieces.put(path, index + 1);
+					}
 				}
 				files[0]++;
 			} catch (Throwable e) {
@@ -208,10 +214,10 @@ public final class WebSaves {
 					put(pieceKey(path, i), Int8Array.copyFromJavaArray(exact));
 				}
 			}
-			if (was != null) {
-				for (int i = pieces; i < was.length / 2; i++) {
-					remove(pieceKey(path, i));
-				}
+			Integer restored = restoredPieces.remove(path);
+			int had = Math.max(was == null ? 0 : was.length / 2, restored == null ? 0 : restored);
+			for (int i = pieces; i < had; i++) {
+				remove(pieceKey(path, i));
 			}
 			pieceHashes.put(path, now);
 		} finally {
@@ -239,7 +245,8 @@ public final class WebSaves {
 	private static void forget(final String path) {
 		remove(path);
 		int[] was = pieceHashes.remove(path);
-		int pieces = was == null ? 0 : was.length / 2;
+		Integer restored = restoredPieces.remove(path);
+		int pieces = Math.max(was == null ? 0 : was.length / 2, restored == null ? 0 : restored);
 		for (int i = 0; i < pieces; i++) {
 			remove(pieceKey(path, i));
 		}

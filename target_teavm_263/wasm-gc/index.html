@@ -213,7 +213,7 @@ return r;
 						throw new Error("TeaVM WASM-GC runtime did not load");
 					}
 					if (navigator.storage && navigator.storage.persist) {
-						try { navigator.storage.persist(); } catch (e) {}
+						try { navigator.storage.persist().catch(function () {}); } catch (e) {}
 					}
 					stage("Loading", 2);
 					var wantDeobf = /[?&]deobf=1/.test(location.search);

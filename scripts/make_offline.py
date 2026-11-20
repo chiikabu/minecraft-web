@@ -338,7 +338,7 @@ return r;
 				|| !WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 95, 1, 127, 0]))) {
 				throw new Error("this browser has no WebAssembly GC: use current Chrome, Edge or Firefox, or Safari 18.2+");
 			}
-			if (navigator.storage && navigator.storage.persist) { try { navigator.storage.persist(); } catch (e) {} }
+			if (navigator.storage && navigator.storage.persist) { try { navigator.storage.persist().catch(function () {}); } catch (e) {} }
 			stage("Unpacking", 3);
 			await idle();
 			var packed = window.__minecraftHTML85Decode(payload("p-xz"));
@@ -533,7 +533,8 @@ def render(fmt, parts, archive, variant):
         '<div id="boot" role="progressbar" aria-label="Loading Minecraft" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">',
         '<img id="logo" src="%s" alt="Mojang Studios" />' % parts["logo"],
         '<div id="bar"><div id="fill"></div></div>',
-        '<div id="stage">Loading</div>',
+
+        '<div id="stage">Loading. If this stays here, open the file with Chrome, Edge or Safari instead of a file viewer.</div>',
         '<div id="joining" hidden="hidden"></div>',
         '<div id="credit"><span>minecraft-web</span> by <a href="https://github.com/chiikabu">chiikabu</a></div>',
         '</div>',

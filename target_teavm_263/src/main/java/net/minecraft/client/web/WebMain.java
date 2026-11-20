@@ -44,6 +44,8 @@ public class WebMain {
 		return frames;
 	}
 
+	private static int savesReconcileFrames;
+
 	public static void main(String[] args) {
 		if (WebWorkerTransport.inWorker()) {
 			WebServerMain.main(args);
@@ -432,6 +434,9 @@ public class WebMain {
 			mark[3] = System.nanoTime();
 			mark[4] = System.nanoTime();
 			WebSaves.tick();
+			if ((++savesReconcileFrames & 15) == 0 && Minecraft.getInstance() != null && Minecraft.getInstance().level == null) {
+				WebSavesIpc.reconcile();
+			}
 			mark[5] = System.nanoTime();
 			net.minecraft.client.ClientPhaseProbe.takeFrame(innerPhaseMicros);
 			WebFrameProbe.record(mark, innerPhaseMicros);

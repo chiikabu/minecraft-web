@@ -20,6 +20,8 @@ public final class WebSavesIpc {
 	public static final byte EXPORT_RESULT = 3;
 	public static final byte IMPORT = 4;
 	public static final byte IMPORT_RESULT = 5;
+	public static final byte DELETE = 6;
+	public static final byte RENAME = 7;
 
 	public static final class Msg {
 		public byte op;
@@ -28,6 +30,8 @@ public final class WebSavesIpc {
 		public boolean ok;
 		public final List<String> ids = new ArrayList<>();
 		public final List<byte[]> levelDats = new ArrayList<>();
+		public final List<byte[][]> extras = new ArrayList<>();
+		public String name = "";
 	}
 
 	public interface Pipe {
@@ -48,18 +52,44 @@ public final class WebSavesIpc {
 	}
 
 	public static byte[] listResult(final List<String> ids, final List<byte[]> levelDats) {
+		return listResult(ids, levelDats, null);
+	}
+
+	public static byte[] listResult(final List<String> ids, final List<byte[]> levelDats, final List<byte[][]> extras) {
 		return encode(out -> {
 			out.writeByte(LIST_RESULT);
 			out.writeInt(ids.size());
 			for (int i = 0; i < ids.size(); i++) {
 				out.writeUTF(ids.get(i));
-				byte[] dat = levelDats.get(i);
-				out.writeInt(dat == null ? 0 : dat.length);
-				if (dat != null) {
-					out.write(dat);
+				writeBlob(out, levelDats.get(i));
+				byte[][] extra = extras == null ? null : extras.get(i);
+				for (int j = 0; j < WebWorlds.SHADOW_FILES.length; j++) {
+					writeBlob(out, extra == null ? null : extra[j]);
 				}
 			}
 		});
+	}
+
+	public static byte[] deleteRequest(final String levelId) {
+		return encode(out -> {
+			out.writeByte(DELETE);
+			out.writeUTF(levelId);
+		});
+	}
+
+	public static byte[] renameRequest(final String levelId, final String name) {
+		return encode(out -> {
+			out.writeByte(RENAME);
+			out.writeUTF(levelId);
+			out.writeUTF(name);
+		});
+	}
+
+	private static void writeBlob(final DataOutputStream out, final byte[] bytes) throws IOException {
+		out.writeInt(bytes == null ? 0 : bytes.length);
+		if (bytes != null) {
+			out.write(bytes);
+		}
 	}
 
 	public static byte[] exportRequest(final String levelId) {
@@ -115,9 +145,21 @@ public final class WebSavesIpc {
 					for (int i = 0; i < n; i++) {
 						msg.ids.add(in.readUTF());
 						msg.levelDats.add(readBlob(in, message.length));
+						byte[][] extra = new byte[WebWorlds.SHADOW_FILES.length][];
+						for (int j = 0; j < extra.length; j++) {
+							extra[j] = readBlob(in, message.length);
+						}
+						msg.extras.add(extra);
 					}
 					break;
 				}
+				case DELETE:
+					msg.text = in.readUTF();
+					break;
+				case RENAME:
+					msg.text = in.readUTF();
+					msg.name = in.readUTF();
+					break;
 				case EXPORT:
 					msg.text = in.readUTF();
 					break;
@@ -158,14 +200,14 @@ public final class WebSavesIpc {
 			return null;
 		}
 		switch (msg.op) {
-			case LIST: {
-				List<String> ids = WebWorlds.levelIds();
-				List<byte[]> dats = new ArrayList<>(ids.size());
-				for (String id : ids) {
-					dats.add(WebWorlds.levelDat(id));
-				}
-				return listResult(ids, dats);
-			}
+			case LIST:
+				return currentList();
+			case DELETE:
+				System.out.println("[26.3-web] deleting world " + msg.text + ": " + WebWorlds.deleteLevel(msg.text));
+				return currentList();
+			case RENAME:
+				System.out.println("[26.3-web] renaming world " + msg.text + ": " + WebWorlds.renameLevel(msg.text, msg.name));
+				return currentList();
 			case EXPORT:
 				return exportResult(msg.text, WebWorlds.buildArchive(msg.text));
 			case IMPORT: {
@@ -177,6 +219,47 @@ public final class WebSavesIpc {
 		}
 	}
 
+	private static byte[] currentList() {
+		List<String> ids = WebWorlds.levelIds();
+		List<byte[]> dats = new ArrayList<>(ids.size());
+		List<byte[][]> extras = new ArrayList<>(ids.size());
+		for (String id : ids) {
+			dats.add(WebWorlds.levelDat(id));
+			byte[][] extra = new byte[WebWorlds.SHADOW_FILES.length][];
+			for (int j = 0; j < extra.length; j++) {
+				extra[j] = WebWorlds.levelFile(id, WebWorlds.SHADOW_FILES[j]);
+			}
+			extras.add(extra);
+		}
+		return listResult(ids, dats, extras);
+	}
+
+	private static final java.util.Map<String, byte[]> listed = new java.util.HashMap<>();
+
+	public static void reconcile() {
+		if (pipe == null || listed.isEmpty()) {
+			return;
+		}
+		java.util.Iterator<java.util.Map.Entry<String, byte[]>> it = listed.entrySet().iterator();
+		while (it.hasNext()) {
+			java.util.Map.Entry<String, byte[]> entry = it.next();
+			byte[] now = WebSaves.readFile(WebSaves.SAVES + "/" + entry.getKey() + "/level.dat");
+			if (now == null) {
+				it.remove();
+				request(deleteRequest(entry.getKey()));
+				return;
+			}
+			if (!java.util.Arrays.equals(now, entry.getValue())) {
+				entry.setValue(now);
+				String name = WebWorlds.levelName(now);
+				if (name != null) {
+					request(renameRequest(entry.getKey(), name));
+					return;
+				}
+			}
+		}
+	}
+
 	public static void receive(final byte[] reply) {
 		Msg msg = decode(reply);
 		if (msg == null) {
@@ -184,13 +267,27 @@ public final class WebSavesIpc {
 		}
 		switch (msg.op) {
 			case LIST_RESULT:
+				for (String stale : new ArrayList<>(listed.keySet())) {
+					if (!msg.ids.contains(stale)) {
+						WebWorlds.deleteTree(WebSaves.SAVES + "/" + stale);
+					}
+				}
+				listed.clear();
 				for (int i = 0; i < msg.ids.size(); i++) {
 					byte[] dat = msg.levelDats.get(i);
 					if (dat == null || dat.length == 0) {
 						continue;
 					}
+					String folder = WebSaves.SAVES + "/" + msg.ids.get(i) + "/";
 					try {
-						WebSaves.writeFile(WebSaves.SAVES + "/" + msg.ids.get(i) + "/level.dat", dat);
+						WebSaves.writeFile(folder + "level.dat", dat);
+						listed.put(msg.ids.get(i), dat);
+						byte[][] extra = msg.extras.get(i);
+						for (int j = 0; j < extra.length; j++) {
+							if (extra[j] != null && extra[j].length > 0) {
+								WebSaves.writeFile(folder + WebWorlds.SHADOW_FILES[j], extra[j]);
+							}
+						}
 					} catch (IOException e) {
 						System.out.println("[26.3-web] could not shadow " + msg.ids.get(i) + ": " + e);
 					}

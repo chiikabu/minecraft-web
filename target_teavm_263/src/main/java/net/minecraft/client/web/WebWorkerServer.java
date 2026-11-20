@@ -217,6 +217,7 @@ public final class WebWorkerServer extends MinecraftServer {
 		net.minecraft.server.Web263Lan.ticketSlots = Math.max(1, Math.min(4, WebWorkerTransport.queryInt("lanslots", weakHost ? 1 : 4)));
 		net.minecraft.server.Web263Lan.ticketTurnNanos = Math.max(1, Math.min(120, WebWorkerTransport.queryInt("lanturn", 15))) * 1_000_000_000L;
 		lanGenSharePercent = Math.max(5, Math.min(100, WebWorkerTransport.queryInt("langenshare", 25)));
+		playerSaveSeconds = Math.max(0, Math.min(300, WebWorkerTransport.queryInt("playersave", 10)));
 		int raise = WebWorkerTransport.queryInt("srvraise", 0);
 		int lower = WebWorkerTransport.queryInt("srvlower", 0);
 		if (raise > 0) {
@@ -581,6 +582,7 @@ public final class WebWorkerServer extends MinecraftServer {
 			}
 			super.tickServer(haveTime);
 			this.tickLan();
+			this.savePlayersInTurn();
 			if (this.viewDistance != this.getPlayerList().getViewDistance()) {
 				this.getPlayerList().setViewDistance(this.viewDistance);
 			}
@@ -593,6 +595,29 @@ public final class WebWorkerServer extends MinecraftServer {
 
 	static boolean shouldPause(final boolean requested, final boolean published) {
 		return requested && !published;
+	}
+
+	private static int playerSaveSeconds = 10;
+	private int playerSaveTicks;
+	private int playerSaveNext;
+
+	private void savePlayersInTurn() {
+		if (playerSaveSeconds <= 0) {
+			return;
+		}
+		java.util.List<net.minecraft.server.level.ServerPlayer> players = this.getPlayerList().getPlayers();
+		if (players.isEmpty()) {
+			this.playerSaveTicks = 0;
+			return;
+		}
+		if (++this.playerSaveTicks < Math.max(20, playerSaveSeconds * 20 / players.size())) {
+			return;
+		}
+		this.playerSaveTicks = 0;
+		if (this.playerSaveNext >= players.size()) {
+			this.playerSaveNext = 0;
+		}
+		this.playerDataStorage.save(players.get(this.playerSaveNext++));
 	}
 
 	private static final int LAN_REPORT_TICKS = 200;

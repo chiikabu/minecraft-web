@@ -5,6 +5,9 @@ By [chiikabu](https://github.com/chiikabu).
 Minecraft: Java Edition 26.3 in a browser tab, compiled to WebAssembly. Singleplayer, LAN and
 server play, resource packs, shader packs, touch controls.
 
+It runs in Chrome, Edge, Brave, Opera and Safari. Firefox cannot load it yet: it runs out of
+memory compiling the game.
+
 There is no Minecraft code and there are no Minecraft assets in this repository. It holds the
 browser platform layer, the build tooling and a set of patches. To get something playable you
 need your own copy of the game: the build reads the 26.3 client, its libraries and its assets

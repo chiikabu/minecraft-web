@@ -269,6 +269,69 @@ public final class WebWorlds {
 		return WebSaves.readFile(SAVES + "/" + levelId + "/level.dat");
 	}
 
+	public static final String[] SHADOW_FILES = {"data/minecraft/world_gen_settings.dat", "data/minecraft/game_rules.dat"};
+
+	public static byte[] levelFile(final String levelId, final String relative) {
+		byte[] bytes = WebSaves.readFile(SAVES + "/" + levelId + "/" + relative);
+		return bytes == null || bytes.length > (1 << 20) ? null : bytes;
+	}
+
+	private static boolean plainLevelId(final String levelId) {
+		return levelId != null && !levelId.isEmpty() && !levelId.startsWith(".")
+			&& levelId.indexOf('/') < 0 && levelId.indexOf('\\') < 0 && !levelId.contains("..");
+	}
+
+	public static boolean deleteLevel(final String levelId) {
+		if (!plainLevelId(levelId) || levelDat(levelId) == null) {
+			return false;
+		}
+		deleteTree(SAVES + "/" + levelId);
+		WebSaves.flush();
+		return levelDat(levelId) == null;
+	}
+
+	public static boolean renameLevel(final String levelId, final String name) {
+		byte[] dat = plainLevelId(levelId) ? levelDat(levelId) : null;
+		if (dat == null || name == null || name.trim().isEmpty()) {
+			return false;
+		}
+		try {
+			net.minecraft.nbt.CompoundTag root = net.minecraft.nbt.NbtIo.readCompressed(
+				new java.io.ByteArrayInputStream(dat), net.minecraft.nbt.NbtAccounter.unlimitedHeap());
+			root.getCompoundOrEmpty("Data").putString("LevelName", name.trim());
+			java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+			net.minecraft.nbt.NbtIo.writeCompressed(root, out);
+			WebSaves.writeFile(SAVES + "/" + levelId + "/level.dat", out.toByteArray());
+			WebSaves.flush();
+			return true;
+		} catch (java.io.IOException | RuntimeException e) {
+			System.out.println("[26.3-web] could not rename " + levelId + ": " + e);
+			return false;
+		}
+	}
+
+	public static String levelName(final byte[] levelDat) {
+		try {
+			net.minecraft.nbt.CompoundTag root = net.minecraft.nbt.NbtIo.readCompressed(
+				new java.io.ByteArrayInputStream(levelDat), net.minecraft.nbt.NbtAccounter.unlimitedHeap());
+			String name = root.getCompoundOrEmpty("Data").getStringOr("LevelName", "");
+			return name.isEmpty() ? null : name;
+		} catch (java.io.IOException | RuntimeException e) {
+			return null;
+		}
+	}
+
+	public static void deleteTree(final String path) {
+		java.io.File file = new java.io.File(path);
+		java.io.File[] children = file.listFiles();
+		if (children != null) {
+			for (java.io.File child : children) {
+				deleteTree(child.getPath().replace('\\', '/'));
+			}
+		}
+		file.delete();
+	}
+
 	@JSFunctor
 	private interface WorldHandler extends JSObject {
 		void world(String filename, Int8Array data);
