@@ -1838,11 +1838,15 @@ public final class WebMods {
 		if (stringsDirty) {
 			jsPushLiveStrings(dimOut, scrNameOut, scrTitleOut, mainOut, offOut, pNameOut, gmOut, userOut, profOut);
 		}
-		jsPushLiveState(
-			x, y, z,
-			yaw, pitch, health, maxHealth, absorption, saturation, exhaustion, xpProgress,
-			food, armor, xpLevel, flagsBitmask, guiScale, guiW, guiH, winW, winH, fps,
-			mainCount, mainDmg, mainMaxDmg, offCount, offDmg, offMaxDmg,
+		if (hasPlayer) {
+			jsPushLivePlayer(
+				x, y, z,
+				yaw, pitch, health, maxHealth, absorption, saturation, exhaustion, xpProgress,
+				food, armor, xpLevel, flagsBitmask,
+				mainCount, mainDmg, mainMaxDmg, offCount, offDmg, offMaxDmg);
+		}
+		jsPushLiveStateCore(
+			flagsBitmask, guiScale, guiW, guiH, winW, winH, fps,
 			gameTime, dayTime, (double) frameCounter, (double) tickCounter,
 			renderDistance, fov, gamma);
 	}
@@ -2427,15 +2431,57 @@ public final class WebMods {
 	@JSBody(params = {
 			"x", "y", "z",
 			"yaw", "pitch", "health", "maxHealth", "absorption", "saturation", "exhaustion", "xpProgress",
-			"food", "armor", "xpLevel", "flagsBitmask", "guiScale", "guiW", "guiH", "winW", "winH", "fps",
-			"mainCount", "mainDmg", "mainMaxDmg", "offCount", "offDmg", "offMaxDmg",
+			"food", "armor", "xpLevel", "flagsBitmask",
+			"mainCount", "mainDmg", "mainMaxDmg", "offCount", "offDmg", "offMaxDmg"},
+		script = ""
+		+ "var rt = window.__eaglerModsInternal;"
+		+ "if (!rt) { return; }"
+		+ "var s = rt.liveState;"
+		+ "var p = rt.livePlayer;"
+		+ "p.x = x; p.y = y; p.z = z;"
+		+ "p.yaw = yaw; p.pitch = pitch;"
+		+ "p.health = health; p.maxHealth = maxHealth; p.absorption = absorption;"
+		+ "p.food = food; p.saturation = saturation; p.exhaustion = exhaustion;"
+		+ "p.armor = armor; p.xpLevel = xpLevel; p.xpProgress = xpProgress;"
+		+ "p.sprinting = (flagsBitmask & 8) !== 0;"
+		+ "p.sneaking = (flagsBitmask & 16) !== 0;"
+		+ "p.crouching = (flagsBitmask & 32) !== 0;"
+		+ "p.onGround = (flagsBitmask & 64) !== 0;"
+		+ "p.inWater = (flagsBitmask & 128) !== 0;"
+		+ "p.underWater = (flagsBitmask & 256) !== 0;"
+		+ "p.fallFlying = (flagsBitmask & 512) !== 0;"
+		+ "p.inVehicle = (flagsBitmask & 1024) !== 0;"
+		+ "p.mainHandCount = mainCount;"
+		+ "p.mainHandDamage = mainDmg;"
+		+ "p.mainHandMaxDamage = mainMaxDmg;"
+		+ "p.offHandCount = offCount;"
+		+ "p.offHandDamage = offDmg;"
+		+ "p.offHandMaxDamage = offMaxDmg;"
+		+ "s.player = p;"
+		+ "s.x = x; s.y = y; s.z = z;"
+		+ "s.yaw = yaw; s.pitch = pitch;"
+		+ "s.health = health; s.maxHealth = maxHealth; s.absorption = absorption;"
+		+ "s.food = food; s.saturation = saturation; s.exhaustion = exhaustion;"
+		+ "s.armor = armor; s.xpLevel = xpLevel; s.xpProgress = xpProgress;"
+		+ "s.sprinting = p.sprinting; s.sneaking = p.sneaking; s.onGround = p.onGround;"
+		+ "s.inWater = p.inWater; s.underWater = p.underWater; s.fallFlying = p.fallFlying;"
+		+ "s.mainHand = p.mainHand; s.mainHandCount = mainCount;"
+		+ "s.mainHandDamage = mainDmg; s.mainHandMaxDamage = mainMaxDmg;"
+		+ "s.offHand = p.offHand; s.offHandCount = offCount;")
+	private static native void jsPushLivePlayer(
+			double x, double y, double z,
+			float yaw, float pitch, float health, float maxHealth, float absorption, float saturation, float exhaustion, float xpProgress,
+			int food, int armor, int xpLevel, int flagsBitmask,
+			int mainCount, int mainDmg, int mainMaxDmg, int offCount, int offDmg, int offMaxDmg);
+
+	@JSBody(params = {
+			"flagsBitmask", "guiScale", "guiW", "guiH", "winW", "winH", "fps",
 			"gameTime", "dayTime", "frame", "tick",
 			"renderDistance", "fov", "gamma"},
 		script = ""
 		+ "var rt = window.__eaglerModsInternal;"
 		+ "if (!rt) { return; }"
 		+ "var s = rt.liveState;"
-		+ "var p = rt.livePlayer;"
 		+ "var w = rt.liveWorld;"
 		+ "var inWorld = (flagsBitmask & 1) !== 0;"
 		+ "var hasPlayer = (flagsBitmask & 4) !== 0;"
@@ -2452,38 +2498,7 @@ public final class WebMods {
 		+ "s.renderDistance = renderDistance;"
 		+ "s.fov = fov;"
 		+ "s.gamma = gamma;"
-		+ "if (hasPlayer) {"
-		+ "  p.x = x; p.y = y; p.z = z;"
-		+ "  p.yaw = yaw; p.pitch = pitch;"
-		+ "  p.health = health; p.maxHealth = maxHealth; p.absorption = absorption;"
-		+ "  p.food = food; p.saturation = saturation; p.exhaustion = exhaustion;"
-		+ "  p.armor = armor; p.xpLevel = xpLevel; p.xpProgress = xpProgress;"
-		+ "  p.sprinting = (flagsBitmask & 8) !== 0;"
-		+ "  p.sneaking = (flagsBitmask & 16) !== 0;"
-		+ "  p.crouching = (flagsBitmask & 32) !== 0;"
-		+ "  p.onGround = (flagsBitmask & 64) !== 0;"
-		+ "  p.inWater = (flagsBitmask & 128) !== 0;"
-		+ "  p.underWater = (flagsBitmask & 256) !== 0;"
-		+ "  p.fallFlying = (flagsBitmask & 512) !== 0;"
-		+ "  p.inVehicle = (flagsBitmask & 1024) !== 0;"
-		+ "  p.mainHandCount = mainCount;"
-		+ "  p.mainHandDamage = mainDmg;"
-		+ "  p.mainHandMaxDamage = mainMaxDmg;"
-		+ "  p.offHandCount = offCount;"
-		+ "  p.offHandDamage = offDmg;"
-		+ "  p.offHandMaxDamage = offMaxDmg;"
-		+ "  s.player = p;"
-		+ "  s.x = x; s.y = y; s.z = z;"
-		+ "  s.yaw = yaw; s.pitch = pitch;"
-		+ "  s.health = health; s.maxHealth = maxHealth; s.absorption = absorption;"
-		+ "  s.food = food; s.saturation = saturation; s.exhaustion = exhaustion;"
-		+ "  s.armor = armor; s.xpLevel = xpLevel; s.xpProgress = xpProgress;"
-		+ "  s.sprinting = p.sprinting; s.sneaking = p.sneaking; s.onGround = p.onGround;"
-		+ "  s.inWater = p.inWater; s.underWater = p.underWater; s.fallFlying = p.fallFlying;"
-		+ "  s.mainHand = p.mainHand; s.mainHandCount = mainCount;"
-		+ "  s.mainHandDamage = mainDmg; s.mainHandMaxDamage = mainMaxDmg;"
-		+ "  s.offHand = p.offHand; s.offHandCount = offCount;"
-		+ "} else {"
+		+ "if (!hasPlayer) {"
 		+ "  s.player = null;"
 		+ "}"
 		+ "if (inWorld) {"
@@ -2503,11 +2518,8 @@ public final class WebMods {
 		+ "}"
 		+ "s.frameSeq++;"
 		+ "rt.liveStatePushed = true;")
-	private static native void jsPushLiveState(
-			double x, double y, double z,
-			float yaw, float pitch, float health, float maxHealth, float absorption, float saturation, float exhaustion, float xpProgress,
-			int food, int armor, int xpLevel, int flagsBitmask, int guiScale, int guiW, int guiH, int winW, int winH, int fps,
-			int mainCount, int mainDmg, int mainMaxDmg, int offCount, int offDmg, int offMaxDmg,
+	private static native void jsPushLiveStateCore(
+			int flagsBitmask, int guiScale, int guiW, int guiH, int winW, int winH, int fps,
 			double gameTime, double dayTime, double frame, double tick,
 			int renderDistance, int fov, double gamma);
 
@@ -3010,7 +3022,7 @@ public final class WebMods {
 		+ "    if (origin === fallback) { return ['']; }"
 		+ "    return ['', fallback];"
 		+ "  }"
-		+ "  return [fallback];"
+		+ "  return [];"
 		+ "}"
 		+ "function probeCandidates(bases, idx) {"
 		+ "  if (idx >= bases.length) {"

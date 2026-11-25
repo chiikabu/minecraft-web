@@ -524,7 +524,7 @@
     {
      "path": "target_teavm_263/src/main/java/net/minecraft/client/gui/screens/TitleScreen.java",
      "edits": "twins/net/minecraft/client/gui/screens/TitleScreen.json",
-     "sha256": "584fabdfc169e2fb32172dc49716e5c7c1cd929bd42e7bc0b4370df89364c3e1"
+     "sha256": "9c3fff2aef114eb440f315ca8be4c97947ca1148b7c56e3b094d1f19c6e73cae"
     }
    ]
   },
@@ -574,7 +574,7 @@
     {
      "path": "port263/java/net/minecraft/client/gui/screens/options/OptionsScreen.java",
      "edits": "port263/net/minecraft/client/gui/screens/options/OptionsScreen.json",
-     "sha256": "c3bf2b4d3a73a288a5f1bbcd38a7e8baaa5c05a1060b2ec90346a923de4b2dff"
+     "sha256": "c85d4560f011109435edab85cda3a71e2f6cf0f65a27c5a2b1b167f1fedad925"
     }
    ]
   },

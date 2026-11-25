@@ -128,6 +128,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/mods/status":
             return self.json(200, {"available": False, "offlineTranslator": True, "mode": "offline"}, cors=True)
+        if path == "/wasm-profiles.json" and not os.path.isfile(self.translate_path(path)):
+            return self.json(200, {"profiles": [{"id": "vanilla", "name": "vanilla", "clientWasm": "wasm-gc/classes263.wasm"}]})
         if path.startswith("/api/"):
             return self.json(503, {"error": "hosting_disabled"})
         link = LINK.match(path)

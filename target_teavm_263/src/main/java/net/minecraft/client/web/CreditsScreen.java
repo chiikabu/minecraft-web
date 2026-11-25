@@ -34,9 +34,13 @@ public class CreditsScreen extends Screen {
 		lineFrames++;
 	}
 
+	public static void install() {
+		net.minecraft.client.gui.screens.options.OptionsScreen.creditsScreen = CreditsScreen::new;
+	}
+
 	public static Button.OnPress guard(final Screen screen, final Button.OnPress action) {
 		return button -> {
-			if (lineFrames > 0 && hasButton(screen)) {
+			if (lineFrames > 0 && (net.minecraft.client.gui.screens.options.OptionsScreen.creditsScreen != null || hasButton(screen))) {
 				action.onPress(button);
 			}
 		};

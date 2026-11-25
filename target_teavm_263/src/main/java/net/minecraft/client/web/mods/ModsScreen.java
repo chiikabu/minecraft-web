@@ -112,7 +112,7 @@ public class ModsScreen extends OptionsSubScreen {
 		this.minecraft.gui.setScreen(this.lastScreen);
 	}
 
-	private @Nullable WebMods.InstalledMod selectedMod() {
+	private WebMods.@Nullable InstalledMod selectedMod() {
 		if (this.modList == null || this.modList.getSelected() == null) {
 			return null;
 		}
@@ -452,9 +452,9 @@ public class ModsScreen extends OptionsSubScreen {
 		}
 
 		final class Entry extends ObjectSelectionList.Entry<Entry> {
-			final @Nullable WebMods.InstalledMod mod;
+			final WebMods.@Nullable InstalledMod mod;
 
-			Entry(final @Nullable WebMods.InstalledMod mod) {
+			Entry(final WebMods.@Nullable InstalledMod mod) {
 				this.mod = mod;
 			}
 

@@ -128,54 +128,6 @@ XML_PRELUDE = r"""(function () {
 
 BOOT = r""""use strict";
 (function () {
-	// Pre-boot WebGPU auto-enable helper (loop-safe on http:// and file://,
-	// cleanly yields to WebGL2 when a shader pack is active or WebGPU failed).
-	try {
-		if (typeof URLSearchParams !== "function" || typeof location === "undefined") { return; }
-		var sp = new URLSearchParams(location.search || "");
-		var hasPack = false;
-		var gpuFailed = false;
-		var autoFlag = false;
-		try { hasPack = !!(typeof localStorage !== "undefined" && localStorage.getItem("minecraft.shaderpack.selected")); } catch (e) {}
-		try {
-			if (typeof sessionStorage !== "undefined") {
-				gpuFailed = !!sessionStorage.getItem("minecraft-web.webgpuFailed");
-				autoFlag = sessionStorage.getItem("minecraft-web.autoWebgpu") === "1";
-			}
-		} catch (e) {}
-		function applySearch(params) {
-			var qs = params.toString();
-			var hash = location.hash || "";
-			var nextRel = (location.pathname || "/") + (qs ? "?" + qs : "") + hash;
-			try {
-				if (typeof history !== "undefined" && typeof history.replaceState === "function") {
-					history.replaceState(null, "", nextRel);
-					return;
-				}
-			} catch (e) {}
-			try {
-				var hrefBase = String(location.href || "").split("#")[0].split("?")[0];
-				var nextHref = hrefBase + (qs ? "?" + qs : "") + hash;
-				if (nextHref && nextHref !== location.href && typeof location.replace === "function") {
-					location.replace(nextHref);
-				}
-			} catch (e) {}
-		}
-		if ((hasPack || gpuFailed) && autoFlag && sp.get("webgpu") === "1") {
-			try { sessionStorage.removeItem("minecraft-web.autoWebgpu"); } catch (e) {}
-			sp.delete("webgpu");
-			applySearch(sp);
-			return;
-		}
-		if (!sp.has("webgpu") && !sp.has("webgl") && !hasPack && !gpuFailed
-			&& typeof navigator !== "undefined" && navigator.gpu && typeof navigator.gpu.requestAdapter === "function") {
-			try { sessionStorage.setItem("minecraft-web.autoWebgpu", "1"); } catch (e) {}
-			sp.set("webgpu", "1");
-			applySearch(sp);
-		}
-	} catch (e) {}
-})();
-(function () {
 	if (typeof WebGL2RenderingContext !== "undefined") {
 		// 26.3's compiler emits two forms WebGL2 rejects (same fix as the served index.html).
 		var proto = WebGL2RenderingContext.prototype;

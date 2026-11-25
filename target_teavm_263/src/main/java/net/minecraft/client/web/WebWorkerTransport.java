@@ -42,6 +42,7 @@ public final class WebWorkerTransport {
 			+ "  self.__minecraftDeobf = !!d.deobf;\n"
 			+ "  if (d.assets && d.index) { self.__minecraftAssetsIndex = d.index; self.__minecraftAssetsBinRaw = d.assets; self.__minecraftGenAssets = d.assets; self.__minecraftGenIndex = d.index; }\n"
 			+ "  var base = new URL('wasm-gc/', self.__minecraftBase).href;\n"
+			+ "  try { importScripts(new URL('minecraft-web-simd-kernels.js', self.__minecraftBase).href); } catch (e) {}\n"
 			+ "  importScripts(base + 'classes263.wasm-runtime.js');\n"
 			+ "  var fail = function(error) { setTimeout(function() { throw error; }, 0); };\n"
 			+ compilePassthroughShim()
@@ -55,6 +56,7 @@ public final class WebWorkerTransport {
 			+ "        externalInfoPath: base + 'classes263.wasm.teadbg'\n"
 			+ "      }\n"
 			+ "    }).then(function(teavm) {\n"
+			+ "      try { var s = self.__mcWebSimd || self.__twitSimd; var m = self.__teavmMemory || (teavm && teavm.exports && teavm.exports['teavm.memory']); if (s && m) { s.bind(m); } } catch (e) {}\n"
 			+ "      return teavm.exports.main([]);\n"
 			+ "    })).catch(fail);\n"
 			+ "  } catch (error) { fail(error); }\n"
@@ -205,9 +207,10 @@ public final class WebWorkerTransport {
 			+ "  try {\n"
 			+ "    if (d.module) {\n"
 			+ "      if (d.runtime) { (0, eval)(d.runtime); }\n"
-			+ "      else { importScripts(new URL('wasm-gc/classes263.wasm-runtime.js', self.__minecraftBase).href); }\n"
+			+ "      else { try { importScripts(new URL('minecraft-web-simd-kernels.js', self.__minecraftBase).href); } catch (e) {} importScripts(new URL('wasm-gc/classes263.wasm-runtime.js', self.__minecraftBase).href); }\n"
 			+ compilePassthroughShim()
 			+ "      Promise.resolve(self.TeaVM.wasmGC.load(d.module, {stackDeobfuscator: {enabled: false}}).then(function(teavm) {\n"
+			+ "        try { var s = self.__mcWebSimd || self.__twitSimd; var m = self.__teavmMemory || (teavm && teavm.exports && teavm.exports['teavm.memory']); if (s && m) { s.bind(m); } } catch (e) {}\n"
 			+ "        return teavm.exports.main([]);\n"
 			+ "      })).catch(fail);\n"
 			+ "    } else if (d.moduleUrl) {\n"
