@@ -7,8 +7,31 @@ import net.minecraft.client.renderer.fog.FogData;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 
 public final class Web263Culling {
+   public static @Nullable BatchCullHook simdCullHook;
+
+   @FunctionalInterface
+   public interface BatchCullHook {
+      boolean cullAabbsFrustumFog(
+         float[] planes24,
+         float camX,
+         float camY,
+         float camZ,
+         float sphRadSq,
+         float cylRadSq,
+         float[] minX,
+         float[] minY,
+         float[] minZ,
+         float[] maxX,
+         float[] maxY,
+         float[] maxZ,
+         int count,
+         int[] outVisibleMask
+      );
+   }
+
    public static int fogSections;
    public static int hiddenEntities;
    public static int animationDraws;

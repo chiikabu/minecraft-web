@@ -44,6 +44,7 @@ public final class GlApi {
 	private static boolean colorBufferFloat;
 	private static boolean floatBlend;
 	private static boolean floatLinear;
+	private static boolean parallelCompile;
 	public static boolean captureMode;
 
 	private static final List<WebGLBuffer> buffers = newTable();
@@ -94,6 +95,23 @@ public final class GlApi {
 	private static final int[] scissorShadow = { -1, -1, -1, -1 };
 	private static final int[] viewportShadow = { -1, -1, -1, -1 };
 	private static double clearDepthShadow = Double.NaN;
+	private static boolean clearColorKnown;
+	private static int clearColorRBits;
+	private static int clearColorGBits;
+	private static int clearColorBBits;
+	private static int clearColorABits;
+	private static final int UBO_SLOTS = 16;
+	private static final int[] uboBuf = filledArray(UBO_SLOTS);
+	private static final int[] uboOff = new int[UBO_SLOTS];
+	private static final int[] uboLen = new int[UBO_SLOTS];
+	private static int currentProgram = -1;
+	private static int unpackRowLengthShadow = -1;
+	private static int unpackSkipPixelsShadow = -1;
+	private static int unpackSkipRowsShadow = -1;
+	private static int unpackAlignmentShadow = -1;
+	private static int packAlignmentShadow = -1;
+	private static int unpackImageHeightShadow = -1;
+	private static boolean loggedMissingDrawBuffersIndexed;
 
 	private static int[] filledArray(final int n) {
 		int[] a = new int[n];
@@ -139,12 +157,60 @@ public final class GlApi {
 	public static void init(final WebGL2RenderingContext context) {
 		gl = context;
 		bindFilter = !"false".equals(System.getProperty("web263.glBindFilter"));
+		resetStateCaches();
+		markEngineStd140(context);
 		JSObject extension = context.getExtension(JSString.valueOf("OES_draw_buffers_indexed"));
 		drawBuffersIndexed = extension == null ? null : extension.cast();
 		colorBufferFloat = context.getExtension(JSString.valueOf("EXT_color_buffer_float")) != null;
 		floatBlend = context.getExtension(JSString.valueOf("EXT_float_blend")) != null;
 		floatLinear = context.getExtension(JSString.valueOf("OES_texture_float_linear")) != null;
+		parallelCompile = context.getExtension(JSString.valueOf("KHR_parallel_shader_compile")) != null;
 	}
+
+	public static void resetStateCaches() {
+		loggedMissingDrawBuffersIndexed = false;
+		targetCount = 0;
+		java.util.Arrays.fill(targetKey, 0);
+		java.util.Arrays.fill(targetBoundBuffer, 0);
+		java.util.Arrays.fill(targetMapped, null);
+		java.util.Arrays.fill(elementBufferByVao, -1);
+		java.util.Arrays.fill(divisorByVao, null);
+		java.util.Arrays.fill(samplerByUnit, -1);
+		java.util.Arrays.fill(scissorShadow, -1);
+		java.util.Arrays.fill(viewportShadow, -1);
+		clearDepthShadow = Double.NaN;
+		clearColorKnown = false;
+		clearColorRBits = 0;
+		clearColorGBits = 0;
+		clearColorBBits = 0;
+		clearColorABits = 0;
+		java.util.Arrays.fill(uboBuf, -1);
+		java.util.Arrays.fill(uboOff, 0);
+		java.util.Arrays.fill(uboLen, 0);
+		currentProgram = -1;
+		currentVertexArray = 0;
+		java.util.Arrays.fill(vertexArrayAttribs, null);
+		java.util.Arrays.fill(appliedBaseVertex, 0);
+		activeUnit = 0;
+		java.util.Arrays.fill(boundTexture2D, 0);
+		java.util.Arrays.fill(boundTextureCube, 0);
+		java.util.Arrays.fill(baseLevelByTexture, -1);
+		java.util.Arrays.fill(maxLevelByTexture, -1);
+		drawFramebuffer = 0;
+		java.util.Arrays.fill(drawBuffersByFramebuffer, null);
+		unpackRowLengthShadow = -1;
+		unpackSkipPixelsShadow = -1;
+		unpackSkipRowsShadow = -1;
+		unpackAlignmentShadow = -1;
+		packAlignmentShadow = -1;
+		unpackImageHeightShadow = -1;
+		java.util.Arrays.fill(bufferSizes, 0);
+		java.util.Arrays.fill(shadowValidEnd, 0);
+		java.util.Arrays.fill(elementBuffers, false);
+	}
+
+	@JSBody(params = "gl", script = "gl.__engineStd140 = true;")
+	private static native void markEngineStd140(WebGL2RenderingContext gl);
 
 	public static boolean ready() {
 		return gl != null;
@@ -160,6 +226,14 @@ public final class GlApi {
 
 	public static boolean hasFloatLinear() {
 		return floatLinear;
+	}
+
+	public static boolean hasParallelCompile() {
+		return parallelCompile;
+	}
+
+	public static boolean glProgramDone(int program) {
+		return !parallelCompile || jsNumber(gl.getProgramParameter(programs.get(program), 37297)) != 0;
 	}
 
 	private static <T extends JSObject> List<T> newTable() {
@@ -219,8 +293,51 @@ public final class GlApi {
 		"return new Int8Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
 	private static native Int8Array linearView(int address, int length);
 
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Uint8Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native Uint8Array linearUint8View(int address, int length);
+
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Int16Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native ArrayBufferView linearInt16View(int address, int length);
+
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Uint16Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native ArrayBufferView linearUint16View(int address, int length);
+
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Int32Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native ArrayBufferView linearInt32View(int address, int length);
+
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Uint32Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native ArrayBufferView linearUint32View(int address, int length);
+
+	@org.teavm.jso.JSBody(params = {"address", "length"}, script =
+		"return new Float32Array(globalThis.__teavmMemory.buffer, address >>> 0, length);")
+	private static native ArrayBufferView linearFloat32View(int address, int length);
+
 	private static ArrayBufferView copyToJsPixels(final ByteBuffer data, final int type) {
+		long address = org.lwjgl.system.MemoryUtil.memLinearAddress(data);
+		if (address >= 0) {
+			int rem = data.remaining();
+			ArrayBufferView view = switch (type) {
+				case 5121 -> linearUint8View((int)address, rem);
+				case 5120 -> linearView((int)address, rem);
+				case 5122 -> (address & 1L) == 0L ? linearInt16View((int)address, rem / 2) : null;
+				case 5123, 5131, 33635, 32819, 32820 -> (address & 1L) == 0L ? linearUint16View((int)address, rem / 2) : null;
+				case 5124 -> (address & 3L) == 0L ? linearInt32View((int)address, rem / 4) : null;
+				case 5125, 33640, 34042, 35899, 35902 -> (address & 3L) == 0L ? linearUint32View((int)address, rem / 4) : null;
+				case 5126 -> (address & 3L) == 0L ? linearFloat32View((int)address, rem / 4) : null;
+				default -> throw unsupported("client-memory pixel transfer with GL type 0x" + Integer.toHexString(type));
+			};
+			if (view != null) {
+				churnViewUploads++;
+				return view;
+			}
+		}
 		if (type != 5121) {
+			churnCopyUploads++;
 			Int8Array bytes = Int8Array.create(data.remaining());
 			bytes.set(toArray(data));
 			return switch (type) {
@@ -322,12 +439,75 @@ public final class GlApi {
 		return (long)jsNumber(gl.getParameter(pname));
 	}
 	public static String glGetString(int name) { return gl.getParameter(name).<JSString>cast().stringValue(); }
-	public static void glPixelStorei(int pname, int param) { gl.pixelStorei(pname, param); }
+	public static void glPixelStorei(int pname, int param) {
+		switch (pname) {
+			case 3314 -> {
+				if (bindFilter && unpackRowLengthShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				unpackRowLengthShadow = param;
+			}
+			case 3315 -> {
+				if (bindFilter && unpackSkipRowsShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				unpackSkipRowsShadow = param;
+			}
+			case 3316 -> {
+				if (bindFilter && unpackSkipPixelsShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				unpackSkipPixelsShadow = param;
+			}
+			case 3317 -> {
+				if (bindFilter && unpackAlignmentShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				unpackAlignmentShadow = param;
+			}
+			case 3333 -> {
+				if (bindFilter && packAlignmentShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				packAlignmentShadow = param;
+			}
+			case 32878 -> {
+				if (bindFilter && unpackImageHeightShadow == param) {
+					churnBindSkipped++;
+					return;
+				}
+				unpackImageHeightShadow = param;
+			}
+			default -> { }
+		}
+		gl.pixelStorei(pname, param);
+	}
 	public static void glFinish() { gl.finish(); }
 	public static void glViewport(int x, int y, int w, int h) { if (!sameRect(viewportShadow, x, y, w, h)) { gl.viewport(x, y, w, h); } }
 	public static void glScissor(int x, int y, int w, int h) { if (!sameRect(scissorShadow, x, y, w, h)) { gl.scissor(x, y, w, h); } }
 	public static void glClear(int mask) { gl.clear(mask); }
-	public static void glClearColor(float r, float g, float b, float a) { gl.clearColor(r, g, b, a); }
+	public static void glClearColor(float r, float g, float b, float a) {
+		int rb = Float.floatToRawIntBits(r);
+		int gb = Float.floatToRawIntBits(g);
+		int bb = Float.floatToRawIntBits(b);
+		int ab = Float.floatToRawIntBits(a);
+		if (bindFilter && clearColorKnown && clearColorRBits == rb && clearColorGBits == gb
+				&& clearColorBBits == bb && clearColorABits == ab) {
+			churnBindSkipped++;
+			return;
+		}
+		clearColorKnown = true;
+		clearColorRBits = rb;
+		clearColorGBits = gb;
+		clearColorBBits = bb;
+		clearColorABits = ab;
+		gl.clearColor(r, g, b, a);
+	}
 	public static void glClearDepth(double depth) {
 		if (bindFilter && depth == clearDepthShadow) {
 			churnBindSkipped++;
@@ -351,22 +531,44 @@ public final class GlApi {
 		int required = buffer == 6144 ? 4 : buffer == 6146 ? 1 : 0;
 		if (required == 0) throw unsupported("integer clear buffer 0x" + Integer.toHexString(buffer));
 		if (value.length < required) throw new IllegalArgumentException("integer clear value too small");
-		gl.clearBufferiv(buffer, drawbuffer, value);
+		if (required == 4) {
+			jsClearBufferiv4(gl, buffer, drawbuffer, value[0], value[1], value[2], value[3]);
+		} else {
+			jsClearBufferiv1(gl, buffer, drawbuffer, value[0]);
+		}
+		if (DEBUG_GL_ERRORS) probe("glClearBufferiv(buffer=" + buffer + ", drawbuffer=" + drawbuffer + ")");
 	}
 	public static void glClearBufferuiv(int buffer, int drawbuffer, int[] value) {
 		if (buffer != 6144) throw unsupported("unsigned integer clear buffer 0x" + Integer.toHexString(buffer));
 		if (value.length < 4) throw new IllegalArgumentException("integer clear value too small");
-		gl.clearBufferuiv(buffer, drawbuffer, value);
+		jsClearBufferuiv4(gl, buffer, drawbuffer, value[0], value[1], value[2], value[3]);
+		if (DEBUG_GL_ERRORS) probe("glClearBufferuiv(buffer=" + buffer + ", drawbuffer=" + drawbuffer + ")");
 	}
+	@JSBody(params = {"gl", "buffer", "drawbuffer", "v0", "v1", "v2", "v3"}, script =
+		"var a = gl.__cbi4 || (gl.__cbi4 = new Int32Array(4)); a[0] = v0; a[1] = v1; a[2] = v2; a[3] = v3; gl.clearBufferiv(buffer, drawbuffer, a);")
+	private static native void jsClearBufferiv4(WebGL2RenderingContext gl, int buffer, int drawbuffer, int v0, int v1, int v2, int v3);
+	@JSBody(params = {"gl", "buffer", "drawbuffer", "v0"}, script =
+		"var a = gl.__cbi1 || (gl.__cbi1 = new Int32Array(1)); a[0] = v0; gl.clearBufferiv(buffer, drawbuffer, a);")
+	private static native void jsClearBufferiv1(WebGL2RenderingContext gl, int buffer, int drawbuffer, int v0);
+	@JSBody(params = {"gl", "buffer", "drawbuffer", "v0", "v1", "v2", "v3"}, script =
+		"var a = gl.__cbu4 || (gl.__cbu4 = new Uint32Array(4)); a[0] = v0 >>> 0; a[1] = v1 >>> 0; a[2] = v2 >>> 0; a[3] = v3 >>> 0; gl.clearBufferuiv(buffer, drawbuffer, a);")
+	private static native void jsClearBufferuiv4(WebGL2RenderingContext gl, int buffer, int drawbuffer, int v0, int v1, int v2, int v3);
 	public static void glDepthFunc(int func) { gl.depthFunc(func); }
 	public static void glDepthMask(boolean flag) { gl.depthMask(flag); }
+	public static void glColorMask(boolean r, boolean g, boolean b, boolean a) { gl.colorMask(r, g, b, a); }
+	private static void warnMissingDrawBuffersIndexed(final String op, final int index) {
+		if (!loggedMissingDrawBuffersIndexed) {
+			loggedMissingDrawBuffersIndexed = true;
+			System.out.println("[GlApi] OES_draw_buffers_indexed unavailable; ignoring indexed " + op + " for attachment " + index);
+		}
+	}
 	public static void glColorMaski(int index, boolean r, boolean g, boolean b, boolean a) {
 		if (drawBuffersIndexed != null) {
 			drawBuffersIndexed.colorMaskiOES(index, r, g, b, a);
 		} else if (index == 0) {
 			gl.colorMask(r, g, b, a);
 		} else {
-			throw unsupported("indexed color masks without OES_draw_buffers_indexed");
+			warnMissingDrawBuffersIndexed("colorMask", index);
 		}
 	}
 	public static void glEnablei(int cap, int index) {
@@ -375,7 +577,7 @@ public final class GlApi {
 		} else if (index == 0) {
 			gl.enable(cap);
 		} else {
-			throw unsupported("indexed enable without OES_draw_buffers_indexed");
+			warnMissingDrawBuffersIndexed("enable", index);
 		}
 	}
 	public static void glDisablei(int cap, int index) {
@@ -384,7 +586,7 @@ public final class GlApi {
 		} else if (index == 0) {
 			gl.disable(cap);
 		} else {
-			throw unsupported("indexed disable without OES_draw_buffers_indexed");
+			warnMissingDrawBuffersIndexed("disable", index);
 		}
 	}
 	public static void glBlendEquationSeparate(int modeRGB, int modeAlpha) { gl.blendEquationSeparate(modeRGB, modeAlpha); }
@@ -395,7 +597,7 @@ public final class GlApi {
 		} else if (index == 0) {
 			gl.blendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha);
 		} else {
-			throw unsupported("indexed blend functions without OES_draw_buffers_indexed");
+			warnMissingDrawBuffersIndexed("blendFuncSeparate", index);
 		}
 	}
 	public static void glLogicOp(int op) { throw unsupported("glLogicOp"); }
@@ -433,6 +635,23 @@ public final class GlApi {
 					elementBufferByVao[i] = i == currentVertexArray ? 0 : -1;
 				}
 			}
+			for (int i = 0; i < UBO_SLOTS; i++) {
+				if (uboBuf[i] == buffer) {
+					uboBuf[i] = -1;
+				}
+			}
+			for (int v = 0; v < vertexArrayAttribs.length; v++) {
+				Attrib[] attribs = vertexArrayAttribs[v];
+				if (attribs == null) {
+					continue;
+				}
+				for (int j = 0; j < attribs.length; j++) {
+					Attrib a = attribs[j];
+					if (a != null && a.set && a.buffer == buffer) {
+						a.buffer = -1;
+					}
+				}
+			}
 		}
 	}
 	public static void glBindBuffer(int target, int buffer) {
@@ -459,27 +678,75 @@ public final class GlApi {
 		}
 		gl.bindBuffer(target, buffer == 0 ? null : buffers.get(buffer));
 	}
+	private static void invalidateUboSlots(final int buffer) {
+		if (buffer == 0) {
+			return;
+		}
+		for (int i = 0; i < UBO_SLOTS; i++) {
+			if (uboBuf[i] == buffer) {
+				uboBuf[i] = -1;
+			}
+		}
+	}
 	public static void glBindBufferRange(int target, int index, int buffer, long offset, long size) {
-		gl.bindBufferRange(target, index, buffer == 0 ? null : buffers.get(buffer), (int)offset, (int)size);
+		int bindOffset = (int)offset;
+		int bindSize = (int)size;
+		if (target == 35345 && buffer != 0 && bindSize > 0 && (bindSize & 15) != 0) {
+			int padded = (bindSize + 15) & ~15;
+			int total = buffer > 0 && buffer < bufferSizes.length ? bufferSizes[buffer] : 0;
+			if (total > bindOffset) {
+				int avail = total - bindOffset;
+				if (avail >= bindSize) {
+					bindSize = Math.min(padded, avail);
+				}
+			}
+		}
+		if (target == 35345 && index >= 0 && index < UBO_SLOTS) {
+			if (bindFilter && uboBuf[index] == buffer && uboOff[index] == bindOffset && uboLen[index] == bindSize) {
+				churnBindSkipped++;
+				return;
+			}
+			uboBuf[index] = buffer;
+			uboOff[index] = bindOffset;
+			uboLen[index] = bindSize;
+		}
+		gl.bindBufferRange(target, index, buffer == 0 ? null : buffers.get(buffer), bindOffset, bindSize);
 		targetBoundBuffer[targetSlot(target)] = buffer;
-		if (DEBUG_GL_ERRORS) probe("glBindBufferRange(index=" + index + ", offset=" + offset + ", size=" + size + ")");
+		if (DEBUG_GL_ERRORS) probe("glBindBufferRange(index=" + index + ", offset=" + bindOffset + ", size=" + bindSize + ")");
 	}
 	public static void glBindBufferBase(int target, int index, int buffer) {
 		if (target != 35345) throw unsupported("glBindBufferBase target 0x" + Integer.toHexString(target));
+		if (index >= 0 && index < UBO_SLOTS) {
+			uboBuf[index] = -1;
+		}
 		WebGLBuffer object = buffer == 0 ? null : buffers.get(buffer);
 		gl.bindBufferBase(target, index, object);
 		targetBoundBuffer[targetSlot(target)] = buffer;
 	}
 	public static void glBufferData(int target, long size, int usage) {
 		int buffer = boundBuffer(target);
-		setBufferSize(buffer, (int)size);
+		int allocSize = (int)size;
+		if (target == 35345 && allocSize > 0 && (allocSize & 15) != 0) {
+			allocSize = (allocSize + 15) & ~15;
+		}
+		setBufferSize(buffer, allocSize);
 		invalidateShadow(buffer);
-		gl.bufferData(target, (int)size, usage);
+		invalidateUboSlots(buffer);
+		gl.bufferData(target, allocSize, usage);
 	}
 	public static void glBufferData(int target, ByteBuffer data, int usage) {
 		int buffer = boundBuffer(target);
-		setBufferSize(buffer, data.remaining());
+		int len = data.remaining();
 		invalidateShadow(buffer);
+		invalidateUboSlots(buffer);
+		if (target == 35345 && len > 0 && (len & 15) != 0) {
+			int padded = (len + 15) & ~15;
+			setBufferSize(buffer, padded);
+			gl.bufferData(target, padded, usage);
+			gl.bufferSubData(target, 0, copyToJs(data));
+			return;
+		}
+		setBufferSize(buffer, len);
 		gl.bufferData(target, copyToJs(data), usage);
 	}
 	public static void glBufferData(int target, float[] data, int usage) {
@@ -487,8 +754,16 @@ public final class GlApi {
 		Float32Array values = Float32Array.create(data.length);
 		for (int i = 0; i < data.length; i++) values.set(i, data[i]);
 		int buffer = boundBuffer(target);
-		setBufferSize(buffer, size);
 		invalidateShadow(buffer);
+		invalidateUboSlots(buffer);
+		if (target == 35345 && size > 0 && (size & 15) != 0) {
+			int padded = (size + 15) & ~15;
+			setBufferSize(buffer, padded);
+			gl.bufferData(target, padded, usage);
+			gl.bufferSubData(target, 0, values);
+			return;
+		}
+		setBufferSize(buffer, size);
 		gl.bufferData(target, values, usage);
 	}
 	public static void glBufferSubData(int target, long offset, ByteBuffer data) { invalidateShadow(boundBuffer(target)); gl.bufferSubData(target, (int)offset, copyToJs(data)); }
@@ -714,17 +989,30 @@ public final class GlApi {
 	}
 	public static void glBindTexture(int target, int texture) {
 		int glTarget = target == 35882 ? 3553 : target;
-		if (activeUnit < TEXTURE_UNITS) {
+		if (activeUnit >= 0 && activeUnit < TEXTURE_UNITS) {
 			if (glTarget == 3553) {
+				if (bindFilter && boundTexture2D[activeUnit] == texture) {
+					churnBindSkipped++;
+					return;
+				}
 				boundTexture2D[activeUnit] = texture;
 			} else if (glTarget == 34067) {
+				if (bindFilter && boundTextureCube[activeUnit] == texture) {
+					churnBindSkipped++;
+					return;
+				}
 				boundTextureCube[activeUnit] = texture;
 			}
 		}
 		gl.bindTexture(glTarget, texture == 0 ? null : textures.get(texture));
 	}
 	public static void glActiveTexture(int texture) {
-		activeUnit = texture - 33984;
+		int unit = texture - 33984;
+		if (bindFilter && activeUnit == unit) {
+			churnBindSkipped++;
+			return;
+		}
+		activeUnit = unit;
 		gl.activeTexture(texture);
 	}
 	public static void glTexParameteri(int target, int pname, int param) {
@@ -1050,6 +1338,9 @@ public final class GlApi {
 	public static int glCreateProgram() { return register(programs, gl.createProgram()); }
 	public static void glDeleteProgram(int program) {
 		if (program != 0) {
+			if (currentProgram == program) {
+				currentProgram = -1;
+			}
 			gl.deleteProgram(programs.get(program));
 			programs.set(program, null);
 			if (program < uniformLocationList.size()) {
@@ -1060,7 +1351,14 @@ public final class GlApi {
 	public static void glAttachShader(int program, int shader) { gl.attachShader(programs.get(program), shaders.get(shader)); }
 	public static void glDetachShader(int program, int shader) { gl.detachShader(programs.get(program), shaders.get(shader)); }
 	public static void glLinkProgram(int program) { gl.linkProgram(programs.get(program)); }
-	public static void glUseProgram(int program) { gl.useProgram(program == 0 ? null : programs.get(program)); }
+	public static void glUseProgram(int program) {
+		if (bindFilter && currentProgram == program) {
+			churnBindSkipped++;
+			return;
+		}
+		currentProgram = program;
+		gl.useProgram(program == 0 ? null : programs.get(program));
+	}
 	public static int glGetProgrami(int program, int pname) { return (int)jsNumber(gl.getProgramParameter(programs.get(program), pname)); }
 	public static void glGetProgramiv(int program, int pname, int[] values) {
 		if (values.length == 0) throw new IllegalArgumentException("program parameter destination missing");
@@ -1123,6 +1421,18 @@ public final class GlApi {
 	public static void glUniform3i(int location, int v0, int v1, int v2) { if (location >= 0) gl.uniform3i(uniformLocation(location), v0, v1, v2); }
 	public static void glUniform4f(int location, float v0, float v1, float v2, float v3) { if (location >= 0) gl.uniform4f(uniformLocation(location), v0, v1, v2, v3); }
 	public static void glUniform4i(int location, int v0, int v1, int v2, int v3) { if (location >= 0) gl.uniform4i(uniformLocation(location), v0, v1, v2, v3); }
+	public static void glUniform1ui(int location, int v0) { if (location >= 0) jsUniform1ui(gl, uniformLocation(location), v0); }
+	public static void glUniform2ui(int location, int v0, int v1) { if (location >= 0) jsUniform2ui(gl, uniformLocation(location), v0, v1); }
+	public static void glUniform3ui(int location, int v0, int v1, int v2) { if (location >= 0) jsUniform3ui(gl, uniformLocation(location), v0, v1, v2); }
+	public static void glUniform4ui(int location, int v0, int v1, int v2, int v3) { if (location >= 0) jsUniform4ui(gl, uniformLocation(location), v0, v1, v2, v3); }
+	@JSBody(params = {"gl", "loc", "v0"}, script = "gl.uniform1ui(loc, v0 >>> 0);")
+	private static native void jsUniform1ui(WebGL2RenderingContext gl, WebGLUniformLocation loc, int v0);
+	@JSBody(params = {"gl", "loc", "v0", "v1"}, script = "gl.uniform2ui(loc, v0 >>> 0, v1 >>> 0);")
+	private static native void jsUniform2ui(WebGL2RenderingContext gl, WebGLUniformLocation loc, int v0, int v1);
+	@JSBody(params = {"gl", "loc", "v0", "v1", "v2"}, script = "gl.uniform3ui(loc, v0 >>> 0, v1 >>> 0, v2 >>> 0);")
+	private static native void jsUniform3ui(WebGL2RenderingContext gl, WebGLUniformLocation loc, int v0, int v1, int v2);
+	@JSBody(params = {"gl", "loc", "v0", "v1", "v2", "v3"}, script = "gl.uniform4ui(loc, v0 >>> 0, v1 >>> 0, v2 >>> 0, v3 >>> 0);")
+	private static native void jsUniform4ui(WebGL2RenderingContext gl, WebGLUniformLocation loc, int v0, int v1, int v2, int v3);
 	private static void checkMatrixTranspose(boolean transpose) {
 		if (transpose) throw unsupported("transposed uniform matrices");
 	}
@@ -1175,6 +1485,7 @@ public final class GlApi {
 		boolean integer;
 		int buffer;
 		int divisor;
+		int appliedBase;
 		boolean set;
 	}
 
@@ -1206,26 +1517,43 @@ public final class GlApi {
 		if (array != 0) {
 			gl.deleteVertexArray(vertexArrays.get(array));
 			vertexArrays.set(array, null);
+			if (currentVertexArray == array) {
+				currentVertexArray = 0;
+			}
 			if (array < elementBufferByVao.length) {
 				elementBufferByVao[array] = -1;
 			}
 			if (array < divisorByVao.length) {
 				divisorByVao[array] = null;
 			}
+			if (array < vertexArrayAttribs.length) {
+				vertexArrayAttribs[array] = null;
+			}
+			if (array < appliedBaseVertex.length) {
+				appliedBaseVertex[array] = 0;
+			}
 		}
 	}
 	public static void glBindVertexArray(int array) {
+		if (bindFilter && currentVertexArray == array) {
+			churnBindSkipped++;
+			return;
+		}
 		currentVertexArray = array;
 		gl.bindVertexArray(array == 0 ? null : vertexArrays.get(array));
 	}
 	public static void glEnableVertexAttribArray(int index) { gl.enableVertexAttribArray(index); }
 	public static void glVertexAttrib4f(int index, float x, float y, float z, float w) { gl.vertexAttrib4f(index, x, y, z, w); }
 	public static void glVertexAttribPointer(int index, int size, int type, boolean normalized, int stride, long pointer) {
-		recordAttrib(index, size, type, normalized, stride, pointer, false);
+		if (recordAttrib(index, size, type, normalized, stride, pointer, false)) {
+			return;
+		}
 		gl.vertexAttribPointer(index, size, type, normalized, stride, (int)pointer);
 	}
 	public static void glVertexAttribIPointer(int index, int size, int type, int stride, long pointer) {
-		recordAttrib(index, size, type, false, stride, pointer, true);
+		if (recordAttrib(index, size, type, false, stride, pointer, true)) {
+			return;
+		}
 		gl.vertexAttribIPointer(index, size, type, stride, (int)pointer);
 	}
 	public static void glVertexAttribDivisor(int index, int divisor) {
@@ -1255,11 +1583,12 @@ public final class GlApi {
 		gl.vertexAttribDivisor(index, divisor);
 	}
 
-	private static void recordAttrib(final int index, final int size, final int type, final boolean normalized,
+	private static boolean recordAttrib(final int index, final int size, final int type, final boolean normalized,
 			final int stride, final long pointer, final boolean integer) {
-		if (index >= MAX_ATTRIBS) {
+		if (index < 0 || index >= MAX_ATTRIBS) {
 			throw new IllegalStateException("GlApi: attribute index " + index + " exceeds MAX_ATTRIBS " + MAX_ATTRIBS);
 		}
+		int boundArray = boundBuffer(34962);
 		Attrib[] attribs = attribsFor(currentVertexArray, true);
 		Attrib a = attribs[index];
 		if (a == null) {
@@ -1267,6 +1596,14 @@ public final class GlApi {
 			attribs[index] = a;
 			churnAttribMinted++;
 		} else {
+			int applied = currentVertexArray < appliedBaseVertex.length ? appliedBaseVertex[currentVertexArray] : 0;
+			if (bindFilter && a.set && a.appliedBase == 0 && (a.divisor != 0 || applied == 0)
+					&& a.size == size && a.type == type && a.normalized == normalized
+					&& a.stride == stride && a.pointer == pointer && a.integer == integer
+					&& a.buffer == boundArray) {
+				churnBindSkipped++;
+				return true;
+			}
 			churnAttribReused++;
 			if (legacyChurn) {
 				churnSink = new Attrib();
@@ -1278,10 +1615,12 @@ public final class GlApi {
 		a.stride = stride;
 		a.pointer = pointer;
 		a.integer = integer;
-		a.buffer = boundBuffer(34962);
+		a.buffer = boundArray;
 		a.divisor = 0;
+		a.appliedBase = 0;
 		a.set = true;
 		appliedBaseVertex[currentVertexArray] = 0;
+		return false;
 	}
 
 	private static void applyBaseVertex(final int baseVertex) {
@@ -1316,6 +1655,7 @@ public final class GlApi {
 			} else {
 				gl.vertexAttribPointer(index, a.size, a.type, a.normalized, a.stride, offset);
 			}
+			a.appliedBase = baseVertex;
 		}
 		if (arrayBinding != restoreBuffer) {
 			gl.bindBuffer(34962, restoreBuffer == 0 ? null : buffers.get(restoreBuffer));

@@ -17,14 +17,46 @@ import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * A shader pack's user options, discovered the way OptiFine and Iris do it, plus the option menu
+ * layout, the profiles and the English labels.
+ *
+ * <p>Options come from the raw lines of every shader source in the pack and of every file those
+ * include (not just the files one program reaches, so the result depends on neither the dimension
+ * nor the option values):
+ * <ul>
+ * <li>value options: {@code #define NAME VALUE // comment [v1 v2 v3]} or {@code /* [v1 v2 v3] *\/}
+ * (the list is required; the default is appended when the list lacks it);</li>
+ * <li>boolean options: {@code #define NAME} (on) and {@code //#define NAME} (off), each with an
+ * optional trailing comment, counted only when {@code #ifdef NAME}, {@code #ifndef NAME},
+ * {@code #if/#elif defined(NAME)}, or a {@code shaders.properties}/{@code block.properties}
+ * reference appears somewhere in the pack;</li>
+ * <li>const options: {@code const int|float NAME = V; // [list]}, and {@code const bool NAME = true|false;}
+ * for the engine settings Iris accepts.</li>
+ * </ul>
+ * The same name with different defaults in different places is ambiguous and ignored, as in Iris.
+ *
+ * <p>The menu ({@code screen}, {@code screen.<NAME>}, {@code *.columns}), {@code sliders} and
+ * {@code profile.*} are read from {@code shaders.properties} preprocessed in properties mode with
+ * standard macros ({@code IS_IRIS}, {@code MC_VERSION}, etc.), without user option values.
+ *
+ * <p>Pure Java (no TeaVM or Minecraft imports) so the desktop harness can run it over real packs.
+ */
 public final class PackOptions {
+	/** One user option. */
 	public static final class Option {
 		public final String name;
+		/** A boolean define, or a {@code const bool}. Its values are "true"/"false". */
 		public final boolean bool;
+		/** A {@code const} line rather than a {@code #define}. */
 		public final boolean isConst;
+		/** "true"/"false" for booleans, else the value as written. */
 		public final String defaultValue;
+		/** Allowed values in the pack's order (booleans: false, true). */
 		public final List<String> values;
+		/** The trailing source comment without the value list; the fallback tooltip. */
 		public final String sourceComment;
+		/** Where it was first found. */
 		public final String file;
 
 		Option(final String name, final boolean bool, final boolean isConst, final String defaultValue, final List<String> values,
@@ -39,12 +71,18 @@ public final class PackOptions {
 		}
 	}
 
+	/** One cell of an option screen. */
 	public static final class Element {
 		public enum Kind {
+			/** An option button or slider. */
 			OPTION,
+			/** {@code [NAME]}: a button opening another screen. */
 			SCREEN,
+			/** {@code <profile>}: the profile switcher. */
 			PROFILE,
+			/** {@code <empty>}: a blank cell. */
 			EMPTY,
+			/** A name that is neither an option nor known; shown disabled so the layout keeps its shape. */
 			UNKNOWN
 		}
 
@@ -57,6 +95,7 @@ public final class PackOptions {
 		}
 	}
 
+	/** The main screen ({@code name == null}) or a sub screen. */
 	public static final class Screen {
 		public final String name;
 		public final int columns;
@@ -69,9 +108,12 @@ public final class PackOptions {
 		}
 	}
 
+	/** {@code profile.<NAME>}, with inherited profiles already folded in. */
 	public static final class Profile {
 		public final String name;
+		/** Option values the profile sets, in order. */
 		public final Map<String, String> values = new LinkedHashMap<>();
+		/** {@code !program.X} entries disabled by this profile. */
 		public final List<String> disabledPrograms = new ArrayList<>();
 
 		Profile(final String name) {
@@ -79,6 +121,10 @@ public final class PackOptions {
 		}
 	}
 
+	/**
+	 * {@code const} names Iris accepts as options. Numeric consts are also accepted under any name
+	 * when they carry a value list; {@code const bool} lines have no list, so only these count.
+	 */
 	private static final Set<String> CONST_NAMES = new HashSet<>();
 
 	static {
@@ -86,18 +132,40 @@ public final class PackOptions {
 			"entityShadowDistanceMul", "shadowIntervalSize", "generateShadowMipmap", "generateShadowColorMipmap", "shadowHardwareFiltering",
 			"shadowtex0Mipmap", "shadowtexMipmap", "shadowtex1Mipmap", "shadowtex0Nearest", "shadowtexNearest", "shadow0MinMagNearest",
 			"shadowtex1Nearest", "shadow1MinMagNearest", "wetnessHalflife", "drynessHalflife", "eyeBrightnessHalflife", "centerDepthHalflife",
-			"sunPathRotation", "ambientOcclusionLevel", "superSamplingLevel", "noiseTextureResolution");
+			"sunPathRotation", "ambientOcclusionLevel", "superSamplingLevel", "noiseTextureResolution",
+			"shadowOptimization", "oldLighting", "oldHandLight");
 		for (int i = 0; i < 8; i++) {
-			Collections.addAll(CONST_NAMES, "shadowcolor" + i + "Mipmap", "shadowColor" + i + "Mipmap", "shadowcolor" + i + "Nearest",
-				"shadowColor" + i + "Nearest", "shadowcolor" + i + "MinMagNearest", "shadowColor" + i + "MinMagNearest", "shadowHardwareFiltering" + i);
+			Collections.addAll(CONST_NAMES, "shadowcolor" + i + "Mipmap", "shadowColor" + i + "Mipmap",
+				"shadowcolor" + i + "MipmapEnabled", "shadowColor" + i + "MipmapEnabled",
+				"shadowcolor" + i + "Nearest", "shadowColor" + i + "Nearest",
+				"shadowcolor" + i + "MinMagNearest", "shadowColor" + i + "MinMagNearest",
+				"shadowcolor" + i + "Clear", "shadowColor" + i + "Clear",
+				"shadowHardwareFiltering" + i);
+		}
+		for (int i = 0; i < ShaderPack.MAX_COLOR_TARGETS; i++) {
+			String c = "colortex" + i;
+			Collections.addAll(CONST_NAMES, c + "MipmapEnabled", c + "Mipmap", c + "Clear", c + "Nearest", c + "MinMagNearest");
+		}
+		for (String legacy : ShaderPack.LEGACY_NAMES) {
+			Collections.addAll(CONST_NAMES, legacy + "MipmapEnabled", legacy + "Mipmap", legacy + "Clear",
+				legacy + "Nearest", legacy + "MinMagNearest");
 		}
 	}
 
-	private static final Pattern DEFINE_BOOL = Pattern.compile("#\\s*define\\s+([A-Za-z_]\\w*)\\s*(?://(.*))?");
-	private static final Pattern DEFINE_OFF = Pattern.compile("//\\s*#\\s*define\\s+([A-Za-z_]\\w*)\\s*(?://(.*))?");
-	private static final Pattern DEFINE_VALUE = Pattern.compile("#\\s*define\\s+([A-Za-z_]\\w*)\\s+([-+]?[\\w.]+)\\s*//(.*)");
-	private static final Pattern CONST = Pattern.compile("const\\s+(int|float|bool)\\s+([A-Za-z_]\\w*)\\s*=\\s*([-+]?[\\w.]+)\\s*;\\s*(?://(.*))?");
+	private static final String VALUE_TOKEN =
+		"(?:\\(\\s*[-+]?(?:0[xX][0-9a-fA-F]+[uUlL]*|(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?[fFuUlL]*)\\s*\\)"
+		+ "|[-+]?(?:0[xX][0-9a-fA-F]+[uUlL]*|(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?[fFuUlL]*)"
+		+ "|[A-Za-z_]\\w*)";
+	private static final String TRAILING_COMMENT = "(?://(.*)|/\\*(.*?)\\*/.*)";
+
+	private static final Pattern DEFINE_BOOL = Pattern.compile("#\\s*define\\s+([A-Za-z_]\\w*)\\s*(?:" + TRAILING_COMMENT + ")?");
+	private static final Pattern DEFINE_OFF = Pattern.compile("//\\s*#\\s*define\\s+([A-Za-z_]\\w*)\\s*(?:" + TRAILING_COMMENT + ")?");
+	private static final Pattern DEFINE_VALUE = Pattern.compile("#\\s*define\\s+([A-Za-z_]\\w*)\\s+(" + VALUE_TOKEN + ")\\s*" + TRAILING_COMMENT);
+	private static final Pattern CONST = Pattern.compile(
+		"const\\s+(int|float|bool)\\s+([A-Za-z_]\\w*)\\s*=\\s*(" + VALUE_TOKEN + ")\\s*;\\s*(?:" + TRAILING_COMMENT + ")?");
 	private static final Pattern IFDEF = Pattern.compile("#\\s*ifn?def\\s+([A-Za-z_]\\w*).*");
+	private static final Pattern IF_ELIF = Pattern.compile("#\\s*(?:el)?if\\b(.*)");
+	private static final Pattern DEFINED_CALL = Pattern.compile("\\bdefined\\s*(?:\\(\\s*([A-Za-z_]\\w*)\\s*\\)|([A-Za-z_]\\w*))");
 	private static final Pattern LIST = Pattern.compile("\\[([^\\]]*)\\]");
 	private static final Pattern INCLUDE = Pattern.compile("#\\s*include\\s+[\"<]([^\">]+)[\">].*");
 
@@ -105,9 +173,12 @@ public final class PackOptions {
 	private Screen main;
 	private final Map<String, Screen> screens = new LinkedHashMap<>();
 	private final Map<String, Profile> profiles = new LinkedHashMap<>();
+	private final Set<String> profileOptions = new LinkedHashSet<>();
 	private final Set<String> sliders = new LinkedHashSet<>();
 	private final Map<String, String> lang = new HashMap<>();
+	/** Ambiguous options, unknown menu entries and the like, for the log. */
 	public final List<String> warnings = new ArrayList<>();
+	/** Counts by kind, for logs and the desktop check. */
 	public int boolCount;
 	public int valueCount;
 	public int constCount;
@@ -115,8 +186,11 @@ public final class PackOptions {
 	private PackOptions() {
 	}
 
+	// ---- discovery ----
+
+	/** One sighting of an option-shaped line. */
 	private static final class Sighting {
-		final int kind;
+		final int kind; // 0 boolean define, 1 value define, 2 numeric const, 3 const bool
 		final String value;
 		final List<String> list;
 		final String comment;
@@ -146,6 +220,8 @@ public final class PackOptions {
 				paths.add(p);
 			}
 		}
+		// included files are scanned too, whatever their extension: Sildur's keeps every option in
+		// "shaders.settings", which Iris reaches through its include graph
 		Set<String> queued = new HashSet<>(paths);
 		for (int i = 0; i < paths.size(); i++) {
 			String path = paths.get(i);
@@ -162,25 +238,128 @@ public final class PackOptions {
 				}
 			}
 		}
+		// Preprocess shaders.properties in propertiesMode with standard macros (IS_IRIS, MC_VERSION, ...)
+		String rawProps = pack.text("/shaders.properties");
+		ShaderPack.Properties menuProps;
+		if (rawProps != null) {
+			scanPropertiesReferences(rawProps, ifdefs);
+			GlslPreprocessor pp = GlslPreprocessor.forProperties(
+				p -> p.equals("/shaders.properties") ? rawProps : pack.text(p),
+				PackPrograms.standardMacros("minecraft:overworld"), null);
+			menuProps = ShaderPack.parseProperties(pp.process("/shaders.properties").code.toString());
+			collectMenuOptionReferences(menuProps, ifdefs);
+		} else {
+			menuProps = new ShaderPack.Properties();
+		}
+		String rawBlocks = pack.text("/block.properties");
+		if (rawBlocks != null) {
+			scanPropertiesReferences(rawBlocks, ifdefs);
+		}
 		out.resolveOptions(seen, ifdefs);
-		String props = pack.text("/shaders.properties");
-		out.readMenu(props == null ? new ShaderPack.Properties() : ShaderPack.parseProperties(props));
+		out.readMenu(menuProps);
 		out.readLang(pack);
 		return out;
+	}
+
+	private static void scanPropertiesReferences(final String text, final Set<String> ifdefs) {
+		for (String raw : text.split("\n")) {
+			String line = raw.trim();
+			if (!line.startsWith("#")) {
+				continue;
+			}
+			Matcher m = IFDEF.matcher(line);
+			if (m.matches()) {
+				ifdefs.add(m.group(1));
+				continue;
+			}
+			m = IF_ELIF.matcher(line);
+			if (m.matches()) {
+				Matcher def = DEFINED_CALL.matcher(m.group(1));
+				while (def.find()) {
+					ifdefs.add(def.group(1) != null ? def.group(1) : def.group(2));
+				}
+			}
+		}
+	}
+
+	private static void collectMenuOptionReferences(final ShaderPack.Properties props, final Set<String> ifdefs) {
+		for (Map.Entry<String, String> e : props.asMap().entrySet()) {
+			String k = e.getKey();
+			String v = e.getValue();
+			if (k.equals("screen") || (k.startsWith("screen.") && !k.endsWith(".columns"))) {
+				for (String t : v.trim().split("\\s+")) {
+					if (!t.isEmpty() && GlslPreprocessor.isIdentStart(t.charAt(0))) {
+						ifdefs.add(t);
+					}
+				}
+			} else if (k.startsWith("profile.")) {
+				for (String t : v.trim().split("\\s+")) {
+					if (t.isEmpty() || t.startsWith("profile.") || t.startsWith("!program.")) {
+						continue;
+					}
+					String opt = t.startsWith("!") ? t.substring(1) : t;
+					int eq = opt.indexOf('=');
+					if (eq < 0) {
+						eq = opt.indexOf(':');
+					}
+					if (eq > 0) {
+						opt = opt.substring(0, eq);
+					}
+					if (!opt.isEmpty() && GlslPreprocessor.isIdentStart(opt.charAt(0))) {
+						ifdefs.add(opt);
+					}
+				}
+			} else if (k.startsWith("program.") && k.endsWith(".enabled")) {
+				for (String t : GlslPreprocessor.tokenize(v)) {
+					if (!t.isEmpty() && GlslPreprocessor.isIdentStart(t.charAt(0))) {
+						ifdefs.add(t);
+					}
+				}
+			}
+		}
 	}
 
 	private static void scanFile(final String path, final String text, final Map<String, List<Sighting>> seen, final Set<String> ifdefs,
 		final List<String> includes) {
 		int n = text.length();
 		int start = 0;
+		boolean inBlock = false;
 		while (start <= n) {
 			int end = text.indexOf('\n', start);
 			if (end < 0) {
 				end = n;
 			}
-			String line = text.substring(start, end).trim();
+			String rawLine = text.substring(start, end);
 			start = end + 1;
-			if (line.length() < 7) {
+
+			// Track /* ... */ block comments so commented-out #define / const lines are ignored
+			String line = rawLine.trim();
+			if (inBlock) {
+				int close = line.indexOf("*/");
+				if (close < 0) {
+					if (end == n) {
+						break;
+					}
+					continue;
+				}
+				inBlock = false;
+				line = line.substring(close + 2).trim();
+			}
+			while (line.startsWith("/*")) {
+				int close = line.indexOf("*/", 2);
+				if (close < 0) {
+					inBlock = true;
+					line = "";
+					break;
+				}
+				line = line.substring(close + 2).trim();
+			}
+			// Update inBlock for subsequent lines (ignoring // line comments)
+			if (!inBlock && line.contains("/*")) {
+				inBlock = hasUnclosedBlockComment(line);
+			}
+
+			if (line.length() < 4) {
 				if (end == n) {
 					break;
 				}
@@ -191,48 +370,69 @@ public final class PackOptions {
 				Matcher m = IFDEF.matcher(line);
 				if (m.matches()) {
 					ifdefs.add(m.group(1));
+					if (end == n) {
+						break;
+					}
+					continue;
+				}
+				m = IF_ELIF.matcher(line);
+				if (m.matches()) {
+					Matcher def = DEFINED_CALL.matcher(m.group(1));
+					while (def.find()) {
+						ifdefs.add(def.group(1) != null ? def.group(1) : def.group(2));
+					}
+					if (end == n) {
+						break;
+					}
 					continue;
 				}
 				m = INCLUDE.matcher(line);
 				if (m.matches()) {
 					includes.add(m.group(1));
+					if (end == n) {
+						break;
+					}
 					continue;
 				}
 				m = DEFINE_VALUE.matcher(line);
 				if (m.matches()) {
-					String comment = m.group(3);
+					String comment = extractComment(m, 3, 4);
 					Matcher list = LIST.matcher(comment);
 					if (list.find()) {
 						add(seen, m.group(1), new Sighting(1, m.group(2), splitList(list.group(1)), stripList(comment), path));
+					}
+					if (end == n) {
+						break;
 					}
 					continue;
 				}
 				m = DEFINE_BOOL.matcher(line);
 				if (m.matches()) {
-					add(seen, m.group(1), new Sighting(0, "true", null, m.group(2) == null ? "" : stripList(m.group(2)), path));
+					String comment = extractComment(m, 2, 3);
+					add(seen, m.group(1), new Sighting(0, "true", null, comment.isEmpty() ? "" : stripList(comment), path));
 				}
 			} else if (c == '/') {
 				Matcher m = DEFINE_OFF.matcher(line);
 				if (m.matches()) {
-					add(seen, m.group(1), new Sighting(0, "false", null, m.group(2) == null ? "" : stripList(m.group(2)), path));
+					String comment = extractComment(m, 2, 3);
+					add(seen, m.group(1), new Sighting(0, "false", null, comment.isEmpty() ? "" : stripList(comment), path));
 				}
 			} else if (c == 'c' && line.startsWith("const")) {
 				Matcher m = CONST.matcher(line);
-				if (!m.matches()) {
-					continue;
-				}
-				String type = m.group(1);
-				String name = m.group(2);
-				String value = m.group(3);
-				String comment = m.group(4) == null ? "" : m.group(4);
-				if (type.equals("bool")) {
-					if (CONST_NAMES.contains(name) && (value.equals("true") || value.equals("false"))) {
-						add(seen, name, new Sighting(3, value, null, stripList(comment), path));
-					}
-				} else {
-					Matcher list = LIST.matcher(comment);
-					if (list.find()) {
-						add(seen, name, new Sighting(2, value, splitList(list.group(1)), stripList(comment), path));
+				if (m.matches()) {
+					String type = m.group(1);
+					String name = m.group(2);
+					String value = m.group(3);
+					String comment = extractComment(m, 4, 5);
+					if (type.equals("bool")) {
+						if (CONST_NAMES.contains(name) && (value.equals("true") || value.equals("false"))) {
+							add(seen, name, new Sighting(3, value, null, stripList(comment), path));
+						}
+					} else {
+						Matcher list = LIST.matcher(comment);
+						if (list.find()) {
+							add(seen, name, new Sighting(2, value, splitList(list.group(1)), stripList(comment), path));
+						}
 					}
 				}
 			}
@@ -240,6 +440,37 @@ public final class PackOptions {
 				break;
 			}
 		}
+	}
+
+	private static boolean hasUnclosedBlockComment(final String line) {
+		boolean open = false;
+		int len = line.length();
+		for (int i = 0; i < len - 1; i++) {
+			char a = line.charAt(i);
+			char b = line.charAt(i + 1);
+			if (!open) {
+				if (a == '/' && b == '/') {
+					return false;
+				}
+				if (a == '/' && b == '*') {
+					open = true;
+					i++;
+				}
+			} else if (a == '*' && b == '/') {
+				open = false;
+				i++;
+			}
+		}
+		return open;
+	}
+
+	private static String extractComment(final Matcher m, final int slashGroup, final int blockGroup) {
+		String s = m.group(slashGroup);
+		if (s != null) {
+			return s;
+		}
+		String b = m.group(blockGroup);
+		return b != null ? b : "";
 	}
 
 	private static void add(final Map<String, List<Sighting>> seen, final String name, final Sighting s) {
@@ -261,6 +492,7 @@ public final class PackOptions {
 		return out;
 	}
 
+	/** The comment without its value list and without leading slashes ({@code // [0 1] // text}). */
 	private static String stripList(final String comment) {
 		String s = LIST.matcher(comment).replaceFirst("").trim();
 		int i = 0;
@@ -270,11 +502,63 @@ public final class PackOptions {
 		return s.substring(i);
 	}
 
+	/** True when two option values match literally or represent the same numeric value ({@code 128} vs {@code 128.0}). */
+	public static boolean valuesEqual(final String a, final String b) {
+		if (a == null || b == null) {
+			return false;
+		}
+		if (a.equals(b)) {
+			return true;
+		}
+		Double da = parseOptionNumber(a);
+		Double db = parseOptionNumber(b);
+		if (da != null && db != null) {
+			return Math.abs(da - db) <= 1e-6 * Math.max(1.0, Math.max(Math.abs(da), Math.abs(db)));
+		}
+		return false;
+	}
+
+	private static Double parseOptionNumber(final String raw) {
+		String s = raw.trim();
+		while (s.length() >= 2 && s.charAt(0) == '(' && s.charAt(s.length() - 1) == ')') {
+			s = s.substring(1, s.length() - 1).trim();
+		}
+		if (s.isEmpty()) {
+			return null;
+		}
+		char c0 = s.charAt(0);
+		if (!(Character.isDigit(c0) || c0 == '.' || c0 == '-' || c0 == '+')) {
+			return null;
+		}
+		try {
+			double d = GlslPreprocessor.parseNumber(s);
+			return Double.isFinite(d) ? d : null;
+		} catch (RuntimeException e) {
+			return null;
+		}
+	}
+
+	private static String findMatchingValue(final List<String> values, final String candidate) {
+		if (candidate == null) {
+			return null;
+		}
+		if (values.contains(candidate)) {
+			return candidate;
+		}
+		for (String v : values) {
+			if (valuesEqual(v, candidate)) {
+				return v;
+			}
+		}
+		return null;
+	}
+
 	private void resolveOptions(final Map<String, List<Sighting>> seen, final Set<String> ifdefs) {
 		for (Map.Entry<String, List<Sighting>> e : seen.entrySet()) {
 			String name = e.getKey();
 			List<Sighting> all = new ArrayList<>();
 			for (Sighting s : e.getValue()) {
+				// a bare #define that nothing tests or references is a guard or a constant, not a switch
 				if (s.kind != 0 || ifdefs.contains(name)) {
 					all.add(s);
 				}
@@ -287,13 +571,13 @@ public final class PackOptions {
 			List<String> values = new ArrayList<>();
 			String comment = "";
 			for (Sighting s : all) {
-				if (s.kind != first.kind || !s.value.equals(first.value)) {
+				if (s.kind != first.kind || !valuesEqual(s.value, first.value)) {
 					ambiguous = true;
 					break;
 				}
 				if (s.list != null) {
 					for (String v : s.list) {
-						if (!values.contains(v)) {
+						if (findMatchingValue(values, v) == null) {
 							values.add(v);
 						}
 					}
@@ -307,14 +591,20 @@ public final class PackOptions {
 				continue;
 			}
 			boolean bool = first.kind == 0 || first.kind == 3;
+			String defaultVal = first.value;
 			if (bool) {
 				values.clear();
 				values.add("false");
 				values.add("true");
-			} else if (!values.contains(first.value)) {
-				values.add(first.value);
+			} else {
+				String match = findMatchingValue(values, defaultVal);
+				if (match != null) {
+					defaultVal = match;
+				} else {
+					values.add(defaultVal);
+				}
 			}
-			Option o = new Option(name, bool, first.kind >= 2, first.value, Collections.unmodifiableList(values), comment, first.file);
+			Option o = new Option(name, bool, first.kind >= 2, defaultVal, Collections.unmodifiableList(values), comment, first.file);
 			this.options.put(name, o);
 			if (o.isConst) {
 				this.constCount++;
@@ -325,6 +615,8 @@ public final class PackOptions {
 			}
 		}
 	}
+
+	// ---- shaders.properties: screens, sliders, profiles ----
 
 	private void readMenu(final ShaderPack.Properties props) {
 		Map<String, String> raw = props.asMap();
@@ -354,11 +646,16 @@ public final class PackOptions {
 				}
 			}
 		}
+		// profiles after the options are known: bare names mean "on" only for boolean options
 		for (Map.Entry<String, String> e : raw.entrySet()) {
 			if (e.getKey().startsWith("profile.") && !this.profiles.containsKey(e.getKey().substring("profile.".length()))) {
 				this.resolveProfile(e.getKey().substring("profile.".length()), raw, new HashSet<>());
 			}
 		}
+		for (Profile p : this.profiles.values()) {
+			this.profileOptions.addAll(p.values.keySet());
+		}
+		// screens: '*' is filled in after every screen is read, with the options placed nowhere else
 		Set<String> placed = new HashSet<>();
 		List<Element> mainElements = mainLine == null ? null : this.elements(mainLine, placed);
 		Map<String, List<Element>> subs = new LinkedHashMap<>();
@@ -457,12 +754,23 @@ public final class PackOptions {
 				Profile parent = this.resolveProfile(t.substring("profile.".length()), raw, visiting);
 				if (parent != null) {
 					p.values.putAll(parent.values);
-					p.disabledPrograms.addAll(parent.disabledPrograms);
+					for (String dp : parent.disabledPrograms) {
+						if (!p.disabledPrograms.contains(dp)) {
+							p.disabledPrograms.add(dp);
+						}
+					}
 				}
 				continue;
 			}
 			if (t.startsWith("!program.")) {
-				p.disabledPrograms.add(t.substring("!program.".length()));
+				String prog = t.substring("!program.".length());
+				if (!p.disabledPrograms.contains(prog)) {
+					p.disabledPrograms.add(prog);
+				}
+				continue;
+			}
+			if (t.startsWith("program.")) {
+				p.disabledPrograms.remove(t.substring("program.".length()));
 				continue;
 			}
 			String opt;
@@ -487,36 +795,37 @@ public final class PackOptions {
 			if (o == null) {
 				continue;
 			}
-			if (o.bool ? !(value.equals("true") || value.equals("false")) : !o.values.contains(value)) {
+			String canonical;
+			if (o.bool) {
+				canonical = (value.equals("true") || value.equals("false")) ? value : null;
+			} else {
+				canonical = findMatchingValue(o.values, value);
+			}
+			if (canonical == null) {
 				this.warnings.add("profile " + name + ": " + opt + "=" + value + " is not an allowed value");
 				continue;
 			}
 			p.values.remove(opt);
-			p.values.put(opt, value);
+			p.values.put(opt, canonical);
 		}
 		visiting.remove(name);
 		this.profiles.put(name, p);
 		return p;
 	}
 
+	// ---- language ----
+
 	private void readLang(final ShaderPack pack) {
 		String text = pack.text("/lang/en_US.lang");
 		if (text == null) {
 			text = pack.text("/lang/en_us.lang");
-		}
-		if (text == null) {
-			for (String p : pack.paths()) {
-				if (p.toLowerCase(Locale.ROOT).equals("/lang/en_us.lang")) {
-					text = pack.text(p);
-					break;
-				}
-			}
 		}
 		if (text != null) {
 			parseLang(text, this.lang);
 		}
 	}
 
+	/** Java-properties-style lines with the common escapes ({@code \n}, {@code \t}, {@code \\uXXXX}). */
 	static void parseLang(final String text, final Map<String, String> out) {
 		StringBuilder logical = new StringBuilder();
 		for (String rawLine : text.split("\n")) {
@@ -590,6 +899,7 @@ public final class PackOptions {
 							i += 4;
 							break;
 						} catch (NumberFormatException e) {
+							// fall through to the literal
 						}
 					}
 					out.append('u');
@@ -600,6 +910,7 @@ public final class PackOptions {
 		return out.toString();
 	}
 
+	/** Removes Minecraft {@code §x} formatting codes. */
 	public static String stripFormatting(final String s) {
 		if (s == null || s.indexOf('§') < 0) {
 			return s;
@@ -616,6 +927,8 @@ public final class PackOptions {
 		return out.toString();
 	}
 
+	// ---- queries ----
+
 	public Collection<Option> options() {
 		return Collections.unmodifiableCollection(this.options.values());
 	}
@@ -628,6 +941,7 @@ public final class PackOptions {
 		return this.main;
 	}
 
+	/** A sub screen by name, or null. */
 	public Screen screen(final String name) {
 		return this.screens.get(name);
 	}
@@ -655,10 +969,12 @@ public final class PackOptions {
 		return Collections.unmodifiableSet(this.sliders);
 	}
 
+	/** A value option the pack wants as a slider. */
 	public boolean isSlider(final Option o) {
 		return !o.bool && this.sliders.contains(o.name);
 	}
 
+	/** A raw language entry (may hold {@code §} codes), or null. */
 	public String lang(final String key) {
 		return this.lang.get(key);
 	}
@@ -668,6 +984,7 @@ public final class PackOptions {
 		return s != null ? s : o.name;
 	}
 
+	/** The tooltip: {@code option.NAME.comment}, else the source comment; null if neither. */
 	public String optionComment(final Option o) {
 		String s = this.lang.get("option." + o.name + ".comment");
 		if (s != null) {
@@ -676,6 +993,7 @@ public final class PackOptions {
 		return o.sourceComment.isEmpty() ? null : o.sourceComment;
 	}
 
+	/** {@code value.NAME.VALUE}, else {@code prefix.NAME + value + suffix.NAME}. Booleans are left to the caller. */
 	public String valueLabel(final Option o, final String value) {
 		String s = this.lang.get("value." + o.name + "." + value);
 		if (s != null) {
@@ -706,32 +1024,44 @@ public final class PackOptions {
 	}
 
 	public boolean allowed(final Option o, final String value) {
-		return value != null && o.values.contains(value);
+		return findMatchingValue(o.values, value) != null;
 	}
 
+	// ---- values ----
+
+	/** Every option's value: the user's where valid, else the default. */
 	public Map<String, String> values(final Map<String, String> userValues) {
 		Map<String, String> out = new LinkedHashMap<>();
 		for (Option o : this.options.values()) {
 			String v = userValues == null ? null : userValues.get(o.name);
-			out.put(o.name, this.allowed(o, v) ? v : o.defaultValue);
+			String match = findMatchingValue(o.values, v);
+			out.put(o.name, match != null ? match : o.defaultValue);
 		}
 		return out;
 	}
 
+	/**
+	 * The overrides for {@link PackPrograms} / {@link GlslPreprocessor}: only options whose value
+	 * differs from the pack default, booleans as "true"/"false", others as the value.
+	 */
 	public Map<String, String> effective(final Map<String, String> userValues) {
 		Map<String, String> out = new TreeMap<>();
 		if (userValues == null) {
 			return out;
 		}
 		for (Option o : this.options.values()) {
-			String v = userValues.get(o.name);
-			if (this.allowed(o, v) && !v.equals(o.defaultValue)) {
-				out.put(o.name, v);
+			String match = findMatchingValue(o.values, userValues.get(o.name));
+			if (match != null && !valuesEqual(match, o.defaultValue)) {
+				out.put(o.name, match);
 			}
 		}
 		return out;
 	}
 
+	/**
+	 * The options as macros, the way Iris defines them for {@code shaders.properties}: a boolean that
+	 * is on becomes {@code #define NAME}, a value option {@code #define NAME value}. Consts are left out.
+	 */
 	public Map<String, String> macros(final Map<String, String> userValues) {
 		Map<String, String> out = new LinkedHashMap<>();
 		for (Map.Entry<String, String> e : this.values(userValues).entrySet()) {
@@ -748,34 +1078,85 @@ public final class PackOptions {
 		return out;
 	}
 
+	/**
+	 * The best-fit profile whose values all match and whose unspecified profile-controlled options
+	 * remain at their defaults, preferring the most specific profile (most option entries), or null
+	 * ("Custom").
+	 */
 	public String currentProfile(final Map<String, String> values) {
+		String bestName = null;
+		int bestSize = -1;
 		for (Profile p : this.profiles.values()) {
 			boolean match = true;
 			for (Map.Entry<String, String> e : p.values.entrySet()) {
 				Option o = this.options.get(e.getKey());
-				String current = values.get(e.getKey());
-				if (current == null) {
+				String current = values == null ? null : values.get(e.getKey());
+				if (current == null && o != null) {
 					current = o.defaultValue;
 				}
-				if (!current.equals(e.getValue())) {
+				if (!valuesEqual(current, e.getValue())) {
 					match = false;
 					break;
 				}
 			}
-			if (match) {
-				return p.name;
+			if (!match) {
+				continue;
+			}
+			// Options controlled by other profiles (not set by this profile) must be at default
+			for (String optName : this.profileOptions) {
+				if (p.values.containsKey(optName)) {
+					continue;
+				}
+				Option o = this.options.get(optName);
+				if (o == null) {
+					continue;
+				}
+				String current = values == null ? null : values.get(optName);
+				if (current != null && !valuesEqual(current, o.defaultValue)) {
+					match = false;
+					break;
+				}
+			}
+			if (match && p.values.size() > bestSize) {
+				bestName = p.name;
+				bestSize = p.values.size();
 			}
 		}
-		return null;
+		return bestName;
 	}
 
+	/**
+	 * Applies a profile: resets options controlled by other profiles back to their defaults so
+	 * switching profiles never leaves conflicting values behind, then applies the profile's values.
+	 */
 	public void applyProfile(final String name, final Map<String, String> values) {
 		Profile p = this.profiles.get(name);
-		if (p != null) {
-			values.putAll(p.values);
+		if (p == null) {
+			return;
 		}
+		for (String optName : this.profileOptions) {
+			Option o = this.options.get(optName);
+			if (o != null && !p.values.containsKey(optName)) {
+				values.put(optName, o.defaultValue);
+			}
+		}
+		values.putAll(p.values);
 	}
 
+	/** Programs disabled via {@code !program.X} by the currently matched profile, or empty if none. */
+	public Set<String> disabledPrograms(final Map<String, String> values) {
+		String prof = this.currentProfile(values);
+		if (prof == null) {
+			return Collections.emptySet();
+		}
+		Profile p = this.profiles.get(prof);
+		if (p == null || p.disabledPrograms.isEmpty()) {
+			return Collections.emptySet();
+		}
+		return Collections.unmodifiableSet(new LinkedHashSet<>(p.disabledPrograms));
+	}
+
+	/** Reads an OptiFine {@code <pack>.txt}: {@code NAME=value} lines. */
 	public static Map<String, String> readValues(final String text) {
 		Map<String, String> out = new LinkedHashMap<>();
 		if (text == null) {
@@ -794,6 +1175,7 @@ public final class PackOptions {
 		return out;
 	}
 
+	/** Writes {@code NAME=value} lines for the given (non-default) values, sorted by name. */
 	public static String writeValues(final Map<String, String> nonDefault) {
 		StringBuilder out = new StringBuilder();
 		for (Map.Entry<String, String> e : new TreeMap<>(nonDefault).entrySet()) {

@@ -14,7 +14,7 @@ import org.lwjgl.sdl.SDLVideo;
 import org.teavm.jso.JSBody;
 
 public class WebGpuBackend implements GpuBackend {
-	public static final boolean DEFAULT_ON = false;
+	public static final boolean DEFAULT_ON = true;
 	public static final int PROBE_TIMEOUT_MS = 2500;
 	private static boolean live;
 	private static String reason = "not decided";

@@ -39,6 +39,13 @@ public class WebMain {
 	private static long bootStartMs;
 	private static boolean deferredIdle;
 	private static String lastStatus = "";
+	private static boolean statusInitialized;
+	private static Object lastScreen;
+	private static Object lastOverlay;
+	private static boolean lastHasLevel;
+	private static boolean lastHasPlayer;
+	private static boolean lastHasConn;
+	private static boolean lastSrvReady;
 
 	public static int framesPresented() {
 		return frames;
@@ -63,9 +70,10 @@ public class WebMain {
 		}
 		System.setProperty(Credits.open(16150, 30252, 50378, 23864, 65121, 56953, 20163, 9233, 4513, 32803, 63638, 55468, 13928, 63354, 22928, 47281, 34039, 2192, 25633, 23918, 62245, 16541), "true");
 		System.setProperty("java.awt.headless", "true");
-		System.setProperty("web263.stagingBufferSize", "33554432");
-		System.setProperty("web263.vertexHeapSize", "33554432");
-		System.setProperty("web263.indexHeapSize", "8388608");
+		final boolean constrainedMemory = lowRamOrWeakGpu();
+		System.setProperty("web263.stagingBufferSize", constrainedMemory ? "8388608" : "33554432");
+		System.setProperty("web263.vertexHeapSize", constrainedMemory ? "16777216" : "33554432");
+		System.setProperty("web263.indexHeapSize", constrainedMemory ? "4194304" : "8388608");
 		System.setProperty("web263.skipMapErrorDrain", "true");
 		System.setProperty("web263.fogCulling", Boolean.toString(!queryFlag("nofogculling")));
 		System.setProperty("web263.entityCulling", Boolean.toString(!queryFlag("noentityculling")));
@@ -141,6 +149,10 @@ public class WebMain {
 		net.minecraft.client.ClientPhaseProbe.enabled = true;
 		WebChunkBuildQueue.setBudgetMs(queryInt("chunkbudget", 0));
 		WebMeshWorker.install(queryFlag("nomeshworker"));
+		if (!queryFlag("nosimd")) {
+			WebSimdKernels.install();
+			WebSimdKernels.installClient();
+		}
 		WebFrameProbe.spikeLogMs = queryInt("spikelog", 0);
 		ChunkGeneratorStructureState.ringBiomeSearchRadius = RING_BIOME_SEARCH_RADIUS;
 		ChunkGeneratorStructureState.nonBlockingRingPositions = true;
@@ -155,7 +167,7 @@ public class WebMain {
 	}
 
 	private static final String KEY_DEFAULTS = "minecraft_web:defaults";
-	private static final String FAST_DEFAULTS_VERSION = "2";
+	private static final String FAST_DEFAULTS_VERSION = "3";
 
 	private static void applyFastDefaults(final net.minecraft.client.Options options) {
 		options.renderDistance().set(4);
@@ -169,8 +181,11 @@ public class WebMain {
 		options.biomeBlendRadius().set(0);
 		options.ambientOcclusion().set(false);
 		options.menuBackgroundBlurriness().set(0);
+		options.vignette().set(false);
+		options.mipmapLevels().set(1);
+		options.weatherRadius().set(5);
 		System.out.println("[26.3-web] fast defaults: view 4, simulation 5, fast leaves, no shadows,"
-			+ " minimal particles, no biome blend, flat lighting, no menu blur");
+			+ " minimal particles, no biome blend, flat lighting, no menu blur, no vignette, mipmap 1, weather radius 5");
 	}
 
 	@JSBody(params = { "k" }, script = "try { return window.localStorage.getItem(k) || ''; } catch (e) { return ''; }")
@@ -200,7 +215,7 @@ public class WebMain {
 				applyFastDefaults(minecraft.options);
 				lsSet(KEY_DEFAULTS, FAST_DEFAULTS_VERSION);
 			}
-			{
+			if (!com.mojang.blaze3d.webgpu.WebGpuBackend.live()) {
 				minecraft.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
 			}
 		} catch (Throwable e) {
@@ -305,9 +320,9 @@ public class WebMain {
 	@JSBody(script = "var s = window.__minecraftWebServer; return typeof s === 'string' ? s : null;")
 	private static native String quickPlayServer();
 
-	private static final org.teavm.jso.browser.AnimationFrameCallback FRAME = timestamp -> pumpFrame();
 	private static final FrameCallback PUMP = WebMain::pumpFrame;
 	private static final FrameCallback SCHEDULE = WebMain::scheduleReadyFrame;
+	private static JSObject guardedPump;
 
 	private static long frameStartMs;
 	private static final FramePacer FRAME_PACER = new FramePacer();
@@ -323,6 +338,13 @@ public class WebMain {
 	@JSBody(script = "return document.hidden;")
 	private static native boolean pageHidden();
 
+	private static JSObject guardedPump() {
+		if (guardedPump == null) {
+			guardedPump = wrapFrameCallback(PUMP);
+		}
+		return guardedPump;
+	}
+
 	private static void scheduleFrame() {
 		if (com.mojang.blaze3d.webgpu.WebGpuBackend.live()) {
 			paceGpuFrame(SCHEDULE);
@@ -336,14 +358,14 @@ public class WebMain {
 			: FRAME_PACER.nextDelayMs(minecraft.options.enableVsync().get(),
 				trackedFramerateLimit(), frameStartMs, System.nanoTime() / 1_000_000L);
 		if (delay < 0L) {
-			Window.requestAnimationFrame(FRAME);
+			requestGuardedFrame(guardedPump());
 		} else if (delay == 0L) {
 			if (pacerPort == null) {
-				pacerPort = createPacerPort(PUMP);
+				pacerPort = createRawPacerPort(guardedPump());
 			}
 			pacerPost(pacerPort);
 		} else {
-			setTimeout(PUMP, (int) delay);
+			setTimeoutRaw(guardedPump(), (int) delay);
 		}
 	}
 
@@ -351,6 +373,34 @@ public class WebMain {
 	private interface FrameCallback extends JSObject {
 		void run();
 	}
+
+	@JSBody(params = {"fn"}, script = ""
+		+ "var traps = 0;"
+		+ "var run = function() {"
+		+ "  try {"
+		+ "    fn();"
+		+ "    traps = 0;"
+		+ "  } catch (err) {"
+		+ "    traps++;"
+		+ "    console.error('[26.3-web] frame trap (' + traps + '/5):', err);"
+		+ "    if (traps <= 5) {"
+		+ "      window.requestAnimationFrame(run);"
+		+ "    } else {"
+		+ "      console.error('[26.3-web] FRAME LOOP STOPPED after ' + traps + ' consecutive JS/WASM traps; reload to recover.');"
+		+ "    }"
+		+ "  }"
+		+ "};"
+		+ "return run;")
+	private static native JSObject wrapFrameCallback(FrameCallback fn);
+
+	@JSBody(params = {"run"}, script = "window.requestAnimationFrame(run);")
+	private static native void requestGuardedFrame(JSObject run);
+
+	@JSBody(params = {"run", "ms"}, script = "window.setTimeout(run, ms);")
+	private static native void setTimeoutRaw(JSObject run, int ms);
+
+	@JSBody(params = {"run"}, script = "var ch = new MessageChannel(); ch.port1.onmessage = function() { run(); }; return ch.port2;")
+	private static native JSObject createRawPacerPort(JSObject run);
 
 	@JSBody(params = {"cb"}, script = """
 		var gpu = window.__mcgpu;
@@ -367,9 +417,6 @@ public class WebMain {
 		if (q.length <= 3) { cb(); } else { q[0].p.then(cb); }
 		""")
 	private static native void paceGpuFrame(FrameCallback cb);
-
-	@JSBody(params = {"cb", "ms"}, script = "window.setTimeout(cb, ms);")
-	private static native void setTimeout(FrameCallback cb, int ms);
 
 	@JSBody(params = {"cb"}, script = "var ch = new MessageChannel(); ch.port1.onmessage = function() { cb(); }; return ch.port2;")
 	private static native JSObject createPacerPort(FrameCallback cb);
@@ -428,8 +475,14 @@ public class WebMain {
 			WebChunkBuildQueue.drainForFrame(meshBudgetNanos(mark), meshThroughputMode());
 			mark[2] = System.nanoTime();
 			minecraft.runFrame();
-			if (!net.minecraft.client.renderer.chunk.Web263MeshOffload.saturated()) {
-				WebChunkBuildQueue.drainPostFrameForWorker(2_500_000L);
+			try {
+				net.minecraft.client.web.mods.WebMods.onFrame();
+			} catch (Throwable modErr) {
+				System.out.println("[webmods] onFrame error: " + modErr);
+			}
+			long elapsedNanos = System.nanoTime() - mark[0];
+			if (!net.minecraft.client.renderer.chunk.Web263MeshOffload.saturated() && elapsedNanos < 12_000_000L) {
+				WebChunkBuildQueue.drainPostFrameForWorker(Math.min(2_500_000L, 14_000_000L - elapsedNanos));
 			}
 			mark[3] = System.nanoTime();
 			mark[4] = System.nanoTime();
@@ -486,12 +539,28 @@ public class WebMain {
 	private static void reportStatus() {
 		Object screen = minecraft.gui.screen();
 		Object overlay = minecraft.gui.overlay();
+		boolean hasLevel = minecraft.level != null;
+		boolean hasPlayer = minecraft.player != null;
+		boolean hasConn = minecraft.getConnection() != null;
+		boolean srvReady = minecraft.getSingleplayerServer() != null && minecraft.getSingleplayerServer().isReady();
+		if (statusInitialized && screen == lastScreen && overlay == lastOverlay
+				&& hasLevel == lastHasLevel && hasPlayer == lastHasPlayer
+				&& hasConn == lastHasConn && srvReady == lastSrvReady) {
+			return;
+		}
+		statusInitialized = true;
+		lastScreen = screen;
+		lastOverlay = overlay;
+		lastHasLevel = hasLevel;
+		lastHasPlayer = hasPlayer;
+		lastHasConn = hasConn;
+		lastSrvReady = srvReady;
 		String status = "screen=" + (screen == null ? "-" : screen.getClass().getSimpleName())
 				+ " overlay=" + (overlay == null ? "-" : overlay.getClass().getSimpleName())
-				+ " level=" + (minecraft.level != null)
-				+ " player=" + (minecraft.player != null)
-				+ " conn=" + (minecraft.getConnection() != null)
-				+ " srvReady=" + (minecraft.getSingleplayerServer() != null && minecraft.getSingleplayerServer().isReady());
+				+ " level=" + hasLevel
+				+ " player=" + hasPlayer
+				+ " conn=" + hasConn
+				+ " srvReady=" + srvReady;
 		if (!status.equals(lastStatus)) {
 			lastStatus = status;
 			System.out.println("[26.3-web] frame " + frames + " " + status);
@@ -584,6 +653,9 @@ public class WebMain {
 	@JSBody(script = "return (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;")
 	private static native boolean lowEndDevice();
 
+	@JSBody(script = "try { return ((navigator.deviceMemory || 8) <= 4) || !!(typeof window.__minecraftWebWeakGpu === 'function' && window.__minecraftWebWeakGpu()) || !!(typeof window.__twitcraftWeakGpu === 'function' && window.__twitcraftWeakGpu()); } catch (e) { return false; }")
+	private static native boolean lowRamOrWeakGpu();
+
 	@JSBody(script = "return !!(window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(hover: hover)').matches);")
 	private static native boolean touchDevice();
 
@@ -614,7 +686,7 @@ public class WebMain {
 		return fallback;
 	}
 
-	@JSBody(params = {"canvas", "capture"}, script = "return canvas.getContext('webgl2', {alpha:false, antialias:false, powerPreference:'high-performance', preserveDrawingBuffer:capture});")
+	@JSBody(params = {"canvas", "capture"}, script = "return canvas.getContext('webgl2', {alpha:false, antialias:false, depth:false, stencil:false, powerPreference:'high-performance', preserveDrawingBuffer:capture});")
 	private static native JSObject getWebGL2Context(HTMLCanvasElement canvas, boolean capture);
 
 	@JSBody(params = {"gl"}, script = "var d = gl.getExtension('WEBGL_debug_renderer_info');"

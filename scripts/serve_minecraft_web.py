@@ -34,7 +34,9 @@ COMPRESSIBLE = re.compile(r"\.(wasm|js|json|css|html|txt|teadbg)$")
 LINK = re.compile(r"^(?P<prefix>/(?:.*/)?)(?P<kind>play|r)/(?P<id>[^/?#]+)/?$")
 TYPES = {".wasm": "application/wasm", ".js": "text/javascript", ".json": "application/json",
          ".css": "text/css", ".html": "text/html; charset=utf-8", ".png": "image/png",
-         ".gz": "application/gzip", ".bin": "application/octet-stream"}
+         ".gz": "application/gzip", ".bin": "application/octet-stream",
+         ".jar": "application/java-archive", ".zip": "application/zip"}
+LOCAL_CORS_ORIGIN_RE = re.compile(r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$", re.IGNORECASE)
 
 def precompress(web):
     try:
@@ -102,8 +104,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def guess_type(self, path):
         return TYPES.get(os.path.splitext(path)[1], super().guess_type(path))
 
+    def _send_mod_cors(self):
+        origin = self.headers.get("Origin", "")
+        if origin and LOCAL_CORS_ORIGIN_RE.match(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Mod-Filename")
+            self.send_header("Access-Control-Max-Age", "600")
+
+    def do_OPTIONS(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/mods" or path.startswith("/api/mods/"):
+            self.send_response(204)
+            self._send_mod_cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        self.send_error(405)
+        return None
+
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/mods/status":
+            return self.json(200, {"available": False, "offlineTranslator": True, "mode": "offline"}, cors=True)
         if path.startswith("/api/"):
             return self.json(503, {"error": "hosting_disabled"})
         link = LINK.match(path)
@@ -115,9 +139,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         return super().do_GET()
 
-    def json(self, status, data):
+    def json(self, status, data, cors=False):
         body = json.dumps(data).encode()
         self.send_response(status)
+        if cors:
+            self._send_mod_cors()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

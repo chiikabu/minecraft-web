@@ -38,6 +38,8 @@ import org.teavm.jso.JSObject;
 final class WebGpuCommandEncoder implements CommandEncoderBackend {
 	final WebGpuDevice device;
 	private final WebGpuTransientMemory transientMemory;
+	private final WebGpuRenderPass reusablePass;
+	private final String[][] colorFormatsByLen = new String[9][];
 	private WebGpuRenderPass current;
 	final CommandStream cmds = new CommandStream();
 	private int drawsThisFrame;
@@ -47,6 +49,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 	WebGpuCommandEncoder(WebGpuDevice device) {
 		this.device = device;
 		this.transientMemory = new WebGpuTransientMemory(device);
+		this.reusablePass = new WebGpuRenderPass(this);
 	}
 
 	boolean frameHasDraws() {
@@ -100,13 +103,24 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 		passOpen = true;
 		List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colors = descriptor.colorAttachments();
 		RenderPassDescriptor.Attachment<OptionalDouble> depth = descriptor.depthAttachment();
-		String[] formats = new String[colors.size()];
+		int colorCount = colors.size();
+		String[] formats;
+		if (colorCount < colorFormatsByLen.length) {
+			formats = colorFormatsByLen[colorCount];
+			if (formats == null) {
+				formats = new String[colorCount];
+				colorFormatsByLen[colorCount] = formats;
+			}
+		} else {
+			formats = new String[colorCount];
+		}
 		int width = 0;
 		int height = 0;
 		WebGpuNatives.passBegin();
-		for (int i = 0; i < colors.size(); i++) {
+		for (int i = 0; i < colorCount; i++) {
 			RenderPassDescriptor.Attachment<Optional<Vector4fc>> a = colors.get(i);
 			if (a == null) {
+				formats[i] = null;
 				WebGpuNatives.passColorNull();
 				continue;
 			}
@@ -135,11 +149,11 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 		}
 		String label = descriptor.label() == null ? "pass" : descriptor.label().get();
 		JSObject passHandle = WebGpuNatives.passStart(label);
-		current = new WebGpuRenderPass(this, passHandle, depthFormat, formats, width, height);
+		reusablePass.reset(passHandle, depthFormat, formats, colorCount, width, height);
+		current = reusablePass;
 		RenderPass.RenderArea area = descriptor.renderArea();
 		if (area != null) {
-			current.defaultScissor = new int[]{area.x(), area.y(), area.width(), area.height()};
-			current.enableScissor(area.x(), area.y(), area.width(), area.height());
+			current.setDefaultScissor(area.x(), area.y(), area.width(), area.height());
 		}
 		return current;
 	}
@@ -149,6 +163,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 		passOpen = false;
 		if (current != null) {
 			current.flush();
+			current.release();
 		}
 		WebGpuNatives.passEnd();
 		current = null;
@@ -163,8 +178,15 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 
 	@Override
 	public void clearColorAndDepthTextures(GpuTexture colorTexture, Vector4fc clearColor, GpuTexture depthTexture, double clearDepth) {
-		clearColorTexture(colorTexture, clearColor);
-		clearDepthTexture(depthTexture, clearDepth);
+		if (colorTexture instanceof WebGpuTexture color && depthTexture instanceof WebGpuTexture depth
+			&& color.getMipLevels() == depth.getMipLevels()
+			&& color.getWidth(0) == depth.getWidth(0)
+			&& color.getHeight(0) == depth.getHeight(0)) {
+			WebGpuNatives.clearColorAndDepth(color.handle, clearColor.x(), clearColor.y(), clearColor.z(), clearColor.w(), depth.handle, (float) clearDepth);
+		} else {
+			clearColorTexture(colorTexture, clearColor);
+			clearDepthTexture(depthTexture, clearDepth);
+		}
 	}
 
 	@Override
@@ -373,8 +395,8 @@ final class WebGpuTransientMemory implements TransientMemory {
 	private static final int BLOCK = 4 << 20;
 	private final WebGpuDevice device;
 	private final List<WebGpuBuffer> blocks = new ArrayList<>();
-	private final List<Integer> offsets = new ArrayList<>();
-	private final List<Integer> lastUsed = new ArrayList<>();
+	private int[] offsets = new int[8];
+	private int[] lastUsed = new int[8];
 	private int frame;
 	private static final int IDLE_FRAMES = 600;
 
@@ -387,14 +409,18 @@ final class WebGpuTransientMemory implements TransientMemory {
 
 	void rotate() {
 		frame++;
-		for (int i = 0; i < offsets.size(); i++) {
-			offsets.set(i, 0);
+		int count = blocks.size();
+		for (int i = 0; i < count; i++) {
+			offsets[i] = 0;
 		}
-		for (int i = blocks.size() - 1; i > 0; i--) {
-			if (frame - lastUsed.get(i) > IDLE_FRAMES) {
+		for (int i = count - 1; i > 0; i--) {
+			if (frame - lastUsed[i] > IDLE_FRAMES) {
 				WebGpuBuffer b = blocks.remove(i);
-				offsets.remove(i);
-				lastUsed.remove(i);
+				int tail = blocks.size() - i;
+				if (tail > 0) {
+					System.arraycopy(offsets, i + 1, offsets, i, tail);
+					System.arraycopy(lastUsed, i + 1, lastUsed, i, tail);
+				}
 				b.close();
 				b.shadow = null;
 				if (b.cpu != 0) {
@@ -409,24 +435,26 @@ final class WebGpuTransientMemory implements TransientMemory {
 
 	private static int align(int value, long alignment) {
 		int a = (int) Math.max(4, alignment);
-		return (value + a - 1) / a * a;
+		return (a & (a - 1)) == 0 ? (value + a - 1) & ~(a - 1) : (value + a - 1) / a * a;
 	}
 
 	Region region(long size, long alignment) {
 		int need = align((int) Math.max(1, size), 4);
-		for (int i = 0; i < blocks.size(); i++) {
-			int start = align(offsets.get(i), alignment);
-			if (start + need <= blocks.get(i).size()) {
-				offsets.set(i, start + need);
-				lastUsed.set(i, frame);
-				return new Region(blocks.get(i), start, need);
+		int count = blocks.size();
+		for (int i = 0; i < count; i++) {
+			WebGpuBuffer b = blocks.get(i);
+			int start = align(offsets[i], alignment);
+			if (start + need <= b.size()) {
+				offsets[i] = start + need;
+				lastUsed[i] = frame;
+				return new Region(b, start, need);
 			}
 		}
 		int cap = Math.max(BLOCK, align(need, 256));
 		JSObject handle = WebGpuNatives.createBuffer(
 			cap,
 			WebGpuNatives.BUF_COPY_DST | WebGpuNatives.BUF_COPY_SRC | WebGpuNatives.BUF_VERTEX | WebGpuNatives.BUF_INDEX | WebGpuNatives.BUF_UNIFORM | WebGpuNatives.BUF_STORAGE,
-			"transient block " + blocks.size()
+			"transient block " + count
 		);
 		int usage = GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_INDEX | GpuBuffer.USAGE_UNIFORM
 			| GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER | GpuBuffer.USAGE_MAP_WRITE;
@@ -434,9 +462,14 @@ final class WebGpuTransientMemory implements TransientMemory {
 		if (MemoryUtil.LINEAR) {
 			block.cpu = MemoryUtil.nmemAlloc(cap);
 		}
+		if (count == offsets.length) {
+			int nextLen = offsets.length * 2;
+			offsets = java.util.Arrays.copyOf(offsets, nextLen);
+			lastUsed = java.util.Arrays.copyOf(lastUsed, nextLen);
+		}
 		blocks.add(block);
-		offsets.add(need);
-		lastUsed.add(frame);
+		offsets[count] = need;
+		lastUsed[count] = frame;
 		return new Region(block, 0, need);
 	}
 
@@ -563,18 +596,26 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	private final WebGpuCommandEncoder encoder;
 	private final WebGpuDevice device;
-	private final JSObject pass;
-	final String depthFormat;
-	final String[] colorFormats;
-	final int width;
-	final int height;
-	int[] defaultScissor;
-	private int[] scissor;
+	private final int uniformAlignment;
+	private final int alignMask;
+	private JSObject pass;
+	String depthFormat;
+	String[] colorFormats;
+	int colorCount;
+	int width;
+	int height;
+	private boolean hasDefaultScissor;
+	private int defSx, defSy, defSw, defSh;
+	private boolean hasScissor;
+	private int sx, sy, sw, sh;
+	private boolean hasLastScissor;
+	private int lastSx, lastSy, lastSw, lastSh;
 	private boolean scissorDirty = true;
 	@Nullable
 	private WebGpuPipeline pipeline;
 	private WebGpuPipeline.Variant bound;
-	private Object[] uniformValues = new Object[0];
+	private Object[] uniformValues = new Object[16];
+	private int uniformLen;
 	private final GpuBufferSlice[] vertexBuffers = new GpuBufferSlice[16];
 	private boolean vertexBuffersDirty = true;
 	@Nullable
@@ -583,20 +624,90 @@ final class WebGpuRenderPass implements RenderPassBackend {
 	private boolean indexDirty = true;
 	private boolean bindingsDirty = true;
 	private final int[] offsets = new int[64];
+	private int lastBoundGroupId = -1;
+	private int lastBoundDyn = -1;
+	private final int[] lastBoundOffsets = new int[64];
 	private final int[] keyParts = new int[256];
 	private int texturesVersion;
 	private int maskVersion = -1;
 	private WebGpuPipeline maskPipeline;
 	private long cachedDepthMask;
 
-	WebGpuRenderPass(WebGpuCommandEncoder encoder, JSObject pass, String depthFormat, String[] colorFormats, int width, int height) {
+	WebGpuRenderPass(WebGpuCommandEncoder encoder) {
 		this.encoder = encoder;
-		this.pass = pass;
 		this.device = encoder.device;
+		int align = encoder.device.uniformAlignment;
+		this.uniformAlignment = align;
+		this.alignMask = align > 0 && (align & (align - 1)) == 0 ? (align - 1) : -1;
+	}
+
+	void reset(JSObject pass, String depthFormat, String[] colorFormats, int colorCount, int width, int height) {
+		this.pass = pass;
 		this.depthFormat = depthFormat;
 		this.colorFormats = colorFormats;
+		this.colorCount = colorCount;
 		this.width = width;
 		this.height = height;
+		this.hasDefaultScissor = false;
+		this.defSx = 0;
+		this.defSy = 0;
+		this.defSw = 0;
+		this.defSh = 0;
+		this.hasScissor = false;
+		this.sx = 0;
+		this.sy = 0;
+		this.sw = 0;
+		this.sh = 0;
+		this.hasLastScissor = false;
+		this.lastSx = 0;
+		this.lastSy = 0;
+		this.lastSw = 0;
+		this.lastSh = 0;
+		this.scissorDirty = true;
+		this.pipeline = null;
+		this.bound = null;
+		if (this.uniformLen > 0) {
+			java.util.Arrays.fill(this.uniformValues, 0, this.uniformLen, null);
+			this.uniformLen = 0;
+		}
+		java.util.Arrays.fill(this.vertexBuffers, null);
+		this.vertexBuffersDirty = true;
+		this.indexBuffer = null;
+		this.indexType = IndexType.SHORT;
+		this.indexDirty = true;
+		this.bindingsDirty = true;
+		this.lastBoundGroupId = -1;
+		this.lastBoundDyn = -1;
+		this.maskPipeline = null;
+		this.maskVersion = -1;
+		this.cachedDepthMask = 0L;
+		this.texturesVersion++;
+	}
+
+	void release() {
+		this.pass = null;
+		this.pipeline = null;
+		this.bound = null;
+		this.maskPipeline = null;
+		this.indexBuffer = null;
+		if (this.uniformLen > 0) {
+			java.util.Arrays.fill(this.uniformValues, 0, this.uniformLen, null);
+			this.uniformLen = 0;
+		}
+		java.util.Arrays.fill(this.vertexBuffers, null);
+	}
+
+	void setDefaultScissor(int x, int y, int w, int h) {
+		hasDefaultScissor = true;
+		defSx = x;
+		defSy = y;
+		defSw = w;
+		defSh = h;
+		enableScissor(x, y, w, h);
+	}
+
+	private boolean isUniformAligned(int off) {
+		return alignMask >= 0 ? (off & alignMask) == 0 : (off % uniformAlignment == 0);
 	}
 
 	@Override
@@ -612,7 +723,16 @@ final class WebGpuRenderPass implements RenderPassBackend {
 		WebGpuPipeline p = (WebGpuPipeline) pipeline;
 		if (this.pipeline != p) {
 			this.pipeline = p;
-			uniformValues = new Object[p.uniformNames.length];
+			int len = p.uniformNames.length;
+			if (uniformValues.length < len) {
+				uniformValues = new Object[len];
+			} else {
+				int clearEnd = Math.max(uniformLen, len);
+				if (clearEnd > 0) {
+					java.util.Arrays.fill(uniformValues, 0, clearEnd, null);
+				}
+			}
+			uniformLen = len;
 			bound = null;
 			bindingsDirty = true;
 			vertexBuffersDirty = true;
@@ -622,7 +742,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	@Override
 	public void setUniform(int index, @Nullable Object value) {
-		if (index < 0 || index >= uniformValues.length) {
+		if (index < 0 || index >= uniformLen) {
 			return;
 		}
 		if (uniformValues[index] != value) {
@@ -640,14 +760,24 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	@Override
 	public void enableScissor(int x, int y, int w, int h) {
-		scissor = new int[]{x, y, w, h};
-		scissorDirty = true;
+		if (!hasScissor || sx != x || sy != y || sw != w || sh != h) {
+			hasScissor = true;
+			sx = x;
+			sy = y;
+			sw = w;
+			sh = h;
+			scissorDirty = true;
+		}
 	}
 
 	@Override
 	public void disableScissor() {
-		scissor = defaultScissor;
-		scissorDirty = true;
+		if (hasDefaultScissor) {
+			enableScissor(defSx, defSy, defSw, defSh);
+		} else if (hasScissor) {
+			hasScissor = false;
+			scissorDirty = true;
+		}
 	}
 
 	@Override
@@ -737,7 +867,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	@Nullable
 	private Object value(int uniformIndex) {
-		return uniformIndex >= 0 && uniformIndex < uniformValues.length ? uniformValues[uniformIndex] : null;
+		return uniformIndex >= 0 && uniformIndex < uniformLen ? uniformValues[uniformIndex] : null;
 	}
 
 	@Nullable
@@ -793,6 +923,8 @@ final class WebGpuRenderPass implements RenderPassBackend {
 			c.put(v.pipelineId);
 			bound = v;
 			bindingsDirty = true;
+			lastBoundGroupId = -1;
+			lastBoundDyn = -1;
 		}
 		if (bindingsDirty) {
 			bindGroup(v);
@@ -819,15 +951,26 @@ final class WebGpuRenderPass implements RenderPassBackend {
 	}
 
 	private void applyScissor() {
-		int[] s = scissor;
-		if (s == null) {
-			cmd4(WebGpuNatives.CMD_SCISSOR, 0, 0, width, height);
+		int x, y, w, h;
+		if (!hasScissor) {
+			x = 0;
+			y = 0;
+			w = width;
+			h = height;
+		} else {
+			x = Math.max(0, Math.min(sx, width));
+			w = Math.max(0, Math.min(sw, width - x));
+			y = Math.max(0, Math.min(sy, height));
+			h = Math.max(0, Math.min(sh + Math.min(0, sy), height - y));
+		}
+		if (hasLastScissor && x == lastSx && y == lastSy && w == lastSw && h == lastSh) {
 			return;
 		}
-		int x = Math.max(0, Math.min(s[0], width));
-		int w = Math.max(0, Math.min(s[2], width - x));
-		int y = Math.max(0, Math.min(s[1], height));
-		int h = Math.max(0, Math.min(s[3] + Math.min(0, s[1]), height - y));
+		hasLastScissor = true;
+		lastSx = x;
+		lastSy = y;
+		lastSw = w;
+		lastSh = h;
 		cmd4(WebGpuNatives.CMD_SCISSOR, x, y, w, h);
 	}
 
@@ -843,7 +986,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 					if (s != null) {
 						WebGpuBuffer b = (WebGpuBuffer) s.buffer();
 						int off = (int) s.offset();
-						boolean aligned = off % device.uniformAlignment == 0;
+						boolean aligned = isUniformAligned(off);
 						offsets[dyn++] = aligned ? off : 0;
 						parts[n++] = b.id;
 						parts[n++] = aligned ? -1 : off;
@@ -909,6 +1052,23 @@ final class WebGpuRenderPass implements RenderPassBackend {
 	}
 
 	private void setBindGroup(final BindGroup group, final int dyn) {
+		if (group.id == lastBoundGroupId && dyn == lastBoundDyn) {
+			boolean same = true;
+			for (int i = 0; i < dyn; i++) {
+				if (offsets[i] != lastBoundOffsets[i]) {
+					same = false;
+					break;
+				}
+			}
+			if (same) {
+				return;
+			}
+		}
+		lastBoundGroupId = group.id;
+		lastBoundDyn = dyn;
+		for (int i = 0; i < dyn; i++) {
+			lastBoundOffsets[i] = offsets[i];
+		}
 		CommandStream c = encoder.cmds;
 		c.reserve(pass, 3 + dyn);
 		c.put(WebGpuNatives.CMD_BIND_GROUP);
@@ -970,7 +1130,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 					if (s != null) {
 						WebGpuBuffer b = (WebGpuBuffer) s.buffer();
 						int off = (int) s.offset();
-						boolean dynamic = off % device.uniformAlignment == 0;
+						boolean dynamic = isUniformAligned(off);
 						WebGpuNatives.bindGroupBuffer(binding, b.handle, dynamic ? 0 : off, (int) s.length());
 						buffers.add(b);
 					} else {

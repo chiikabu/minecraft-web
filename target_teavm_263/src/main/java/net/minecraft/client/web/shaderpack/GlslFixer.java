@@ -3,6 +3,7 @@
 package net.minecraft.client.web.shaderpack;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -11,6 +12,16 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Repairs translated shader source from the WebGL compiler's own error list.
+ *
+ * <p>Desktop GLSL converts int to float (and int to uint) implicitly in arithmetic, comparisons,
+ * assignments and function arguments; GLSL ES 3.00 does not, and every pack leans on it.
+ * Each line the compiler rejects is rewritten using scoped variable type declarations, per-function
+ * integer parameter masks, array-vs-vector tracking, and texture dimension lookup.
+ *
+ * <p>Error lines are found from ANGLE's {@code ERROR: 0:<line>: ...} format.
+ */
 public final class GlslFixer {
 	private GlslFixer() {
 	}
@@ -20,15 +31,65 @@ public final class GlslFixer {
 		"\\b(?:(?:const|uniform|in|out|flat|highp|mediump|lowp)\\s+)*(int|uint|ivec[234]|uvec[234])\\s+(\\w+)\\s*([^;(]*)");
 	private static final Pattern FLOAT_DECL = Pattern.compile(
 		"\\b(float|vec[234]|mat[234]|bool|bvec[234])\\s+(\\w+)");
-	private static final Set<String> INT_CONTEXT_CALLS = new HashSet<>();
+	private static final Pattern SAMPLER_3D_DECL = Pattern.compile(
+		"\\b[iu]?sampler(?:3D|2DArray)(?:Shadow)?\\s+(\\w+)\\b");
+
+	/**
+	 * Per-function bitmask of parameter indices that MUST stay integer (bit {@code 1 << argIndex}).
+	 * Prevents e.g. {@code bitCount(n)} arg 0 from becoming float or {@code textureOffset(s, uv, off)}
+	 * arg 1 ({@code uv}) from being treated as int.
+	 */
+	private static final Map<String, Integer> INT_PARAM_MASKS = new HashMap<>();
+	/** Parameters that specifically require signed {@code int} (must NEVER be converted to {@code uint}). */
+	private static final Map<String, Integer> STRICT_SIGNED_INT_MASKS = new HashMap<>();
 
 	static {
-		for (String s : new String[] {"texelFetch",
-			"textureSize", "texelFetchOffset", "bitfieldExtract", "findMSB", "findLSB", "bitCount", "textureOffset",
-			"textureLodOffset", "textureGradOffset", "intBitsToFloat", "uintBitsToFloat", "unpackUnorm4x8", "unpackSnorm4x8",
-			"unpackHalf2x16", "unpackUnorm2x16", "unpackSnorm2x16", "iris_gather", "textureGather"}) {
-			INT_CONTEXT_CALLS.add(s);
-		}
+		INT_PARAM_MASKS.put("texelFetch", 0b110);           // (sampler, P, lod)
+		INT_PARAM_MASKS.put("texelFetchOffset", 0b1110);    // (sampler, P, lod, offset)
+		INT_PARAM_MASKS.put("textureSize", 0b10);           // (sampler, lod)
+		INT_PARAM_MASKS.put("textureOffset", 0b100);        // (sampler, P, offset [, bias])
+		INT_PARAM_MASKS.put("textureLodOffset", 0b1000);    // (sampler, P, lod, offset)
+		INT_PARAM_MASKS.put("textureGradOffset", 0b10000);  // (sampler, P, dPdx, dPdy, offset)
+		INT_PARAM_MASKS.put("textureProjOffset", 0b100);    // (sampler, P, offset [, bias])
+		INT_PARAM_MASKS.put("textureProjLodOffset", 0b1000);// (sampler, P, lod, offset)
+		INT_PARAM_MASKS.put("textureProjGradOffset", 0b10000);
+		INT_PARAM_MASKS.put("textureGather", 0b100);        // (sampler, P [, comp])
+		INT_PARAM_MASKS.put("iris_gather", 0b100);          // (sampler, P, comp)
+		INT_PARAM_MASKS.put("textureGatherOffset", 0b1100); // (sampler, P, offset [, comp])
+		INT_PARAM_MASKS.put("bitfieldExtract", 0b111);      // (value, offset, bits)
+		INT_PARAM_MASKS.put("bitfieldInsert", 0b1111);      // (base, insert, offset, bits)
+		INT_PARAM_MASKS.put("bitfieldReverse", 0b1);        // (value)
+		INT_PARAM_MASKS.put("findMSB", 0b1);                // (value)
+		INT_PARAM_MASKS.put("findLSB", 0b1);                // (value)
+		INT_PARAM_MASKS.put("bitCount", 0b1);               // (value)
+		INT_PARAM_MASKS.put("intBitsToFloat", 0b1);         // (value)
+		INT_PARAM_MASKS.put("uintBitsToFloat", 0b1);        // (value)
+		INT_PARAM_MASKS.put("unpackUnorm4x8", 0b1);         // (value)
+		INT_PARAM_MASKS.put("unpackSnorm4x8", 0b1);         // (value)
+		INT_PARAM_MASKS.put("unpackHalf2x16", 0b1);         // (value)
+		INT_PARAM_MASKS.put("unpackUnorm2x16", 0b1);        // (value)
+		INT_PARAM_MASKS.put("unpackSnorm2x16", 0b1);        // (value)
+		INT_PARAM_MASKS.put("ldexp", 0b10);                 // (x, exp)
+
+		STRICT_SIGNED_INT_MASKS.put("texelFetch", 0b110);
+		STRICT_SIGNED_INT_MASKS.put("texelFetchOffset", 0b1110);
+		STRICT_SIGNED_INT_MASKS.put("textureSize", 0b10);
+		STRICT_SIGNED_INT_MASKS.put("textureOffset", 0b100);
+		STRICT_SIGNED_INT_MASKS.put("textureLodOffset", 0b1000);
+		STRICT_SIGNED_INT_MASKS.put("textureGradOffset", 0b10000);
+		STRICT_SIGNED_INT_MASKS.put("textureProjOffset", 0b100);
+		STRICT_SIGNED_INT_MASKS.put("textureProjLodOffset", 0b1000);
+		STRICT_SIGNED_INT_MASKS.put("textureProjGradOffset", 0b10000);
+		STRICT_SIGNED_INT_MASKS.put("textureGather", 0b100);
+		STRICT_SIGNED_INT_MASKS.put("iris_gather", 0b100);
+		STRICT_SIGNED_INT_MASKS.put("textureGatherOffset", 0b1100);
+		STRICT_SIGNED_INT_MASKS.put("bitfieldExtract", 0b110);
+		STRICT_SIGNED_INT_MASKS.put("bitfieldInsert", 0b1100);
+		STRICT_SIGNED_INT_MASKS.put("int", 0b1);
+		STRICT_SIGNED_INT_MASKS.put("ivec2", 0b11);
+		STRICT_SIGNED_INT_MASKS.put("ivec3", 0b111);
+		STRICT_SIGNED_INT_MASKS.put("ivec4", 0b1111);
+		STRICT_SIGNED_INT_MASKS.put("ldexp", 0b10);
 	}
 
 	public static final class Error {
@@ -38,6 +99,18 @@ public final class GlslFixer {
 		Error(final int line, final String message) {
 			this.line = line;
 			this.message = message;
+		}
+	}
+
+	private static final class DeclInfo {
+		final int comps; // 1..4
+		final boolean isUint;
+		final boolean isArray;
+
+		DeclInfo(final int comps, final boolean isUint, final boolean isArray) {
+			this.comps = comps;
+			this.isUint = isUint;
+			this.isArray = isArray;
 		}
 	}
 
@@ -55,6 +128,13 @@ public final class GlslFixer {
 		return errors;
 	}
 
+	private static final Pattern BUILTIN_NAME = Pattern.compile("'(\\w+)'");
+	private static final Pattern CONST_QUAL = Pattern.compile("\\bconst\\s+");
+	private static final Pattern CASE_LITERAL = Pattern.compile("\\bcase\\s+(0[xX][0-9a-fA-F]+|\\d+)\\s*:");
+	private static final Pattern CASE_UINT_LITERAL = Pattern.compile("\\bcase\\s+(0[xX][0-9a-fA-F]+|\\d+)[uU]\\s*:");
+	private static final Pattern CASE_IDENT = Pattern.compile("\\bcase\\s+([A-Za-z_]\\w*)\\s*:");
+
+	/** Returns patched source, or null if nothing in the log is something this class can fix. */
 	public static String fix(final String source, final String log) {
 		List<Error> errors = parseLog(log);
 		if (errors.isEmpty()) {
@@ -65,37 +145,63 @@ public final class GlslFixer {
 		List<String> declNames = new ArrayList<>();
 		declarations(source, declPos, declNames);
 		Map<String, List<String>> functions = functionParameters(source);
+		Set<String> samplers3D = find3DSamplers(source);
 		int[] lineStart = new int[lines.length + 1];
 		for (int i = 0, off = 0; i < lines.length; i++) {
 			lineStart[i] = off;
 			off += lines[i].length() + 1;
 		}
 		boolean changed = false;
-		Set<Integer> done = new HashSet<>();
+		boolean strippedConst = false;
+		// Track handled (lineIdx + category) so multiple distinct errors on one line all get fixed
+		Set<String> handled = new HashSet<>();
 		String renamed = null;
+
 		for (Error e : errors) {
 			int idx = e.line - 1;
 			if (idx < 0 || idx >= lines.length) {
 				continue;
 			}
 			String msg = e.message;
-			if ((msg.contains("built-in") || msg.contains("builtin")) && (msg.contains("redefin") || msg.contains("redeclar") || msg.contains("overload"))) {
-				Matcher name = Pattern.compile("'(\\w+)'").matcher(msg);
+			if ((msg.contains("built-in") || msg.contains("builtin"))
+				&& (msg.contains("redefin") || msg.contains("redeclar") || msg.contains("overload"))) {
+				Matcher name = BUILTIN_NAME.matcher(msg);
 				if (name.find()) {
 					renamed = name.group(1);
 				}
 				continue;
 			}
-			if (!done.add(idx)) {
-				continue;
-			}
-			String fixed = lines[idx];
+
+			// 1. Non-constant const initializer (scan backwards for multi-line const declarations!)
 			if (msg.contains("assigning non-constant to") || msg.contains("must be a constant expression")
 				|| msg.contains("constant expression required") || msg.contains("non-constant initializer")) {
-				fixed = fixed.replaceFirst("\\bconst\\s+", "");
+				if (handled.add(idx + ":const")) {
+					if (CONST_QUAL.matcher(lines[idx]).find()) {
+						lines[idx] = CONST_QUAL.matcher(lines[idx]).replaceFirst("");
+						changed = true;
+						strippedConst = true;
+					} else {
+						int limit = Math.max(0, idx - 40);
+						for (int k = idx - 1; k >= limit; k--) {
+							if (CONST_QUAL.matcher(lines[k]).find()) {
+								lines[k] = CONST_QUAL.matcher(lines[k]).replaceFirst("");
+								changed = true;
+								strippedConst = true;
+								break;
+							}
+							if (endsStatement(lines[k])) {
+								break;
+							}
+						}
+					}
+				}
 			}
+
+			String fixed = lines[idx];
+
+			// 2. Call to user function with wrong literal types
 			Matcher callee = NO_OVERLOAD.matcher(msg);
-			if (callee.find() && functions.containsKey(callee.group(1))) {
+			if (callee.find() && functions.containsKey(callee.group(1)) && handled.add(idx + ":call:" + callee.group(1))) {
 				int span = Math.min(lines.length, idx + 40);
 				StringBuilder joined = new StringBuilder();
 				for (int k = idx; k < span; k++) {
@@ -107,37 +213,41 @@ public final class GlslFixer {
 					for (int k = idx; k < span; k++) {
 						if (!parts[k - idx].equals(lines[k])) {
 							lines[k] = parts[k - idx];
-							done.add(k);
 							changed = true;
 						}
 					}
 					continue;
 				}
 			}
-			if (msg.contains("case label type does not match")) {
-				String u = fixed.replaceAll("\\bcase\\s+(\\d+)\\s*:", "case $1u:");
+
+			// 3. Switch case label type mismatch (decimal, hex, named constants, uint<->int)
+			if (msg.contains("case label type does not match") && handled.add(idx + ":case")) {
+				String u = fixed;
+				if (CASE_UINT_LITERAL.matcher(u).find()) {
+					u = CASE_UINT_LITERAL.matcher(u).replaceAll("case $1:");
+				} else if (CASE_LITERAL.matcher(u).find()) {
+					u = CASE_LITERAL.matcher(u).replaceAll("case $1u:");
+				} else if (CASE_IDENT.matcher(u).find()) {
+					u = CASE_IDENT.matcher(u).replaceAll("case uint($1):");
+				}
 				if (!u.equals(fixed)) {
 					lines[idx] = u;
 					changed = true;
 				}
 				continue;
 			}
-			if (msg.contains("to 'in highp uint'") || msg.contains("to 'highp uint'") && msg.contains("highp int'")) {
+
+			// 4. Signed int <-> unsigned uint mismatch (const or non-const, without touching l-values or texelFetch LOD)
+			if (isUintMismatchError(msg) && handled.add(idx + ":uint")) {
 				String u = fixed;
-				int eq = u.indexOf('=');
-				boolean assignment = msg.contains("assign") && eq > 0 && u.indexOf(';', eq) > eq
-					&& "=!<>".indexOf(u.charAt(eq - 1)) < 0 && (eq + 1 >= u.length() || u.charAt(eq + 1) != '=');
-				if (assignment) {
+				int eq = topLevelAssignIndex(u);
+				boolean assignment = msg.contains("assign") && eq > 0 && u.indexOf(';', eq) > eq;
+				if (assignment && (msg.contains("to 'highp uint'") || msg.contains("to 'uint'"))) {
 					int end = u.indexOf(';', eq);
 					u = u.substring(0, eq + 1) + " uint(" + u.substring(eq + 1, end).trim() + ")" + u.substring(end);
 				} else {
-					Map<String, Integer> ints = intNamesAt(declPos, declNames, lineStart[idx] + lines[idx].length());
-					for (Map.Entry<String, Integer> n : ints.entrySet()) {
-						if (n.getValue() == 1) {
-							u = u.replaceAll("(?<![\\w.])" + n.getKey() + "(?![\\w(])", "uint(" + n.getKey() + ")");
-						}
-					}
-					u = INT_LITERAL.matcher(u).replaceAll("$1u");
+					Map<String, DeclInfo> declsHere = declsAt(declPos, declNames, lineStart[idx] + lines[idx].length());
+					u = uintifyLine(u, declsHere, functions);
 				}
 				if (!u.equals(fixed)) {
 					lines[idx] = u;
@@ -145,23 +255,9 @@ public final class GlslFixer {
 				}
 				continue;
 			}
-			if (msg.contains("uint") && (msg.contains("'const int'") || msg.contains("'const highp int'")) && !msg.contains("float")) {
-				String u = uintify(fixed);
-				if (u.equals(fixed)) {
-					Map<String, Integer> ints = intNamesAt(declPos, declNames, lineStart[idx] + lines[idx].length());
-					for (Map.Entry<String, Integer> n : ints.entrySet()) {
-						if (n.getValue() == 1 && !Pattern.compile("\\b\\w+\\s+" + n.getKey() + "\\s*[=;,]").matcher(fixed).find()) {
-							u = u.replaceAll("(?<![\\w.])" + n.getKey() + "(?![\\w(])", "uint(" + n.getKey() + ")");
-						}
-					}
-				}
-				if (!u.equals(fixed)) {
-					lines[idx] = u;
-					changed = true;
-				}
-				continue;
-			}
-			if (isConversionError(msg)) {
+
+			// 5. General int -> float conversion error
+			if (isConversionError(msg) && handled.add(idx + ":conv")) {
 				int first = idx;
 				while (first > 0 && !endsStatement(lines[first - 1])) {
 					first--;
@@ -174,21 +270,22 @@ public final class GlslFixer {
 				for (int k = first; k <= last; k++) {
 					joined.append(k == idx ? fixed : lines[k]).append(k < last ? "\n" : "");
 				}
-				Map<String, Integer> intsHere = intNamesAt(declPos, declNames, lineStart[idx] + lines[idx].length());
+				Map<String, DeclInfo> declsHere = declsAt(declPos, declNames, lineStart[idx] + lines[idx].length());
 				String pre = joined.toString();
 				if (msg.contains("wrong operand types")) {
 					Matcher mm = MOD_IN_ARITHMETIC.matcher(pre);
 					StringBuilder mb = new StringBuilder();
 					int mf = 0;
 					while (mm.find()) {
-						if (Integer.valueOf(1).equals(intsHere.get(mm.group(2)))) {
+						DeclInfo di = declsHere.get(mm.group(2));
+						if (di != null && di.comps == 1) {
 							mb.append(pre, mf, mm.start(2)).append("float(").append(mm.group(2)).append(mm.group(3)).append(')');
 							mf = mm.end(3);
 						}
 					}
 					pre = mb.append(pre.substring(mf)).toString();
 				}
-				String statement = floatifyLine(pre, intsHere, functions);
+				String statement = floatifyLine(pre, declsHere, functions, samplers3D);
 				statement = wrapIntResult(statement, msg);
 				statement = restoreBitOperands(statement);
 				statement = restoreModCompare(statement);
@@ -197,51 +294,217 @@ public final class GlslFixer {
 					for (int k = first; k <= last; k++) {
 						if (k != idx && !parts[k - first].equals(lines[k])) {
 							lines[k] = parts[k - first];
-							done.add(k);
+							handled.add(k + ":conv");
 							changed = true;
 						}
 					}
 					fixed = parts[idx - first];
 				}
 			}
-			if (msg.contains("integer expression required") || msg.contains("array index") && msg.contains("integer")) {
+
+			// 6. Float array index -> wrap subscript in int()
+			if ((msg.contains("integer expression required") || (msg.contains("array index") && msg.contains("integer")))
+				&& handled.add(idx + ":idx")) {
 				fixed = intIndex(fixed);
 			}
+
 			if (!fixed.equals(lines[idx])) {
 				lines[idx] = fixed;
 				changed = true;
 			}
 		}
+
 		String result = String.join("\n", lines);
 		if (renamed != null) {
 			result = Pattern.compile("\\b" + renamed + "(\\s*\\()").matcher(result).replaceAll("iris_user_" + renamed + "$1");
 			changed = true;
 		}
-		if (changed && result.contains("const ") && !result.equals(source)) {
+		if (strippedConst) {
+			// A const that lost its constness at global scope must move into main like any other initializer
 			result = GlslTranslator.moveGlobalInitializers(result, new GlslTranslator.Output());
 		}
 		return changed ? result : null;
 	}
 
-	private static final Set<String> FLOAT_ONLY_CALLS = new HashSet<>(java.util.Arrays.asList(
+	private static boolean isUintMismatchError(final String msg) {
+		if (msg.contains("float")) {
+			return false;
+		}
+		if (msg.contains("to 'in highp uint'") || msg.contains("to 'in uint'")) {
+			return true;
+		}
+		return (msg.contains("uint") || msg.contains("uvec"))
+			&& (msg.contains("'int'") || msg.contains("highp int'") || msg.contains("mediump int'")
+				|| msg.contains("lowp int'") || msg.contains("const int'") || msg.contains("ivec")
+				|| msg.contains("component vector of int"));
+	}
+
+	private static int topLevelAssignIndex(final String s) {
+		int level = 0;
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == '(' || c == '[') {
+				level++;
+			} else if (c == ')' || c == ']') {
+				level--;
+			} else if (c == '=' && level == 0) {
+				char prev = i > 0 ? s.charAt(i - 1) : ' ';
+				char next = i + 1 < s.length() ? s.charAt(i + 1) : ' ';
+				if (next != '=' && "=!<>".indexOf(prev) < 0) {
+					return i;
+				}
+			}
+		}
+		return -1;
+	}
+
+	private static Set<String> find3DSamplers(final String source) {
+		Set<String> out = new HashSet<>();
+		if (!source.contains("3D") && !source.contains("2DArray")) {
+			return out;
+		}
+		Matcher m = SAMPLER_3D_DECL.matcher(source);
+		while (m.find()) {
+			out.add(m.group(1));
+		}
+		return out;
+	}
+
+	/** Built-ins with float-only overloads: inside them an int declaration's initializer is float again. */
+	private static final Set<String> FLOAT_ONLY_CALLS = new HashSet<>(Arrays.asList(
 		"sqrt", "pow", "exp", "exp2", "log", "log2", "sin", "cos", "tan", "asin", "acos", "atan", "floor", "ceil", "fract",
 		"round", "mod", "mix", "smoothstep", "step", "length", "distance", "dot", "normalize", "float", "vec2", "vec3", "vec4",
 		"texture", "textureLod", "inversesqrt", "radians", "degrees",
 		"int", "uint", "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4"));
 
-	private static final Pattern MOD_COMPARE = Pattern.compile("(%" + "\\s*[A-Za-z_0-9.]+" + "\\s*(?:==|!=|<=|>=|<|>)" + "\\s*)(\\d+)\\.0\\b");
+	private static final Pattern MOD_COMPARE = Pattern.compile("(%\\s*[A-Za-z_0-9.]+\\s*(?:==|!=|<=|>=|<|>)\\s*)(\\d+)\\.0\\b");
 	private static final Pattern INT_LITERAL = Pattern.compile("(?<![\\w.])(\\d+)(?![\\w.])");
 	private static final Pattern LENGTH_CALL = Pattern.compile("(\\w+(?:\\[[^\\]]*\\])?\\.length\\(\\))");
 
+	/** Integer comparisons against a % result keep integer literals ({@code i % 10 == 0}). */
 	static String restoreModCompare(final String s) {
 		return MOD_COMPARE.matcher(s).replaceAll("$1$2");
 	}
 
+	/** Legacy helper retained for compatibility: uintify literals and .length(). */
 	static String uintify(final String s) {
 		String r = INT_LITERAL.matcher(s).replaceAll("$1u");
 		return LENGTH_CALL.matcher(r).replaceAll("uint($1)");
 	}
 
+	/**
+	 * Token-aware uint conversion: converts conflicting int literals, signed scalar int variables,
+	 * and {@code .length()} to uint while NEVER touching l-values, declaration names, {@code int}
+	 * initializers, or parameters of built-ins that strictly require signed {@code int} (such as
+	 * {@code texelFetch} coords/LOD, {@code textureSize} LOD, {@code bitfieldExtract} offset/bits).
+	 */
+	static String uintifyLine(final String line, final Map<String, DeclInfo> decls, final Map<String, List<String>> functions) {
+		String work = LENGTH_CALL.matcher(line).replaceAll("uint($1)");
+		List<String> tokens = GlslPreprocessor.tokenize(work);
+		List<Frame> stack = new ArrayList<>();
+		StringBuilder out = new StringBuilder(work.length() + 16);
+		String prevSig = "";
+		boolean signedIntDecl = false;
+		int signedDeclDepth = -1;
+
+		for (int i = 0; i < tokens.size(); i++) {
+			String t = tokens.get(i);
+			Frame top = stack.isEmpty() ? null : stack.get(stack.size() - 1);
+			boolean strictSigned = top != null && frameIsStrictSigned(top, functions);
+
+			if (t.equals("(")) {
+				boolean call = !prevSig.isEmpty() && GlslPreprocessor.isIdentStart(prevSig.charAt(0));
+				stack.add(new Frame(call ? prevSig : "", strictSigned));
+				out.append(t);
+				prevSig = t;
+				continue;
+			}
+			if (t.equals("[")) {
+				stack.add(new Frame("[", strictSigned));
+				out.append(t);
+				prevSig = t;
+				continue;
+			}
+			if (t.equals(")") || t.equals("]")) {
+				if (!stack.isEmpty()) {
+					stack.remove(stack.size() - 1);
+				}
+				out.append(t);
+				prevSig = t;
+				continue;
+			}
+			if (t.equals(",") && top != null) {
+				top.arg++;
+			}
+			if ((t.equals(";") || t.equals(",")) && stack.size() <= signedDeclDepth) {
+				signedIntDecl = false;
+			}
+			if (t.trim().isEmpty()) {
+				out.append(t);
+				continue;
+			}
+			char c = t.charAt(0);
+			boolean skipForDecl = signedIntDecl && stack.size() <= signedDeclDepth;
+			if (GlslPreprocessor.isIdentStart(c)) {
+				if ((t.equals("int") || t.startsWith("ivec")) && !nextSignificant(tokens, i + 1).equals("(")) {
+					signedIntDecl = true;
+					signedDeclDepth = stack.size();
+					out.append(t);
+					prevSig = t;
+					continue;
+				}
+				DeclInfo di = decls.get(t);
+				if (di != null && !di.isUint && di.comps == 1 && !di.isArray
+					&& !strictSigned && !skipForDecl
+					&& !isLvalue(tokens, i) && !nextSignificant(tokens, i + 1).equals("(")
+					&& !prevSig.equals(".") && !isTypeKeyword(prevSig)
+					&& !(top != null && top.callee.equals("uint") && prevSig.equals("(") && nextSignificant(tokens, i + 1).equals(")"))) {
+					out.append("uint(").append(t).append(')');
+					prevSig = ")";
+					continue;
+				}
+				out.append(t);
+				prevSig = t;
+				continue;
+			}
+			if (Character.isDigit(c) && isIntLiteral(t) && !strictSigned && !skipForDecl
+				&& !prevSig.equals(".") && !prevSig.equals("case")
+				&& !(top != null && top.callee.equals("["))) {
+				out.append(t).append('u');
+				prevSig = t;
+				continue;
+			}
+			out.append(t);
+			prevSig = t;
+		}
+		return out.toString();
+	}
+
+	private static boolean isTypeKeyword(final String t) {
+		return t.equals("int") || t.equals("uint") || t.equals("float") || t.equals("bool")
+			|| t.startsWith("vec") || t.startsWith("ivec") || t.startsWith("uvec") || t.startsWith("bvec");
+	}
+
+	private static boolean frameIsStrictSigned(final Frame f, final Map<String, List<String>> functions) {
+		if (f.callee.equals("[")) {
+			return true;
+		}
+		if (f.callee.isEmpty()) {
+			return f.parentInt;
+		}
+		Integer mask = STRICT_SIGNED_INT_MASKS.get(f.callee);
+		if (mask != null) {
+			return f.arg < 31 && ((mask >>> f.arg) & 1) != 0;
+		}
+		List<String> params = functions.get(f.callee);
+		if (params != null && f.arg < params.size()) {
+			String p = params.get(f.arg);
+			return p.equals("int") || p.startsWith("ivec");
+		}
+		return false;
+	}
+
+	/** Any frame above the declaration's depth is a float-only call (or a cast). */
 	private static boolean floatOnlyAbove(final List<Frame> stack, final int depth) {
 		for (int k = Math.max(0, depth); k < stack.size(); k++) {
 			if (FLOAT_ONLY_CALLS.contains(stack.get(k).callee)) {
@@ -251,17 +514,53 @@ public final class GlslFixer {
 		return false;
 	}
 
+	private static final Pattern CONTROL_HEADER = Pattern.compile("^(?:if|for|while)\\s*\\(.*\\)$");
+
+	/** True when a line ends a statement or is a complete control-flow header (e.g. braceless `if (c)`). */
 	private static boolean endsStatement(final String line) {
 		String t = line.trim();
-		return t.isEmpty() || t.endsWith(";") || t.endsWith("{") || t.endsWith("}");
+		if (t.isEmpty() || t.endsWith(";") || t.endsWith("{") || t.endsWith("}") || t.endsWith(":") || t.equals("else")) {
+			return true;
+		}
+		if (t.endsWith(")") && CONTROL_HEADER.matcher(t).matches() && hasBalancedParens(t)) {
+			return true;
+		}
+		return false;
+	}
+
+	private static boolean hasBalancedParens(final String s) {
+		int bal = 0;
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == '(') {
+				bal++;
+			} else if (c == ')') {
+				if (--bal < 0) {
+					return false;
+				}
+			}
+		}
+		return bal == 0;
 	}
 
 	private static final Pattern INT_TO_FLOAT_ASSIGN = Pattern.compile(
-		"cannot convert from '(?:\\w+ )*(?:(\\d)-component vector of int|int)' to '(?:\\w+ )*(?:(\\d)-component vector of float|float)'");
+		"cannot convert from '(?:\\w+ )*(?:(\\d)-component vector of u?int|u?int)' to '(?:\\w+ )*(?:(\\d)-component vector of float|float)'");
+	private static final Pattern INT_DECL_START = Pattern.compile(
+		"^(?:(?:const|highp|mediump|lowp)\\s+)*(?:int|uint|ivec[234]|uvec[234])\\b");
+	private static final Pattern RETURN_STMT = Pattern.compile("\\breturn\\s+([^;]+);");
 
+	/**
+	 * {@code vec2 size = textureSize(tex, 0);} and {@code return intExpr;}: the message names the
+	 * types, so wrap the right-hand side or returned expression in {@code vecN()}/{@code float()}.
+	 * Guards against {@code for (int i = 0; ...)} and integer declarations.
+	 */
 	static String wrapIntResult(final String statement, final String msg) {
 		Matcher m = INT_TO_FLOAT_ASSIGN.matcher(msg);
 		if (!m.find()) {
+			return statement;
+		}
+		String trimmed = statement.trim();
+		if (trimmed.startsWith("for ") || trimmed.startsWith("for(") || INT_DECL_START.matcher(trimmed).find()) {
 			return statement;
 		}
 		String n = m.group(2) != null ? m.group(2) : m.group(1);
@@ -284,20 +583,26 @@ public final class GlslFixer {
 			}
 		}
 		int end = eq < 0 ? -1 : statement.indexOf(';', eq);
-		if (eq < 0 || end < eq) {
-			return statement;
+		if (eq >= 0 && end > eq) {
+			return statement.substring(0, eq + 1) + " " + wrapper + "(" + statement.substring(eq + 1, end).trim() + ")" + statement.substring(end);
 		}
-		return statement.substring(0, eq + 1) + " " + wrapper + "(" + statement.substring(eq + 1, end).trim() + ")" + statement.substring(end);
+		// Support `return intExpr;`
+		Matcher rm = RETURN_STMT.matcher(statement);
+		if (rm.find()) {
+			return statement.substring(0, rm.start(1)) + wrapper + "(" + rm.group(1).trim() + ")" + statement.substring(rm.end(1));
+		}
+		return statement;
 	}
 
 	private static final Pattern LITERAL_GROUP_BEFORE_BIT = Pattern.compile("\\(([0-9.\\s+\\-*]+)\\)(\\s*(?:&|\\||\\^|<<|>>|%))");
 	private static final Pattern BIT_AFTER_GROUP = Pattern.compile("\\(\\s*(\\d+)\\.0\\s*\\)(\\s*(?:&|\\||\\^|<<|>>|%))");
 	private static final Pattern MOD_IN_ARITHMETIC = Pattern.compile("([(=,+\\-*/]\\s*)([A-Za-z_]\\w*)(\\s*%\\s*\\d+)(?=\\s*[-+*/)])");
-	private static final Pattern FLOAT_OF_COMPARISON =Pattern.compile("\\bfloat\\(\\(([^()]*(?:<|>|==|!=)[^()]*)\\)\\)");
-	private static final Pattern FLOAT_NAME_BIT =Pattern.compile(
+	private static final Pattern FLOAT_OF_COMPARISON = Pattern.compile("\\bfloat\\(\\(([^()]*(?:<|>|==|!=)[^()]*)\\)\\)");
+	private static final Pattern FLOAT_NAME_BIT = Pattern.compile(
 		"(?:\\(float\\((\\w+)\\)\\)|\\bfloat\\((\\w+)\\))(\\s*(?:&(?!&)|\\|(?!\\|)|\\^|<<|>>|%)\\s*)(?:float\\((\\w+)\\)|(\\d+(?:\\.0)?|[A-Za-z_]\\w*)\\b(?!\\s*\\())");
-	private static final Pattern BIT_BEFORE_GROUP =Pattern.compile("((?:&|\\||\\^|<<|>>|%)\\s*)\\(\\s*(\\d+)\\.0\\s*\\)");
+	private static final Pattern BIT_BEFORE_GROUP = Pattern.compile("((?:&|\\||\\^|<<|>>|%)\\s*)\\(\\s*(\\d+)\\.0\\s*\\)");
 
+	/** Undo literal conversions that ended up as operands of bit operators, e.g. {@code (0.0) & 1}. */
 	static String restoreBitOperands(String s) {
 		Matcher b = FLOAT_NAME_BIT.matcher(s);
 		StringBuilder bb = new StringBuilder();
@@ -325,47 +630,145 @@ public final class GlslFixer {
 	private static boolean isConversionError(final String msg) {
 		return msg.contains("wrong operand types") || msg.contains("no matching overloaded function")
 			|| msg.contains("cannot convert") || msg.contains("not matching type") || msg.contains("type mismatch")
-			|| msg.contains("Expression types") || msg.contains("arguments") && msg.contains("constructor")
+			|| msg.contains("Expression types") || (msg.contains("arguments") && msg.contains("constructor"))
 			|| msg.contains("ternary") || msg.contains("dimension mismatch") || msg.contains("Mismatched")
 			|| msg.contains("mismatch");
 	}
 
 	private static final Pattern ANY_DECL = Pattern.compile(
-		"\\b(int|uint|ivec[234]|uvec[234]|float|vec[234]|mat[234]|bool|bvec[234])\\s+(\\w+)\\s*([^;(){}]*)");
+		"\\b(int|uint|ivec[234]|uvec[234]|float|vec[234]|mat[234]|bool|bvec[234])\\s*(\\[[^\\]]*\\]\\s*)?(\\w+)\\s*([^;(){}]*)");
 
+	/**
+	 * Every declaration as {@code {offset, comps (0 = not integer), scopeEnd, isUint (0/1), isArray (0/1)}}
+	 * plus its name, tracking brace scopes so local variables never leak across functions or blocks.
+	 */
 	static void declarations(final String source, final List<int[]> pos, final List<String> names) {
+		// Precompute enclosing brace scope end for every character offset in O(n)
+		int n = source.length();
+		int[] matchingClose = new int[n];
+		Arrays.fill(matchingClose, -1);
+		int[] braceStack = new int[Math.max(16, n / 16)];
+		int sp = 0;
+		for (int i = 0; i < n; i++) {
+			char c = source.charAt(i);
+			if (c == '{') {
+				if (sp == braceStack.length) {
+					braceStack = Arrays.copyOf(braceStack, braceStack.length * 2);
+				}
+				braceStack[sp++] = i;
+			} else if (c == '}' && sp > 0) {
+				int open = braceStack[--sp];
+				matchingClose[open] = i;
+			}
+		}
+
 		Matcher m = ANY_DECL.matcher(source);
-		for (int from = 0; m.find(from); from = m.end(2)) {
+		for (int from = 0; m.find(from); from = m.end(3)) {
 			String type = m.group(1);
-			boolean integer = type.startsWith("i") || type.startsWith("u");
-			int comps = !integer ? 0 : type.endsWith("2") ? 2 : type.endsWith("3") ? 3 : type.endsWith("4") ? 4 : 1;
-			if (KEYWORDS.contains(m.group(2))) {
+			boolean typeHasArray = m.group(2) != null;
+			String firstName = m.group(3);
+			if (KEYWORDS.contains(firstName)) {
 				continue;
 			}
-			pos.add(new int[] {m.start(), comps});
-			names.add(m.group(2));
-			for (String part : GlslTranslator.splitTopLevel(m.group(3), ',')) {
-				String p = part.trim();
+			boolean isUint = type.startsWith("u");
+			boolean integer = type.startsWith("i") || isUint;
+			int comps = !integer ? 0 : type.endsWith("2") ? 2 : type.endsWith("3") ? 3 : type.endsWith("4") ? 4 : 1;
+			int scopeEnd = findScopeEnd(source, m.start(), matchingClose);
+			String tail = m.group(4);
+			List<String> tailParts = GlslTranslator.splitTopLevel(tail, ',');
+			boolean firstIsArray = typeHasArray || (!tailParts.isEmpty() && tailParts.get(0).trim().startsWith("["));
+			pos.add(new int[] {m.start(), comps, scopeEnd, isUint ? 1 : 0, firstIsArray ? 1 : 0});
+			names.add(firstName);
+			for (int pi = 1; pi < tailParts.size(); pi++) {
+				String p = tailParts.get(pi).trim();
 				int end = GlslPreprocessor.identEnd(p, 0);
-				if (end > 0 && !KEYWORDS.contains(p.substring(0, end))) {
-					pos.add(new int[] {m.start(), comps});
-					names.add(p.substring(0, end));
+				if (end > 0) {
+					String extraName = p.substring(0, end);
+					if (!KEYWORDS.contains(extraName)) {
+						boolean extraArr = typeHasArray || p.substring(end).trim().startsWith("[");
+						pos.add(new int[] {m.start(), comps, scopeEnd, isUint ? 1 : 0, extraArr ? 1 : 0});
+						names.add(extraName);
+					}
 				}
 			}
 		}
 	}
 
-	static Map<String, Integer> intNamesAt(final List<int[]> pos, final List<String> names, final int offset) {
-		Map<String, Integer> latest = new HashMap<>();
-		for (int i = 0; i < pos.size(); i++) {
-			if (pos.get(i)[0] < offset) {
-				latest.put(names.get(i), pos.get(i)[1]);
+	/** Finds the end offset of the enclosing brace/paren-header scope for a declaration at {@code offset}. */
+	private static int findScopeEnd(final String source, final int offset, final int[] matchingClose) {
+		int n = source.length();
+		// Check if inside a function parameter list `(...) {` or `for (...) {`
+		int parenDepth = 0;
+		for (int i = offset - 1; i >= 0; i--) {
+			char c = source.charAt(i);
+			if (c == ')') {
+				parenDepth++;
+			} else if (c == '(') {
+				if (parenDepth == 0) {
+					int closeParen = GlslTranslator.matchParen(source, i);
+					if (closeParen > offset) {
+						int k = closeParen + 1;
+						while (k < n && Character.isWhitespace(source.charAt(k))) {
+							k++;
+						}
+						if (k < n && source.charAt(k) == '{' && matchingClose[k] > k) {
+							return matchingClose[k];
+						}
+						// Braceless `for (int i = 0; ...)` -> ends at the next `;` after `)`
+						int semi = source.indexOf(';', closeParen + 1);
+						if (semi > closeParen) {
+							return semi;
+						}
+					}
+					break;
+				}
+				parenDepth--;
+			} else if (c == ';' || c == '{' || c == '}') {
+				break;
 			}
 		}
-		latest.values().removeIf(v -> v == 0);
+		// Otherwise find the innermost enclosing `{ ... }` block
+		int depth = 0;
+		for (int i = offset - 1; i >= 0; i--) {
+			char c = source.charAt(i);
+			if (c == '}') {
+				depth++;
+			} else if (c == '{') {
+				if (depth == 0) {
+					return matchingClose[i] > i ? matchingClose[i] : Integer.MAX_VALUE;
+				}
+				depth--;
+			}
+		}
+		return Integer.MAX_VALUE; // file / global scope
+	}
+
+	/** Scoped integer declarations visible at {@code offset} (with component count, uint flag, array flag). */
+	private static Map<String, DeclInfo> declsAt(final List<int[]> pos, final List<String> names, final int offset) {
+		Map<String, DeclInfo> latest = new HashMap<>();
+		for (int i = 0; i < pos.size(); i++) {
+			int[] p = pos.get(i);
+			if (p[0] < offset && offset <= p[2]) {
+				if (p[1] == 0) {
+					latest.remove(names.get(i));
+				} else {
+					latest.put(names.get(i), new DeclInfo(p[1], p[3] != 0, p[4] != 0));
+				}
+			}
+		}
 		return latest;
 	}
 
+	/** Integer-typed names as of a source offset: nearest in-scope preceding declaration wins. */
+	static Map<String, Integer> intNamesAt(final List<int[]> pos, final List<String> names, final int offset) {
+		Map<String, Integer> out = new HashMap<>();
+		for (Map.Entry<String, DeclInfo> e : declsAt(pos, names, offset).entrySet()) {
+			out.put(e.getKey(), e.getValue().comps);
+		}
+		return out;
+	}
+
+	/** Names whose every declaration in the source has an integer type, with their component count. */
 	static Map<String, Integer> intTypedNames(final String source) {
 		Map<String, Integer> ints = new HashMap<>();
 		Set<String> other = new HashSet<>();
@@ -393,7 +796,7 @@ public final class GlslFixer {
 		return ints;
 	}
 
-	private static final Set<String> KEYWORDS = new HashSet<>(java.util.Arrays.asList(
+	private static final Set<String> KEYWORDS = new HashSet<>(Arrays.asList(
 		"float", "int", "uint", "bool", "void", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2", "uvec3", "uvec4",
 		"bvec2", "bvec3", "bvec4", "mat2", "mat3", "mat4", "in", "out", "inout", "const", "uniform", "flat", "smooth",
 		"highp", "mediump", "lowp", "return", "if", "else", "for", "while", "do", "break", "continue", "discard", "struct",
@@ -414,8 +817,17 @@ public final class GlslFixer {
 		return floatifyLine(line, intNames, new HashMap<>());
 	}
 
+	static String floatifyLine(final String line, final Map<String, Integer> intNames, final Map<String, List<String>> functions) {
+		Map<String, DeclInfo> wrapped = new HashMap<>();
+		for (Map.Entry<String, Integer> e : intNames.entrySet()) {
+			wrapped.put(e.getKey(), new DeclInfo(e.getValue(), false, false));
+		}
+		return floatifyLine(line, wrapped, functions, new HashSet<>());
+	}
+
+	/** One open bracket on the line: a call (with the callee and argument index), a group or a subscript. */
 	private static final class Frame {
-		final String callee;
+		final String callee; // "" for a grouping parenthesis, "[" for a subscript
 		final boolean parentInt;
 		int arg;
 
@@ -436,8 +848,9 @@ public final class GlslFixer {
 		if (f.callee.isEmpty()) {
 			return f.parentInt;
 		}
-		if (INT_CONTEXT_CALLS.contains(f.callee)) {
-			return f.arg > 0;
+		Integer mask = INT_PARAM_MASKS.get(f.callee);
+		if (mask != null) {
+			return f.arg < 31 && ((mask >>> f.arg) & 1) != 0;
 		}
 		List<String> params = functions.get(f.callee);
 		if (params != null) {
@@ -446,7 +859,14 @@ public final class GlslFixer {
 		return false;
 	}
 
-	static String floatifyLine(final String line, final Map<String, Integer> intNames, final Map<String, List<String>> functions) {
+	/**
+	 * Converts integer literals to float literals and wraps integer-typed identifiers, outside
+	 * integer contexts (subscripts, per-function integer arguments, bit operations, int declaration
+	 * initializers). Preserves vector component counts for 3D/2DArray {@code textureSize} and for
+	 * subscripted integer vector arrays ({@code ivec2 arr[4]; arr[k]} -> {@code vec2}).
+	 */
+	private static String floatifyLine(final String line, final Map<String, DeclInfo> decls,
+		final Map<String, List<String>> functions, final Set<String> samplers3D) {
 		List<String> tokens = GlslPreprocessor.tokenize(line);
 		List<Frame> stack = new ArrayList<>();
 		Map<Integer, String> closeAfter = new HashMap<>();
@@ -466,7 +886,7 @@ public final class GlslFixer {
 			if (t.equals("(") && !intContext && !(intDeclaration && stack.size() == intDeclDepth)
 				&& (prevSignificant.isEmpty() || !GlslPreprocessor.isIdentStart(prevSignificant.charAt(0)))) {
 				int close = closing(tokens, i, "(", ")");
-				if (close > i && integerGroup(tokens, i + 1, close, intNames)
+				if (close > i && integerGroup(tokens, i + 1, close, decls)
 					&& !isBitOp(operatorBefore(tokens, i)) && !isBitOp(operatorAfter(tokens, close))) {
 					out.append("float(");
 					for (int k = i; k <= close; k++) {
@@ -524,8 +944,17 @@ public final class GlslFixer {
 					int close = closing(tokens, open, "(", ")");
 					if (close > open) {
 						int end = close;
-						int comps = t.equals("textureSize") ? 2 : t.equals("int") || t.equals("uint") ? 1 : t.charAt(t.length() - 1) - '0';
-						if (end + 2 < tokens.size() && tokens.get(end + 1).equals(".") && GlslPreprocessor.isIdentStart(tokens.get(end + 2).charAt(0))) {
+						int comps;
+						if (t.equals("textureSize")) {
+							String firstArg = nextSignificant(tokens, open + 1);
+							comps = samplers3D.contains(firstArg) ? 3 : 2;
+						} else if (t.equals("int") || t.equals("uint")) {
+							comps = 1;
+						} else {
+							comps = t.charAt(t.length() - 1) - '0';
+						}
+						if (end + 2 < tokens.size() && tokens.get(end + 1).equals(".")
+							&& GlslPreprocessor.isIdentStart(tokens.get(end + 2).charAt(0))) {
 							comps = tokens.get(end + 2).length();
 							end += 2;
 						}
@@ -539,13 +968,14 @@ public final class GlslFixer {
 					intDeclaration = true;
 					intDeclDepth = stack.size();
 				}
-				Integer comps = intNames.get(t);
-				if (comps != null && !intContext && !topLevelIntDecl && !isLvalue(tokens, i) && !nextSignificant(tokens, i + 1).equals("(")
+				DeclInfo di = decls.get(t);
+				if (di != null && !intContext && !topLevelIntDecl && !isLvalue(tokens, i) && !nextSignificant(tokens, i + 1).equals("(")
 					&& !prevSignificant.equals(".")
 					&& !bitwiseNeighbour(prevSignificant, tokens, i)) {
 					int end = i + 1;
 					StringBuilder expr = new StringBuilder(t);
-					int resultComps = comps;
+					int resultComps = di.comps;
+					boolean arrayRemaining = di.isArray;
 					while (end < tokens.size()) {
 						String nx = tokens.get(end);
 						if (nx.equals(".") && end + 1 < tokens.size() && GlslPreprocessor.isIdentStart(tokens.get(end + 1).charAt(0))) {
@@ -560,7 +990,13 @@ public final class GlslFixer {
 							for (int k = end; k <= close; k++) {
 								expr.append(tokens.get(k));
 							}
-							resultComps = 1;
+							// First subscript on an array indexes the array (preserves element vector width);
+							// subscript on a vector indexes a scalar component.
+							if (arrayRemaining) {
+								arrayRemaining = false;
+							} else {
+								resultComps = 1;
+							}
 							end = close + 1;
 						} else {
 							break;
@@ -598,17 +1034,25 @@ public final class GlslFixer {
 		return out.toString();
 	}
 
-	private static boolean integerGroup(final List<String> tokens, final int from, final int to, final Map<String, Integer> intNames) {
+	/**
+	 * Tokens [from, to) hold only scalar int names, int literals and integer operators (including
+	 * shift {@code <<}/{@code >>}, but NEVER relational {@code <}/{@code >}), with at least one name.
+	 */
+	private static boolean integerGroup(final List<String> tokens, final int from, final int to, final Map<String, DeclInfo> decls) {
 		boolean name = false;
 		for (int k = from; k < to; k++) {
 			String t = tokens.get(k);
-			if (t.trim().isEmpty() || "+-*/%&|^~<>()".contains(t)) {
+			if (t.trim().isEmpty() || "+-*/%&|^~()".contains(t)) {
+				continue;
+			}
+			if ((t.equals("<") || t.equals(">")) && k + 1 < to && tokens.get(k + 1).equals(t)) {
+				k++; // allow << and >> shifts, reject standalone < / > comparisons
 				continue;
 			}
 			char c = t.charAt(0);
 			if (GlslPreprocessor.isIdentStart(c)) {
-				Integer comps = intNames.get(t);
-				if (comps == null || comps != 1) {
+				DeclInfo di = decls.get(t);
+				if (di == null || di.comps != 1 || di.isArray) {
 					return false;
 				}
 				name = true;
@@ -624,6 +1068,10 @@ public final class GlslFixer {
 
 	private static final Pattern NO_OVERLOAD = Pattern.compile("'(\\w+)' : no matching overloaded function");
 
+	/**
+	 * In the first call to {@code name} in {@code text}: int literal arguments for uint parameters
+	 * get a {@code u}, for float parameters a {@code .0}. Null if nothing changed.
+	 */
 	static String literalArguments(final String text, final String name, final List<String> params) {
 		Matcher m = Pattern.compile("\\b" + name + "\\s*\\(").matcher(text);
 		if (!m.find()) {
@@ -782,7 +1230,8 @@ public final class GlslFixer {
 		if (next.equals("=") && !next2.equals("=")) {
 			return true;
 		}
-		if ((next.equals("+") || next.equals("-") || next.equals("*") || next.equals("/")) && next2.equals("=")) {
+		if ((next.equals("+") || next.equals("-") || next.equals("*") || next.equals("/")
+			|| next.equals("%") || next.equals("&") || next.equals("|") || next.equals("^")) && next2.equals("=")) {
 			return true;
 		}
 		if ((next.equals("+") && next2.equals("+")) || (next.equals("-") && next2.equals("-"))) {
@@ -828,6 +1277,7 @@ public final class GlslFixer {
 		return -1;
 	}
 
+	/** {@code a[x]} with a float x: wrap subscripts in int(). */
 	private static String intIndex(final String line) {
 		StringBuilder out = new StringBuilder();
 		int i = 0;

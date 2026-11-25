@@ -6,7 +6,13 @@ public final class GlApi {
 	private GlApi() {}
 
 	public static boolean ready() { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void resetStateCaches() { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static boolean hasColorBufferFloat() { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static boolean hasFloatBlend() { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static boolean hasFloatLinear() { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static boolean hasParallelCompile() { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static boolean glProgramDone(int program) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static boolean captureMode = false;
 	public static boolean zeroCopyUploads = false;
 	public static boolean legacyChurn = false;
 	public static int[] churnCounters() { throw new UnsupportedOperationException("browser GlApi only"); }
@@ -32,6 +38,7 @@ public final class GlApi {
 	public static void glClearBufferuiv(int buffer, int drawbuffer, int[] value) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glDepthFunc(int func) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glDepthMask(boolean flag) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glColorMask(boolean r, boolean g, boolean b, boolean a) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glColorMaski(int index, boolean r, boolean g, boolean b, boolean a) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glEnablei(int cap, int index) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glDisablei(int cap, int index) { throw new UnsupportedOperationException("browser GlApi only"); }
@@ -131,6 +138,8 @@ public final class GlApi {
 	public static String glGetProgramInfoLog(int program, int maxLength) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glBindAttribLocation(int program, int index, CharSequence name) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static int glGetAttribLocation(int program, CharSequence name) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glShaderSourceRaw(int shader, String source) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static java.util.List<Object[]> activeUniforms(int program) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static String glGetActiveUniform(int program, int index, int maxLength, java.nio.IntBuffer size, java.nio.IntBuffer type) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static int glGetUniformLocation(int program, CharSequence name) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glUniform1f(int location, float v0) { throw new UnsupportedOperationException("browser GlApi only"); }
@@ -145,6 +154,10 @@ public final class GlApi {
 	public static void glUniformMatrix4fv(int location, boolean transpose, java.nio.FloatBuffer value) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glUniformMatrix4fv(int location, boolean transpose, float[] value) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glUniform1i(int location, int v0) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glUniform1ui(int location, int v0) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glUniform2ui(int location, int v0, int v1) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glUniform3ui(int location, int v0, int v1, int v2) { throw new UnsupportedOperationException("browser GlApi only"); }
+	public static void glUniform4ui(int location, int v0, int v1, int v2, int v3) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static int glGetUniformBlockIndex(int program, CharSequence name) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static void glUniformBlockBinding(int program, int uniformBlockIndex, int uniformBlockBinding) { throw new UnsupportedOperationException("browser GlApi only"); }
 	public static String glGetActiveUniformBlockName(int program, int uniformBlockIndex) { throw new UnsupportedOperationException("browser GlApi only"); }
