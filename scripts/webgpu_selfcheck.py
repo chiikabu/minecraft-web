@@ -40,16 +40,22 @@ WEBGPU_JAVA_FILES = [
 ]
 
 
-def find_qjs() -> Path:
+def find_js_engine() -> tuple[str, Path]:
     env_qjs = os.environ.get("QJS")
     if env_qjs:
         p = Path(env_qjs)
         if p.exists():
-            return p
+            return ("qjs", p)
     which = shutil.which("qjs")
     if which:
-        return Path(which)
-    return Path("/root/brel/qjs")
+        return ("qjs", Path(which))
+    linux_qjs = Path("/root/brel/qjs")
+    if linux_qjs.exists():
+        return ("qjs", linux_qjs)
+    node = shutil.which("node")
+    if node:
+        return ("node", Path(node))
+    return ("qjs", linux_qjs)
 
 
 def unescape_java_string(raw: str) -> str:
@@ -365,15 +371,16 @@ def check_es5_and_html_safety(label: str, js: str) -> None:
 
 
 def run_qjs(script: str) -> str:
-    qjs = find_qjs()
-    assert qjs.exists(), f"QuickJS binary not found at {qjs}"
+    kind, engine = find_js_engine()
+    assert engine.exists(), f"JS engine (qjs or node) not found at {engine}"
+    body = ('var print = function () { process.stdout.write(Array.prototype.slice.call(arguments).join(" ") + "\\n"); };\n' + script) if kind == "node" else script
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
-        tf.write(script)
+        tf.write(body)
         tf_path = tf.name
     try:
-        res = subprocess.run([str(qjs), tf_path], capture_output=True, text=True, timeout=15)
+        res = subprocess.run([str(engine), tf_path], capture_output=True, text=True, timeout=15)
         if res.returncode != 0:
-            raise AssertionError(f"qjs exited {res.returncode}\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
+            raise AssertionError(f"{kind} exited {res.returncode}\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}")
         return res.stdout
     finally:
         try:
