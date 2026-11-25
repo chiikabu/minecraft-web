@@ -192,3 +192,264 @@ html, body {
 @media (orientation: portrait) and (max-width: 700px) {
 	#tc-touch.playing .tc-rotate { display: flex; }
 }
+
+/* ---- boot notice banner (Minecraft square beveled panel) ---- */
+
+#boot-notice {
+	position: absolute; left: 50%; top: calc(83.25% - var(--gu) * 5 - 40px);
+	transform: translateX(-50%);
+	max-width: calc(100vw - 32px);
+	padding: 6px 12px;
+	box-sizing: border-box;
+	background: #181818;
+	border: 2px solid #000000;
+	border-radius: 0;
+	box-shadow: inset 2px 2px 0 #5a5a5a, inset -2px -2px 0 #111111;
+	color: var(--mc-yellow);
+	font-size: 13px;
+	line-height: 1.35;
+	text-align: center;
+	text-shadow: 2px 2px 0 #000000;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+#boot-notice[hidden] { display: none; }
+
+/* ---- drag-and-drop visual overlay (Minecraft 0px square beveled panel style) ---- */
+
+#eagler-drop-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 1950;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	box-sizing: border-box;
+	background: rgba(0, 0, 0, 0.58);
+	pointer-events: none;
+	opacity: 0;
+	visibility: hidden;
+	transition: opacity .12s ease, visibility .12s ease;
+}
+#eagler-drop-overlay.visible {
+	opacity: 1;
+	visibility: visible;
+}
+#eagler-drop-overlay .eagler-drop-card {
+	box-sizing: border-box;
+	width: min(560px, 100%);
+	padding: 26px 24px;
+	text-align: center;
+	background: #212121;
+	border: 2px solid #000000;
+	border-radius: 0;
+	outline: 2px dashed #55ff55;
+	outline-offset: -10px;
+	box-shadow: inset 2px 2px 0 #5a5a5a, inset -2px -2px 0 #111111, 0 6px 0 rgba(0, 0, 0, 0.45);
+}
+#eagler-drop-overlay .eagler-drop-title {
+	color: #ffff55;
+	font-size: 16px;
+	line-height: 1.45;
+	text-shadow: 2px 2px 0 #000000;
+}
+#eagler-drop-overlay .eagler-drop-sub {
+	margin-top: 8px;
+	color: #ffffff;
+	font-size: 13px;
+	line-height: 1.35;
+	text-shadow: 1px 1px 0 #000000;
+}
+
+/* ---- mod build progress notification (Minecraft 0px square beveled toast/widget style) ---- */
+
+#eagler-mod-build-toast,
+#eagler-mod-build-pill {
+	position: fixed;
+	z-index: 1250;
+	top: max(10px, env(safe-area-inset-top));
+	right: max(10px, env(safe-area-inset-right));
+	bottom: auto;
+	box-sizing: border-box;
+	width: min(336px, calc(100vw - 20px));
+	padding: 9px 11px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	background: #212121;
+	color: #ffffff;
+	font-family: var(--mc-font);
+	font-size: 13px;
+	line-height: 1.35;
+	border: 2px solid #000000;
+	border-radius: 0;
+	box-shadow: inset 2px 2px 0 #5a5a5a, inset -2px -2px 0 #111111, 0 4px 0 rgba(0, 0, 0, 0.42);
+	text-shadow: 1px 1px 0 #000000;
+	pointer-events: none;
+	user-select: none;
+	-webkit-user-select: none;
+	image-rendering: pixelated;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) * {
+	border-radius: 0;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is([hidden], .hidden) {
+	display: none;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-building, .building, [data-state="building"]) {
+	background: #212121;
+	box-shadow: inset 2px 2px 0 #5a5a5a, inset -2px -2px 0 #111111, 0 4px 0 rgba(0, 0, 0, 0.42);
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-ready, .ready, [data-state="ready"]) {
+	background: #181818;
+	box-shadow: inset 2px 2px 0 #55ff55, inset -2px -2px 0 #111111, 0 4px 0 rgba(0, 0, 0, 0.42);
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-error, .error, .failed, [data-state="error"], [data-state="failed"]) {
+	background: #181818;
+	box-shadow: inset 2px 2px 0 #ff5555, inset -2px -2px 0 #111111, 0 4px 0 rgba(0, 0, 0, 0.42);
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-hdr, .mc-toast-header, .toast-header, .pill-header, .eagler-mod-build-header) {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-title, .mc-toast-title, .toast-title, .pill-title, .build-title, .eagler-mod-build-title) {
+	color: #ffff55;
+	font-size: 13px;
+	text-shadow: 2px 2px 0 #000000;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-ready, .ready, [data-state="ready"]) :is(.mc-title, .mc-toast-title, .toast-title, .pill-title, .build-title, .eagler-mod-build-title) {
+	color: #55ff55;
+	text-shadow: 2px 2px 0 #000000;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-error, .error, .failed, [data-state="error"], [data-state="failed"]) :is(.mc-title, .mc-toast-title, .toast-title, .pill-title, .build-title, .eagler-mod-build-title) {
+	color: #ff5555;
+	text-shadow: 2px 2px 0 #000000;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-offline, .offline, [data-state="offline"]) :is(.mc-title, .mc-toast-title, .toast-title, .pill-title, .build-title, .eagler-mod-build-title) {
+	color: #ffaa00;
+	text-shadow: 2px 2px 0 #000000;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-msg, .mc-toast-stage, .toast-stage, .toast-body, .pill-stage, .pill-status, .pill-text, .build-stage, .build-status, .eagler-mod-build-stage, .eagler-mod-build-status, .eagler-mod-build-text) {
+	color: #ffffff;
+	font-size: 12px;
+	word-break: break-word;
+	text-shadow: 1px 1px 0 #000000;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-track, .mc-progress-track, .toast-bar, .pill-bar, .pill-progress, .build-bar, .progress-bar, .eagler-mod-build-bar) {
+	box-sizing: border-box;
+	width: 100%;
+	height: 10px;
+	background: #111111;
+	border: 1px solid #555555;
+	border-radius: 0;
+	padding: 1px;
+	overflow: hidden;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-fill, .mc-progress-fill, .toast-fill, .pill-fill, .pill-progress-fill, .build-fill, .progress-fill, .eagler-mod-build-fill) {
+	height: 100%;
+	width: 0%;
+	background: #55ff55;
+	border-radius: 0;
+	box-shadow: inset 0 2px 0 #a8ff80, inset 0 -2px 0 #2e8b2e;
+	transition: width .2s linear;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-ready, .ready, [data-state="ready"]) :is(.mc-fill, .mc-progress-fill, .toast-fill, .pill-fill, .pill-progress-fill, .build-fill, .progress-fill, .eagler-mod-build-fill) {
+	background: #80ff20;
+	box-shadow: inset 0 2px 0 #a8ff80, inset 0 -2px 0 #2e8b2e;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill):is(.mc-error, .error, .failed, [data-state="error"], [data-state="failed"]) :is(.mc-fill, .mc-progress-fill, .toast-fill, .pill-fill, .pill-progress-fill, .build-fill, .progress-fill, .eagler-mod-build-fill) {
+	background: #ff5555;
+	box-shadow: inset 0 2px 0 #ff9999, inset 0 -2px 0 #aa2222;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) progress {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 100%;
+	height: 10px;
+	background: #111111;
+	border: 1px solid #555555;
+	border-radius: 0;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) progress::-webkit-progress-bar {
+	background: #111111;
+	border-radius: 0;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) progress::-webkit-progress-value {
+	background: #55ff55;
+	border-radius: 0;
+	box-shadow: inset 0 2px 0 #a8ff80, inset 0 -2px 0 #2e8b2e;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) progress::-moz-progress-bar {
+	background: #55ff55;
+	border-radius: 0;
+	box-shadow: inset 0 2px 0 #a8ff80, inset 0 -2px 0 #2e8b2e;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-actions, .mc-toast-actions, .toast-actions, .pill-actions, .build-actions, .eagler-mod-build-actions) {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	margin-top: 2px;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(button, .mc-btn) {
+	pointer-events: auto;
+	font: 12px/1 var(--mc-font);
+	color: #ffffff;
+	text-shadow: 2px 2px 0 #3f3f3f;
+	background: #6f6f6f;
+	border: 2px solid #000000;
+	border-radius: 0;
+	box-shadow: inset 2px 2px 0 #a9a9a9, inset -2px -3px 0 #4a4a4a;
+	padding: 5px 10px 6px;
+	cursor: pointer;
+	touch-action: manipulation;
+	white-space: nowrap;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(button, .mc-btn):hover,
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(button, .mc-btn):focus-visible {
+	background: #7e88bf;
+	color: #ffffa0;
+	border-color: #ffffff;
+	box-shadow: inset 2px 2px 0 #b8c2f0, inset -2px -3px 0 #4e5685;
+	outline: none;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(button, .mc-btn):active {
+	box-shadow: inset 2px 2px 0 #4a4a4a, inset -2px -2px 0 #a9a9a9;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(button, .mc-btn):disabled {
+	color: #a0a0a0;
+	text-shadow: none;
+	background: #4a4a4a;
+	border-color: #000000;
+	box-shadow: none;
+	cursor: default;
+}
+:is(#eagler-mod-build-toast, #eagler-mod-build-pill) .mc-close {
+	padding: 2px 6px 3px;
+	font-size: 11px;
+}
+
+/* ---- JVM mod HUD overlay canvas (pixel-aligned above #game_frame) ---- */
+
+#eagler-mod-hud-canvas {
+	position: fixed;
+	pointer-events: none;
+	z-index: 25;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	image-rendering: pixelated;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#eagler-drop-overlay,
+	#eagler-mod-build-toast, #eagler-mod-build-pill,
+	:is(#eagler-mod-build-toast, #eagler-mod-build-pill) :is(.mc-fill, .mc-progress-fill, .toast-fill, .pill-fill, .build-fill, .progress-fill, .eagler-mod-build-fill) {
+		transition: none;
+	}
+}

@@ -247,14 +247,33 @@ public final class Web263MeshOffload {
       }
    }
 
+   private static final long PUBLISH_BUDGET_NANOS = 3_500_000L;
+
+   private static boolean isThroughputMode() {
+      net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+      return mc == null
+         || mc.level == null
+         || mc.gui == null
+         || mc.gui.overlay() != null
+         || mc.gui.screen() instanceof net.minecraft.client.gui.screens.LevelLoadingScreen;
+   }
+
    public static void frame() {
       Bridge b = bridge;
       if (b == null) {
          return;
       }
 
+      boolean bounded = !isThroughputMode();
+      long deadline = bounded ? System.nanoTime() + PUBLISH_BUDGET_NANOS : Long.MAX_VALUE;
+      int published = 0;
+
       int length;
       while ((length = b.peek()) >= 0) {
+         if (bounded && published > 0 && System.nanoTime() >= deadline) {
+            break;
+         }
+
          if (length > resultCapacity || resultAddress == 0L) {
             resultCapacity = Math.max(length, Math.max(1 << 20, resultCapacity * 2));
             resultAddress = resultAddress == 0L ? MemoryUtil.nmemAlloc(resultCapacity) : MemoryUtil.nmemRealloc(resultAddress, resultCapacity);
@@ -296,7 +315,12 @@ public final class Web263MeshOffload {
             current = null;
          }
 
-         b.note(NOTE_PUBLISH_MICROS, (int)((System.nanoTime() - start) / 1000L), 0);
+         published++;
+         long end = System.nanoTime();
+         b.note(NOTE_PUBLISH_MICROS, (int)((end - start) / 1000L), 0);
+         if (bounded && end >= deadline) {
+            break;
+         }
       }
 
       if (!parked.isEmpty() && !saturated()) {
@@ -728,39 +752,103 @@ public final class Web263MeshOffload {
                   }
                }
 
-               int blockX = SectionPos.sectionToBlockCoord(minX + sx);
-               int blockY = SectionPos.sectionToBlockCoord(minY + sy);
-               int blockZ = SectionPos.sectionToBlockCoord(minZ + sz);
-
-               for (int ly = y0; ly <= y1; ly++) {
-                  for (int lz = z0; lz <= z1; lz++) {
-                     long at = lightAt + (((dy + ly - y0) * HALO + (dz + lz - z0)) * HALO + dx);
-                     int row = ly << 8 | lz << 4;
-                     int skyRow = flatSky ? lz << 4 : row;
-
-                     for (int lx = x0; lx <= x1; lx++) {
-                        int sky;
-                        if (skyGeneric) {
-                           sky = skyListener.getLightValue(pos.set(blockX + lx, blockY + ly, blockZ + lz));
-                        } else if (skyData != null) {
-                           int index = skyRow | lx;
-                           sky = skyData[index >> 1] >> 4 * (index & 1) & 15;
-                        } else {
-                           sky = skyConstant;
+               if (!skyGeneric && !blockGeneric) {
+                  if (skyData == null && blockData == null) {
+                     byte packed = (byte)(skyConstant << 4 | blockConstant);
+                     for (int ly = y0; ly <= y1; ly++) {
+                        int baseAt = (dy + ly - y0) * HALO;
+                        for (int lz = z0; lz <= z1; lz++) {
+                           long at = lightAt + ((baseAt + (dz + lz - z0)) * HALO + dx);
+                           for (int lx = x0; lx <= x1; lx++) {
+                              MemoryUtil.memPutByte(at++, packed);
+                           }
                         }
-
-                        int block;
-                        if (blockGeneric) {
-                           block = blockListener.getLightValue(pos.set(blockX + lx, blockY + ly, blockZ + lz));
-                        } else if (blockData != null) {
-                           int index = row | lx;
-                           block = blockData[index >> 1] >> 4 * (index & 1) & 15;
-                        } else {
-                           block = blockConstant;
+                     }
+                  } else if (skyData != null && blockData == null) {
+                     int blockConst = blockConstant;
+                     for (int ly = y0; ly <= y1; ly++) {
+                        int baseAt = (dy + ly - y0) * HALO;
+                        int yShift = flatSky ? 0 : ly << 8;
+                        for (int lz = z0; lz <= z1; lz++) {
+                           long at = lightAt + ((baseAt + (dz + lz - z0)) * HALO + dx);
+                           int skyRow = yShift | lz << 4;
+                           for (int lx = x0; lx <= x1; lx++) {
+                              int index = skyRow | lx;
+                              int sky = skyData[index >> 1] >> ((index & 1) << 2) & 15;
+                              MemoryUtil.memPutByte(at++, (byte)(sky << 4 | blockConst));
+                           }
                         }
+                     }
+                  } else if (skyData == null) {
+                     int skyShifted = skyConstant << 4;
+                     for (int ly = y0; ly <= y1; ly++) {
+                        int baseAt = (dy + ly - y0) * HALO;
+                        int yShift = ly << 8;
+                        for (int lz = z0; lz <= z1; lz++) {
+                           long at = lightAt + ((baseAt + (dz + lz - z0)) * HALO + dx);
+                           int row = yShift | lz << 4;
+                           for (int lx = x0; lx <= x1; lx++) {
+                              int index = row | lx;
+                              int block = blockData[index >> 1] >> ((index & 1) << 2) & 15;
+                              MemoryUtil.memPutByte(at++, (byte)(skyShifted | block));
+                           }
+                        }
+                     }
+                  } else {
+                     for (int ly = y0; ly <= y1; ly++) {
+                        int baseAt = (dy + ly - y0) * HALO;
+                        int yShift = ly << 8;
+                        int skyYShift = flatSky ? 0 : yShift;
+                        for (int lz = z0; lz <= z1; lz++) {
+                           long at = lightAt + ((baseAt + (dz + lz - z0)) * HALO + dx);
+                           int zShift = lz << 4;
+                           int row = yShift | zShift;
+                           int skyRow = skyYShift | zShift;
+                           for (int lx = x0; lx <= x1; lx++) {
+                              int sIdx = skyRow | lx;
+                              int sky = skyData[sIdx >> 1] >> ((sIdx & 1) << 2) & 15;
+                              int bIdx = row | lx;
+                              int block = blockData[bIdx >> 1] >> ((bIdx & 1) << 2) & 15;
+                              MemoryUtil.memPutByte(at++, (byte)(sky << 4 | block));
+                           }
+                        }
+                     }
+                  }
+               } else {
+                  int blockX = SectionPos.sectionToBlockCoord(minX + sx);
+                  int blockY = SectionPos.sectionToBlockCoord(minY + sy);
+                  int blockZ = SectionPos.sectionToBlockCoord(minZ + sz);
 
-                        MemoryUtil.memPutByte(at, (byte)(sky << 4 | block));
-                        at++;
+                  for (int ly = y0; ly <= y1; ly++) {
+                     for (int lz = z0; lz <= z1; lz++) {
+                        long at = lightAt + (((dy + ly - y0) * HALO + (dz + lz - z0)) * HALO + dx);
+                        int row = ly << 8 | lz << 4;
+                        int skyRow = flatSky ? lz << 4 : row;
+
+                        for (int lx = x0; lx <= x1; lx++) {
+                           int sky;
+                           if (skyGeneric) {
+                              sky = skyListener.getLightValue(pos.set(blockX + lx, blockY + ly, blockZ + lz));
+                           } else if (skyData != null) {
+                              int index = skyRow | lx;
+                              sky = skyData[index >> 1] >> 4 * (index & 1) & 15;
+                           } else {
+                              sky = skyConstant;
+                           }
+
+                           int block;
+                           if (blockGeneric) {
+                              block = blockListener.getLightValue(pos.set(blockX + lx, blockY + ly, blockZ + lz));
+                           } else if (blockData != null) {
+                              int index = row | lx;
+                              block = blockData[index >> 1] >> 4 * (index & 1) & 15;
+                           } else {
+                              block = blockConstant;
+                           }
+
+                           MemoryUtil.memPutByte(at, (byte)(sky << 4 | block));
+                           at++;
+                        }
                      }
                   }
                }
@@ -1049,7 +1137,10 @@ public final class Web263MeshOffload {
             skipRule = 3;
          } else if (block instanceof IronBarsBlock) {
             skipRule = 5;
-            need |= NEED_NEVER;
+            skipKey = (s.getValue(IronBarsBlock.NORTH) ? 1 : 0)
+               | (s.getValue(IronBarsBlock.SOUTH) ? 2 : 0)
+               | (s.getValue(IronBarsBlock.WEST) ? 4 : 0)
+               | (s.getValue(IronBarsBlock.EAST) ? 8 : 0);
          } else if (block instanceof MangroveRootsBlock) {
             skipRule = 4;
             skipKey = BuiltInRegistries.BLOCK.getId(Blocks.MANGROVE_ROOTS);

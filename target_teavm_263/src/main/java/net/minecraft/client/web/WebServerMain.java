@@ -70,6 +70,7 @@ public final class WebServerMain {
 		Bootstrap.bootStrap();
 		System.out.println("[26.3-server] registries bootstrapped in " + (System.currentTimeMillis() - t) + "ms");
 		WebPackResources.preload();
+		WebSimdKernels.install();
 
 		WebSaves.restore(WebServerMain::ready);
 	}

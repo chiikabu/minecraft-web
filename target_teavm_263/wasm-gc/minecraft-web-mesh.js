@@ -15,13 +15,18 @@
 	var capMask = -1;
 	var capsParam = param("meshcaps");
 	if (capsParam === "cube") { capMask = 0; } else if (capsParam) { capMask = parseInt(capsParam, 16) | 0; }
-	var defaultMeshWorkers = (typeof navigator !== "undefined" && (navigator.hardwareConcurrency || 4) >= 4) ? 2 : 1;
+	var cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
+	var mem = (typeof navigator !== "undefined" && navigator.deviceMemory) || 0;
+	var isCrOS = typeof navigator !== "undefined" && /\bCrOS\b/.test(navigator.userAgent || "");
+	var lowEnd = cores <= 4 || (mem > 0 && mem <= 4) || isCrOS;
+	var defaultMeshWorkers = lowEnd ? 1 : 2;
+	var defaultMaxInflight = lowEnd ? 6 : 10;
 	var workerCount = Math.max(1, Math.min(4, parseInt(param("meshworkers") || String(defaultMeshWorkers), 10) || defaultMeshWorkers));
-	var maxInflight = Math.max(1, parseInt(param("meshinflight") || "10", 10) || 10);
+	var maxInflight = Math.max(1, parseInt(param("meshinflight") || String(defaultMaxInflight), 10) || defaultMaxInflight);
 	var killAfter = parseInt(param("meshkillafter") || "0", 10) || 0;
 
 	var workers = [], results = [], jobs = new Map(), references = new Map(), names = new Map();
-	var kernelCaps = 0, kernelCapsHalo2 = 0, engineHalo = 20, ready = 0, dead = 0;
+	var kernelCaps = 0, kernelCapsHalo2 = 0, engineHalo = 20, ready = 0, dead = 0, kernelTags = false;
 	var stats = {
 		submitted: 0, jobsPosted: 0, completed: 0, fallback: 0, stale: 0, declined: 0, errors: 0, parkedPeak: 0, resets: 0,
 		snapshotMicros: 0, publishMicros: 0, kernelMicros: 0, roundTripMs: 0, resultBytes: 0, jobBytes: 0, defBytes: 0,
@@ -66,8 +71,8 @@
 			if (d instanceof ArrayBuffer) { onResult(slot, d); return; }
 			if (d && d.ready) {
 				slot.ready = true; ready++;
-				kernelCaps = d.caps | 0; kernelCapsHalo2 = d.capsHalo2 | 0;
-				console.log("[minecraft-web] mesh worker " + index + " ready, caps 0x" + (kernelCaps >>> 0).toString(16) + (verify ? " (verify mode)" : ""));
+				kernelCaps = d.caps | 0; kernelCapsHalo2 = d.capsHalo2 | 0; kernelTags = !!d.tags;
+				console.log("[minecraft-web] mesh worker " + index + " ready, caps 0x" + (kernelCaps >>> 0).toString(16) + (d.wasm ? " [wasm-simd]" : "") + (verify ? " (verify mode)" : ""));
 			} else if (d && d.names) {
 				for (var i = 0; i < d.names.length; i++) { names.set(d.names[i][0], d.names[i]); }
 			} else if (d && d.declined) {
@@ -170,6 +175,7 @@
 			if (engineHalo >= 20 && capMask !== 0) { caps |= kernelCapsHalo2 & CAP_AO; }
 			return caps | CAP_ACTIVE | (verify ? CAP_VERIFY : 0);
 		},
+		canTag: function () { return ready > 0 && kernelTags; },
 		capacity: function () {
 			if (verify) { return 1 << 20; }
 			var free = 0;

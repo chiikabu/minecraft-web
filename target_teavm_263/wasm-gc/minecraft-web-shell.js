@@ -6,22 +6,22 @@
 	var P = WebGL2RenderingContext.prototype, bind = P.bindBufferRange, data = P.bufferData;
 	if (!bind || bind.__std140) return;
 	var sizes = new WeakMap();
-	var BINDING = { 0x8892: 0x8894, 0x8893: 0x8895, 0x8A11: 0x8A28, 0x8F36: 0x8F36, 0x8F37: 0x8F37, 0x88EB: 0x88ED, 0x88EC: 0x88EF, 0x8C8E: 0x8C8F };
 	var fixed = function (target, index, buffer, offset, size) {
-		if (target === 0x8A11 && buffer && (size & 15)) {
+		if (!this.__engineStd140 && target === 0x8A11 && buffer && (size & 15)) {
 			var padded = (size + 15) & ~15;
-			var r = bind.call(this, target, index, buffer, offset, size);
 			var total = sizes.get(buffer);
-			if (total === undefined) {
-				total = this.getBufferParameter(0x8A11, 0x8764) || 0;
-				sizes.set(buffer, total);
+			if (total !== undefined) {
+				return bind.call(this, target, index, buffer, offset, offset + padded <= total ? padded : size);
 			}
+			var r = bind.call(this, target, index, buffer, offset, size);
+			total = this.getBufferParameter(0x8A11, 0x8764) || 0;
+			sizes.set(buffer, total);
 			if (offset + padded <= total) {
 				bind.call(this, target, index, buffer, offset, padded);
 			}
 			return r;
 		}
-		return bind.apply(this, arguments);
+		return bind.call(this, target, index, buffer, offset, size);
 	};
 	fixed.__std140 = true;
 	P.bindBufferRange = fixed;
@@ -36,15 +36,28 @@
 	}
 	if (data) {
 		P.bufferData = function (target, src, usage, srcOffset, length) {
-			var binding = BINDING[target];
-			if (binding) {
-				var buffer = this.getParameter(binding);
-				if (buffer) sizes.delete(buffer);
+			if (this.__engineStd140) {
+				return arguments.length === 3 ? data.call(this, target, src, usage) : data.apply(this, arguments);
 			}
 			if (target !== 0x8892 && target !== 0x8893) {
 				var bytes = allocBytes(src, srcOffset, length);
+				var finalBytes = bytes;
+				var padded = 0;
 				if (bytes > 0 && (bytes & 15)) {
-					var padded = (bytes + 15) & ~15;
+					padded = (bytes + 15) & ~15;
+					finalBytes = padded;
+				}
+				if (target === 0x8A11) {
+					var buffer = this.getParameter(0x8A28);
+					if (buffer) {
+						if (finalBytes >= 0) {
+							sizes.set(buffer, finalBytes);
+						} else {
+							sizes.delete(buffer);
+						}
+					}
+				}
+				if (padded) {
 					if (typeof src === "number") return data.call(this, target, padded, usage);
 					data.call(this, target, padded, usage);
 					if (ArrayBuffer.isView(src) && arguments.length > 3) {
@@ -55,7 +68,7 @@
 					return;
 				}
 			}
-			return data.apply(this, arguments);
+			return arguments.length === 3 ? data.call(this, target, src, usage) : data.apply(this, arguments);
 		};
 	}
 })();
@@ -225,6 +238,31 @@
 		if (bootEl) { bootEl.classList.add("failed"); }
 	};
 
+	var recoveryNotice = null;
+	T.bootRecovery = function (profile, message) {
+		var text = message || ("Mod profile '" + profile + "' failed to boot \u2014 falling back to Vanilla 26.3...");
+		recoveryNotice = text;
+		clearTimeout(splashTimer);
+		booting = true;
+		if (shownPct >= 100) {
+			shownPct = 5;
+			var fillEl = document.getElementById("fill");
+			if (fillEl) { fillEl.style.width = "5%"; }
+		}
+		ready(function () {
+			var bootEl = document.getElementById("boot");
+			if (bootEl) {
+				bootEl.classList.remove("gone");
+				bootEl.classList.remove("failed");
+				bootEl.style.display = "";
+				var noticeEl = document.getElementById("boot-notice") || bootEl.appendChild(el("div", { id: "boot-notice", role: "status" }));
+				noticeEl.textContent = text;
+				noticeEl.hidden = false;
+			}
+			T.bootStage(text, null);
+		});
+	};
+
 	var listeners = {};
 	T.on = function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); };
 	T.emit = function (name, data) {
@@ -340,5 +378,94 @@
 		if (T.linkServer && !T.quickPlaySupported) {
 			T.toast("Server link", T.linkServer + " — Multiplayer → Direct Connection", null, 15000);
 		}
+		if (recoveryNotice) {
+			T.toast("Mod profile fallback", recoveryNotice, null, 9000);
+			recoveryNotice = null;
+		}
+	});
+
+	var dropOverlay = null;
+	var dragDepth = 0;
+
+	function isFileDrag(e) {
+		var dt = e && e.dataTransfer;
+		if (!dt) { return false; }
+		var types = dt.types;
+		if (!types) { return true; }
+		if (typeof types.indexOf === "function") { return types.indexOf("Files") >= 0; }
+		for (var i = 0; i < types.length; i++) {
+			if (types[i] === "Files") { return true; }
+		}
+		return false;
+	}
+
+	function ensureDropOverlay() {
+		if (dropOverlay && document.body && document.body.contains(dropOverlay)) { return dropOverlay; }
+		if (!document.body) { return null; }
+		dropOverlay = document.getElementById("eagler-drop-overlay") || document.body.appendChild(
+			el("div", { id: "eagler-drop-overlay", "aria-hidden": "true" }, [
+				el("div", { class: "eagler-drop-card" }, [
+					el("div", { class: "eagler-drop-title", text: "Drop Mod (.jar / .js), Shader Pack, or Resource Pack" }),
+					el("div", { class: "eagler-drop-sub", text: "Release anywhere on the game window to install" })
+				])
+			])
+		);
+		return dropOverlay;
+	}
+
+	function showDropOverlay() {
+		var node = ensureDropOverlay();
+		if (node) { node.classList.add("visible"); }
+	}
+
+	function hideDropOverlay() {
+		dragDepth = 0;
+		if (dropOverlay) { dropOverlay.classList.remove("visible"); }
+	}
+
+	ready(function () {
+		ensureDropOverlay();
+		document.addEventListener("dragenter", function (e) {
+			if (!isFileDrag(e)) { return; }
+			dragDepth++;
+			showDropOverlay();
+		});
+		document.addEventListener("dragover", function (e) {
+			if (!isFileDrag(e)) { return; }
+			e.preventDefault();
+			if (e.dataTransfer) {
+				try { e.dataTransfer.dropEffect = "copy"; } catch (err) {}
+			}
+			if (dragDepth <= 0) { dragDepth = 1; }
+			showDropOverlay();
+		});
+		document.addEventListener("dragleave", function (e) {
+			if (dragDepth > 0) { dragDepth--; }
+			var leftWindow = !e.relatedTarget && (
+				e.clientX <= 0 || e.clientY <= 0
+				|| e.clientX >= window.innerWidth || e.clientY >= window.innerHeight
+			);
+			if (dragDepth <= 0 || leftWindow) {
+				hideDropOverlay();
+			}
+		});
+		document.addEventListener("drop", function (e) {
+			if (isFileDrag(e)) { e.preventDefault(); }
+			hideDropOverlay();
+			var modDrop = (window.MinecraftWebMods && typeof window.MinecraftWebMods.handleDrop === "function" && window.MinecraftWebMods.handleDrop)
+				|| (window.EaglerJvmBridge && typeof window.EaglerJvmBridge.handleDrop === "function" && window.EaglerJvmBridge.handleDrop)
+				|| (window.EaglerJvmTranslator && typeof window.EaglerJvmTranslator.handleDrop === "function" && window.EaglerJvmTranslator.handleDrop);
+			if (modDrop && isFileDrag(e)) {
+				try { modDrop(e); } catch (err) { console.error("[minecraft-web] mod drop hook failed", err); }
+			}
+		});
+		window.addEventListener("dragend", hideDropOverlay);
+		window.addEventListener("blur", hideDropOverlay);
+		document.addEventListener("visibilitychange", function () {
+			if (document.hidden) { hideDropOverlay(); }
+		});
+		window.addEventListener("keydown", function (e) {
+			if (e && e.key === "Escape" && dragDepth > 0) { hideDropOverlay(); }
+		});
 	});
 })();

@@ -22,6 +22,8 @@ public final class WebPacks {
 			net.minecraft.network.chat.Component.literal("Add Pack...");
 		WebWorlds.install();
 		net.minecraft.client.web.shaderpack.ShaderPacks.install();
+		net.minecraft.client.web.mods.WebMods.install();
+		net.minecraft.client.gui.screens.TitleScreen.modsScreen = net.minecraft.client.web.mods.ModsScreen::create;
 	}
 
 	public static void choosePack() {
@@ -31,6 +33,10 @@ public final class WebPacks {
 	private static void accept(final String filename, final Int8Array data) {
 		String name = sanitize(filename);
 		byte[] bytes = data.copyToJavaArray();
+		if (net.minecraft.client.web.mods.WebMods.looksLikeMod(filename, bytes)) {
+			net.minecraft.client.web.mods.WebMods.accept(filename, bytes);
+			return;
+		}
 		String problem = whyNotAPack(bytes);
 		if (SHADER_PACK.equals(problem)) {
 			if (net.minecraft.client.web.shaderpack.ShaderPacks.accept(filename, bytes) == null) {
@@ -109,10 +115,10 @@ public final class WebPacks {
 			|| !net.minecraft.server.packs.FilePackResources.findRootPrefix(names).isEmpty()) {
 			return null;
 		}
+		if (net.minecraft.client.web.shaderpack.ShaderPack.findRoot(names) != null) {
+			return SHADER_PACK;
+		}
 		for (String name : names) {
-			if (name.startsWith("shaders/")) {
-				return SHADER_PACK;
-			}
 			if (name.equals("fabric.mod.json") || name.equals("META-INF/mods.toml") || name.endsWith(".class")) {
 				return "This is a mod, not a pack.";
 			}

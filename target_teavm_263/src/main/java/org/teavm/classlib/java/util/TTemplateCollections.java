@@ -250,7 +250,7 @@ public final class TTemplateCollections {
             for (T element : data) {
                 Objects.requireNonNull(element);
 
-                int suggestedIndex = Math.abs(element.hashCode()) % data.length;
+                int suggestedIndex = (element.hashCode() & 0x7FFFFFFF) % data.length;
                 int index = suggestedIndex;
                 boolean found = false;
                 while (index < data.length) {
@@ -296,7 +296,7 @@ public final class TTemplateCollections {
                     throw new NullPointerException(String.format("Element at index %s is null", index));
                 }
 
-                int indexTemp = Math.abs(element.hashCode()) % temp.length;
+                int indexTemp = (element.hashCode() & 0x7FFFFFFF) % temp.length;
                 while (temp[indexTemp] != null) {
                     if (temp[indexTemp].equals(element)) {
                         continue outerLoop;
@@ -562,7 +562,7 @@ public final class TTemplateCollections {
                 Objects.requireNonNull(entry.getKey());
                 Objects.requireNonNull(entry.getValue());
 
-                int suggestedIndex = Math.abs(entry.getKey().hashCode()) % entries.length;
+                int suggestedIndex = (entry.getKey().hashCode() & 0x7FFFFFFF) % entries.length;
                 int index = suggestedIndex;
                 boolean found = false;
                 while (index < entries.length) {

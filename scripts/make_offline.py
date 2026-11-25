@@ -35,6 +35,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import sys
 import time
 
@@ -48,7 +49,8 @@ MC_OBJECTS = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", ".minec
 DEFAULT_ZIG = os.environ.get("ZIG", "")
 MESH_WORKER_SPAWN = 'new Worker(new URL("minecraft-web-mesh-worker.js", location.href))'
 PAGE_SCRIPTS = ("minecraft_blobstore.js", "minecraft-web-net.js", "minecraft-web-shell.js",
-                "minecraft-web-touch.js", "minecraft-web-mesh.js")
+                "minecraft-web-touch.js", "minecraft-web-mesh.js", "minecraft-web-simd-kernels.js",
+                "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js")
 FORMATS = ("html", "xhtml", "xml", "svg")
 VARIANTS = {"sound": "sfx", "silent": "none"}
 XHTML_NS = "http://www.w3.org/1999/xhtml"
@@ -126,21 +128,71 @@ XML_PRELUDE = r"""(function () {
 
 BOOT = r""""use strict";
 (function () {
-	// 26.3's compiler emits two forms WebGL2 rejects (same fix as the served index.html).
-	var proto = WebGL2RenderingContext.prototype;
-	var shaderSource = proto.shaderSource;
-	var unrolled = [
-		"_frag_output_00[0][0] = coefficients[0];", "_frag_output_00[0][1] = coefficients[1];",
-		"_frag_output_00[0][2] = coefficients[2];", "_frag_output_00[0][3] = coefficients[3];",
-		"_frag_output_00[1][0] = coefficients[4];", "_frag_output_00[1][1] = coefficients[5];",
-		"_frag_output_00[1][2] = coefficients[6];", "_frag_output_00[1][3] = coefficients[7];"
-	].join("\n");
-	proto.shaderSource = function (shader, source) {
-		var t = String(source);
-		t = t.split("floatfloat(").join("float(");
-		t = t.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
-		return shaderSource.call(this, shader, t);
-	};
+	// Pre-boot WebGPU auto-enable helper (loop-safe on http:// and file://,
+	// cleanly yields to WebGL2 when a shader pack is active or WebGPU failed).
+	try {
+		if (typeof URLSearchParams !== "function" || typeof location === "undefined") { return; }
+		var sp = new URLSearchParams(location.search || "");
+		var hasPack = false;
+		var gpuFailed = false;
+		var autoFlag = false;
+		try { hasPack = !!(typeof localStorage !== "undefined" && localStorage.getItem("minecraft.shaderpack.selected")); } catch (e) {}
+		try {
+			if (typeof sessionStorage !== "undefined") {
+				gpuFailed = !!sessionStorage.getItem("minecraft-web.webgpuFailed");
+				autoFlag = sessionStorage.getItem("minecraft-web.autoWebgpu") === "1";
+			}
+		} catch (e) {}
+		function applySearch(params) {
+			var qs = params.toString();
+			var hash = location.hash || "";
+			var nextRel = (location.pathname || "/") + (qs ? "?" + qs : "") + hash;
+			try {
+				if (typeof history !== "undefined" && typeof history.replaceState === "function") {
+					history.replaceState(null, "", nextRel);
+					return;
+				}
+			} catch (e) {}
+			try {
+				var hrefBase = String(location.href || "").split("#")[0].split("?")[0];
+				var nextHref = hrefBase + (qs ? "?" + qs : "") + hash;
+				if (nextHref && nextHref !== location.href && typeof location.replace === "function") {
+					location.replace(nextHref);
+				}
+			} catch (e) {}
+		}
+		if ((hasPack || gpuFailed) && autoFlag && sp.get("webgpu") === "1") {
+			try { sessionStorage.removeItem("minecraft-web.autoWebgpu"); } catch (e) {}
+			sp.delete("webgpu");
+			applySearch(sp);
+			return;
+		}
+		if (!sp.has("webgpu") && !sp.has("webgl") && !hasPack && !gpuFailed
+			&& typeof navigator !== "undefined" && navigator.gpu && typeof navigator.gpu.requestAdapter === "function") {
+			try { sessionStorage.setItem("minecraft-web.autoWebgpu", "1"); } catch (e) {}
+			sp.set("webgpu", "1");
+			applySearch(sp);
+		}
+	} catch (e) {}
+})();
+(function () {
+	if (typeof WebGL2RenderingContext !== "undefined") {
+		// 26.3's compiler emits two forms WebGL2 rejects (same fix as the served index.html).
+		var proto = WebGL2RenderingContext.prototype;
+		var shaderSource = proto.shaderSource;
+		var unrolled = [
+			"_frag_output_00[0][0] = coefficients[0];", "_frag_output_00[0][1] = coefficients[1];",
+			"_frag_output_00[0][2] = coefficients[2];", "_frag_output_00[0][3] = coefficients[3];",
+			"_frag_output_00[1][0] = coefficients[4];", "_frag_output_00[1][1] = coefficients[5];",
+			"_frag_output_00[1][2] = coefficients[6];", "_frag_output_00[1][3] = coefficients[7];"
+		].join("\n");
+		proto.shaderSource = function (shader, source) {
+			var t = String(source);
+			t = t.split("floatfloat(").join("float(");
+			t = t.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
+			return shaderSource.call(this, shader, t);
+		};
+	}
 })();
 (function () {
 	var shell = window.MinecraftWeb;
@@ -149,22 +201,29 @@ BOOT = r""""use strict";
 	window.addEventListener("unhandledrejection", function (e) { console.error(e.reason); });
 
 	var PHONE_PIXEL_BUDGET = 1150000;
+	var WEAK_GPU_PIXEL_BUDGET = 921600;
 	var forcedScale = parseFloat((/[?&]scale=([0-9.]+)/.exec(location.search) || [])[1]);
-	// Same as index.html: laptops with weak integrated GPUs render at CSS resolution on HiDPI screens.
+	// Same as index.html: laptops with weak integrated GPUs stay within WEAK_GPU_PIXEL_BUDGET (~720p)
+	// and avoid HiDPI over-rendering. Touch devices keep the phone budget below. ?scale overrides.
 	var weakGpu = null;
 	function isWeakGpu() {
 		if (weakGpu !== null) { return weakGpu; }
 		weakGpu = false;
 		try {
+			if (typeof navigator !== "undefined" && (/\bCrOS\b/.test(navigator.userAgent || "") || (navigator.deviceMemory > 0 && navigator.deviceMemory <= 4))) {
+				weakGpu = true;
+				return weakGpu;
+			}
 			var gl = document.createElement("canvas").getContext("webgl2");
 			var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
 			var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
-			weakGpu = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) [1-5]\d\d|SwiftShader|llvmpipe/i.test(name);
+			weakGpu = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Intel\(R\) Graphics\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) ([1-5]\d\d|61\d)|Panfrost|Freedreno|Turnip|virgl|V3D|AMD.*(Stoney|Radeon\(TM\) R[2-5]|Vega [1-3]|610M)|SwiftShader|llvmpipe/i.test(name);
 			var lose = gl && gl.getExtension("WEBGL_lose_context");
 			if (lose) { lose.loseContext(); }
 		} catch (e) { /* keep devicePixelRatio */ }
 		return weakGpu;
 	}
+	window.__minecraftWebWeakGpu = isWeakGpu;
 	// The game mirrors its shader pack choice here (ShaderPacks.LS_SELECTED).
 	function shaderPackSelected() {
 		try { return !!window.localStorage.getItem("minecraft.shaderpack.selected"); } catch (e) { return false; }
@@ -173,16 +232,22 @@ BOOT = r""""use strict";
 		var r = window.devicePixelRatio || 1;
 		if (forcedScale >= 0.25 && forcedScale <= 3) { return forcedScale; }
 		var coarse = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
-		if (r > 1 && !coarse && isWeakGpu()) { r = 1; }
+		var weak = isWeakGpu();
+		var css = (c.clientWidth || 1) * (c.clientHeight || 1);
 		if (coarse) {
 			r = Math.min(r, 2);
-			var css = (c.clientWidth || 1) * (c.clientHeight || 1);
 			if (css * r * r > PHONE_PIXEL_BUDGET) { r = Math.max(1, Math.sqrt(PHONE_PIXEL_BUDGET / css)); }
 		}
-				// Shader packs draw several full-screen passes per frame, so a weak GPU is fill-rate
+		if (weak) {
+			if (!coarse && r > 1) { r = 1; }
+			if (css * r * r > WEAK_GPU_PIXEL_BUDGET) {
+				r = Math.min(r, Math.max(0.65, Math.sqrt(WEAK_GPU_PIXEL_BUDGET / css)));
+			}
+		}
+		// Shader packs draw several full-screen passes per frame, so a weak GPU is fill-rate
 		// bound: render at half resolution (a quarter of the pixels) while a pack is selected.
-		if (shaderPackSelected() && isWeakGpu()) { r = Math.min(r, 0.5); }
-return r;
+		if (shaderPackSelected() && weak) { r = Math.min(r, 0.5); }
+		return r;
 	};
 	function fitCanvas() {
 		var c = document.getElementById("game_frame");
@@ -191,16 +256,18 @@ return r;
 		var w = Math.max(1, Math.round(c.clientWidth * r) | 0);
 		var h = Math.max(1, Math.round(c.clientHeight * r) | 0);
 		if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-		var crisp = w < c.clientWidth ? "pixelated" : "";
+		var crisp = r <= 0.55 ? "pixelated" : "";
 		if (c.style.imageRendering !== crisp) { c.style.imageRendering = crisp; }
 	}
 	window.addEventListener("resize", fitCanvas);
 	// Picking or clearing a pack changes the ratio; the engine re-reads it on resize.
-	var lastPackSelected = shaderPackSelected();
-	setInterval(function () {
-		var now = shaderPackSelected();
-		if (now !== lastPackSelected) { lastPackSelected = now; window.dispatchEvent(new Event("resize")); }
-	}, 1000);
+	function onShaderPackChange(e) {
+		if (e && e.type === "storage" && e.key && e.key !== "minecraft.shaderpack.selected") { return; }
+		fitCanvas();
+		window.dispatchEvent(new Event("resize"));
+	}
+	window.addEventListener("minecraft-web:shaderpack", onShaderPackChange);
+	window.addEventListener("storage", onShaderPackChange);
 	document.addEventListener("fullscreenchange", fitCanvas);
 	if (window.visualViewport) { window.visualViewport.addEventListener("resize", fitCanvas); }
 	fitCanvas();
@@ -266,16 +333,17 @@ return r;
 			var self = this, hit = this.__eagHit, text = this.__eagText;
 			if (text === null && !hit) { return send.apply(this, arguments); }
 			var define = function (key, value) { Object.defineProperty(self, key, { value: value, configurable: true }); };
-			var body;
+			var isArrayBuffer = this.responseType === "arraybuffer" && hit;
+			var body = "";
 			if (text !== null) { body = text; }
-			else {
+			else if (!isArrayBuffer) {
 				var chars = new Array(hit.length);
 				for (var i = 0; i < hit.length; i++) { chars[i] = String.fromCharCode(hit[i] & 255); }
 				body = chars.join("");
 			}
 			define("status", 200); define("readyState", 4); define("statusText", "OK");
-			define("responseText", body);
-			define("response", this.responseType === "arraybuffer" && hit
+			if (!isArrayBuffer) { define("responseText", body); }
+			define("response", isArrayBuffer
 				? hit.buffer.slice(hit.byteOffset, hit.byteOffset + hit.byteLength) : body);
 			var fire = function () {
 				if (self.onreadystatechange) { self.onreadystatechange(); }
@@ -373,7 +441,15 @@ return r;
 			window.__minecraftClientModule = module;
 			// The server worker runs this same module (the served page shares it the same way);
 			// WebWorkerTransport.spawnWithEmbeddedAssets transfers these bytes to it.
-			window.__minecraftWorkerServerRuntime = runtime;
+			// Prepend the offline WASM-SIMD128 kernels and auto-bind hook so server and gen workers get self.__mcWebSimd too.
+			var simdEl = document.getElementById("simd-kernels-src");
+			var simdSrc = simdEl ? simdEl.textContent : "";
+			var simdBindHook = "\n;(function(){var G=typeof globalThis!=='undefined'?globalThis:self;"
+				+ "var T=G.TeaVM&&G.TeaVM.wasmGC;if(T&&T.load&&!T.__mcWebSimdHook){T.__mcWebSimdHook=1;"
+				+ "var origLoad=T.load;T.load=function(){return Promise.resolve(origLoad.apply(this,arguments)).then(function(inst){"
+				+ "try{var s=G.__mcWebSimd||G.__twitSimd;var m=G.__teavmMemory||(inst&&inst.exports&&inst.exports['teavm.memory']);"
+				+ "if(s&&m){s.bind(m);}}catch(e){}return inst;});};}})();";
+			window.__minecraftWorkerServerRuntime = simdSrc ? (simdSrc + "\n" + runtime + simdBindHook) : runtime;
 			window.__minecraftWorkerServerWasm = wasm;
 			window.__minecraftServerModuleUrl = "embedded:";
 			var compile = WebAssembly.compile;
@@ -383,6 +459,11 @@ return r;
 			var before = Promise.resolve(shell.beforeMain ? shell.beforeMain() : null).catch(function () {});
 			var teavm = (await Promise.all([TeaVM.wasmGC.load(module), before]))[0];
 			if (typeof teavm.exports.main !== "function") { throw new Error("TeaVM WASM-GC module did not export main"); }
+			var simd = window.__mcWebSimd || window.__twitSimd;
+			if (simd) {
+				var simdMem = window.__teavmMemory || teavm.exports["teavm.memory"];
+				if (simdMem) { simd.bind(simdMem); }
+			}
 			stage("Starting", 100);
 			fitCanvas();
 			shell.engineStarting();
@@ -410,7 +491,92 @@ def shader_pack_bundle(folder):
         blob += data
     return bytes(blob), spans
 
-def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None):
+def _check_index_html():
+    index_html = text(os.path.join(SRC, "index.html"))
+    for needle in ("floatfloat(", "_frag_output_00", "classes263.wasm-runtime.js", "minecraft-web-mesh.js",
+                   "minecraft-web-simd-kernels.js",
+                   "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js", "WEAK_GPU_PIXEL_BUDGET"):
+        if needle not in index_html:
+            raise ValueError("served index.html changed (%s missing); update this packager's BOOT" % needle)
+
+def _extract_script_payload(doc, script_id):
+    pattern = r'<script\s+type="application/octet-stream"\s+id="%s">(.*?)</script>' % re.escape(script_id)
+    match = re.search(pattern, doc, re.S)
+    if not match:
+        raise ValueError("script#%s not found in source offline bundle" % script_id)
+    body = match.group(1).strip()
+    if body.startswith("<![CDATA[") and body.endswith("]]>"):
+        body = body[9:-3].replace("]]]]><![CDATA[>", "]]>")
+    return body
+
+def load_prebuilt_decoder(path):
+    """Load the compiled XZ decoder WASM from a .wasm file or an existing offline HTML/XML/SVG bundle."""
+    raw = read(path)
+    if raw[:4] == b"\x00asm":
+        return raw
+    doc = raw.decode("utf-8")
+    loader_b64 = _extract_script_payload(doc, "p-loader")
+    wasm = base64.b64decode(loader_b64)
+    if wasm[:4] != b"\x00asm":
+        raise ValueError("prebuilt decoder in %s does not start with WebAssembly magic" % path)
+    return wasm
+
+def load_archive_from_bundle(path, verify_archive=False):
+    """Reuse the verified XZ archive + WASM XZ decoder from an existing offline bundle (<2s rebuild)."""
+    started = time.time()
+    _check_index_html()
+    doc = text(path)
+    loader_b64 = _extract_script_payload(doc, "p-loader")
+    loader_wasm = base64.b64decode(loader_b64)
+    if loader_wasm[:4] != b"\x00asm":
+        raise ValueError("p-loader in %s is not a valid WebAssembly module" % path)
+    xz_b85 = _extract_script_payload(doc, "p-xz")
+    if len(xz_b85) < 20 or len(xz_b85) % 5 == 1:
+        raise ValueError("p-xz in %s has invalid HTML85 payload length (%d)" % (path, len(xz_b85)))
+    header = base64.b85decode(xz_b85[:20].replace(".", "<"))
+    if len(header) != 16 or header[:8] not in (b"MCXC001\x00", b"MCGC001\x00"):
+        raise ValueError("p-xz in %s has invalid compressed container magic" % path)
+    raw_size, packed_size = struct.unpack_from("<II", header, 8)
+    decoded_len = (len(xz_b85) * 4) // 5
+    if raw_size < 12 or packed_size != decoded_len - 16 or raw_size + packed_size > 1024 * 1024 * 1024:
+        raise ValueError("p-xz in %s failed container size check (raw=%d, packed=%d, decoded=%d)" % (
+            path, raw_size, packed_size, decoded_len))
+
+    version = json.loads(text(os.path.join(SRC, "version.json")))["id"]
+    wasm_sha = ""
+    inferred_variant = "silent"
+    meta_match = re.search(r'<meta\s+name="minecraft-build"\s+content="([^"]+)"', doc)
+    if meta_match:
+        build_match = re.match(r'^(\S+)\s+offline,\s+engine\s+([0-9a-f]+),\s+(\S+)$', meta_match.group(1).strip())
+        if build_match:
+            version = build_match.group(1)
+            wasm_sha = build_match.group(2)
+            inferred_variant = build_match.group(3)
+
+    meta = {"version": version, "wasmSha256": wasm_sha}
+    if verify_archive:
+        packed_bytes = base64.b85decode(xz_b85.replace(".", "<"))
+        entries = unpack_container(packed_bytes)
+        meta = json.loads(entries["meta"].decode("utf-8"))
+        version = meta.get("version", version)
+        wasm_sha = meta.get("wasmSha256", wasm_sha)
+    else:
+        wasm_path = os.path.join(SRC, "wasm-gc", "classes263.wasm")
+        if os.path.isfile(wasm_path):
+            cur_sha = sha256(read(wasm_path))
+            if wasm_sha and not cur_sha.startswith(wasm_sha):
+                print("warning: staged classes263.wasm (%s) differs from reused archive (%s)" % (
+                    cur_sha[:12], wasm_sha[:12]), flush=True)
+            elif not wasm_sha:
+                meta["wasmSha256"] = cur_sha
+
+    print("[reuse] loaded archive from %s (loader %d B, container %.1f MB -> %.1f MB raw) in %.2fs" % (
+        os.path.relpath(path, REPO), len(loader_wasm), decoded_len / 1e6, raw_size / 1e6,
+        time.time() - started), flush=True)
+    return {"version": version, "meta": meta, "xz": xz_b85, "loader": loader_b64,
+            "variant": inferred_variant}
+
+def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None, prebuilt_decoder=None):
     started = time.time()
     wasm_dir = os.path.join(SRC, "wasm-gc")
     wasm = read(os.path.join(wasm_dir, "classes263.wasm"))
@@ -419,10 +585,7 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None)
         raise ValueError("classes263.wasm has no WebAssembly header (is a link running?)")
     if b"callInFiber" not in runtime:
         raise ValueError("classes263.wasm-runtime.js is unpatched (patchWasmGCRuntime did not run)")
-    index_html = text(os.path.join(SRC, "index.html"))
-    for needle in ("floatfloat(", "_frag_output_00", "classes263.wasm-runtime.js", "minecraft-web-mesh.js"):
-        if needle not in index_html:
-            raise ValueError("served index.html changed (%s missing); update this packager's BOOT" % needle)
+    _check_index_html()
 
     assets = gzip.decompress(read(os.path.join(SRC, "assets.bin.gz")))
     index = gzip.decompress(read(os.path.join(SRC, "assets_index.json.gz")))
@@ -449,7 +612,7 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None)
     print("[%s] archive: wasm %.1f MB, assets %.1f MB, objects %.1f MB (%d sounds); xz -%d%s ..." % (
         sounds_mode, len(wasm) / 1e6, len(assets) / 1e6, len(objects) / 1e6, len(sounds),
         xz_preset, "e" if xz_extreme else ""), flush=True)
-    loader_wasm = build_decoder(zig)
+    loader_wasm = load_prebuilt_decoder(prebuilt_decoder) if prebuilt_decoder else build_decoder(zig)
     packed, raw_bytes, packed_bytes = xz_container(entries, xz_preset, xz_extreme, 128)
     unpacked = unpack_container(packed)
     if unpacked["wasm"] != wasm or unpacked["assets"] != assets or unpacked["objects"] != objects \
@@ -526,7 +689,10 @@ def render(fmt, parts, archive, variant):
     if not xml and re.search(r"</script|<!--", worker, re.I):
         raise ValueError("minecraft-web-mesh-worker.js contains </script")
     head.append('<script type="text/plain" id="mesh-worker-src">%s</script>' % (cdata(worker) if xml else worker))
-    head += [script(source, name) for name, source in parts["scripts"][1:]]
+    head += [
+        script(source, name, ' id="simd-kernels-src"' if name == "minecraft-web-simd-kernels.js" else "")
+        for name, source in parts["scripts"][1:]
+    ]
     body = [
         '<canvas id="game_frame" width="854" height="480"></canvas>',
         '<div id="log"></div>',
@@ -572,23 +738,53 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--web", help="the staged site folder to pack (default: target_teavm_263/javascript-wasm-gc)")
     parser.add_argument("--out-dir", default=os.path.join(REPO, "dist"))
+    parser.add_argument("--out", metavar="FILE",
+                        help="write a single output file to this exact path (requires one format and one variant)")
     parser.add_argument("--formats", nargs="+", choices=FORMATS, default=list(FORMATS))
-    parser.add_argument("--variants", nargs="+", choices=sorted(VARIANTS), default=["sound", "silent"])
+    parser.add_argument("--variants", nargs="+", choices=sorted(VARIANTS), default=None)
     parser.add_argument("--xz-preset", type=int, choices=range(0, 10), default=8)
     parser.add_argument("--no-xz-extreme", action="store_true")
     parser.add_argument("--zig", default=DEFAULT_ZIG if os.path.isfile(DEFAULT_ZIG) else "zig")
+    parser.add_argument("--prebuilt-decoder", metavar="PATH",
+                        help="use a prebuilt XZ decoder .wasm or extract p-loader from an existing offline bundle instead of running zig")
+    parser.add_argument("--reuse-archive-from", metavar="BUNDLE",
+                        help="fast mode: reuse the XZ archive and decoder from an existing offline bundle while re-inlining the latest page scripts/CSS/BOOT")
+    parser.add_argument("--verify-archive", action="store_true",
+                        help="with --reuse-archive-from, fully decompress and verify the reused XZ archive before writing")
     parser.add_argument("--shaderpacks", metavar="DIR",
                         help="bundle the shader packs listed in DIR/packs.json; added to the game on first start")
     args = parser.parse_args()
     if args.web:
         SRC = os.path.abspath(args.web)
-    os.makedirs(args.out_dir, exist_ok=True)
     parts = page_parts()
-    for variant in args.variants:
-        archive = build_archive(VARIANTS[variant], args.xz_preset, not args.no_xz_extreme, args.zig,
-                                args.shaderpacks)
+
+    if args.reuse_archive_from:
+        if args.variants is not None and len(args.variants) != 1:
+            parser.error("--reuse-archive-from holds one archive; pass at most one --variants value")
+        if args.out and len(args.formats) != 1:
+            parser.error("--out requires exactly one format and one variant")
+        archive = load_archive_from_bundle(args.reuse_archive_from, verify_archive=args.verify_archive)
+        variants = args.variants if args.variants is not None else [archive.get("variant") or "silent"]
+        archive_iter = [(variants[0], archive)]
+    else:
+        variants = args.variants if args.variants is not None else ["sound", "silent"]
+        if args.out and (len(variants) != 1 or len(args.formats) != 1):
+            parser.error("--out requires exactly one format and one variant")
+        archive_iter = (
+            (variant, build_archive(VARIANTS[variant], args.xz_preset, not args.no_xz_extreme, args.zig,
+                                    args.shaderpacks, prebuilt_decoder=args.prebuilt_decoder))
+            for variant in variants
+        )
+
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    else:
+        os.makedirs(args.out_dir, exist_ok=True)
+
+    for variant, archive in archive_iter:
         for fmt in args.formats:
-            out = os.path.join(args.out_dir, "minecraft-%s-offline-%s.%s" % (archive["version"], variant, fmt))
+            out = os.path.abspath(args.out) if args.out else os.path.join(
+                args.out_dir, "minecraft-%s-offline-%s.%s" % (archive["version"], variant, fmt))
             document = render(fmt, parts, archive, variant)
             tmp = out + ".tmp"
             with open(tmp, "w", encoding="utf-8", newline="\n") as handle:

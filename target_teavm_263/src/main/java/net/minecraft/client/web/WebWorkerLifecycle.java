@@ -150,30 +150,29 @@ public final class WebWorkerLifecycle {
 
 	private static void collectDataPacks(final WebLifecycleMsg.OpenSpec spec) {
 		java.nio.file.Path dir = net.minecraft.client.gui.screens.worldselection.CreateWorldScreen.webDataPackDir;
-		if (dir == null) {
-			return;
-		}
-		String key = dir.toAbsolutePath().normalize().toString();
-		org.teavm.runtime.fs.VirtualFile directory = org.teavm.runtime.fs.VirtualFileSystemProvider.getInstance().getFile(key);
-		String[] names = directory.isDirectory() ? directory.listFiles() : null;
-		if (names == null) {
-			return;
-		}
-		long bytes = 0;
-		for (String name : names) {
-			if (!WebLifecycleMsg.safePackName(name)) {
-				continue;
+		if (dir != null) {
+			String key = dir.toAbsolutePath().normalize().toString();
+			org.teavm.runtime.fs.VirtualFile directory = org.teavm.runtime.fs.VirtualFileSystemProvider.getInstance().getFile(key);
+			String[] names = directory.isDirectory() ? directory.listFiles() : null;
+			if (names != null) {
+				long bytes = 0;
+				for (String name : names) {
+					if (!WebLifecycleMsg.safePackName(name)) {
+						continue;
+					}
+					byte[] data = WebSaves.readFile(key + "/" + name);
+					if (data != null) {
+						spec.packNames.add(name);
+						spec.packData.add(data);
+						bytes += data.length;
+					}
+				}
+				if (!spec.packNames.isEmpty()) {
+					System.out.println("[26.3-web] sending " + spec.packNames.size() + " data pack(s) to the worker (" + bytes + " bytes): " + spec.packNames);
+				}
 			}
-			byte[] data = WebSaves.readFile(key + "/" + name);
-			if (data != null) {
-				spec.packNames.add(name);
-				spec.packData.add(data);
-				bytes += data.length;
-			}
 		}
-		if (!spec.packNames.isEmpty()) {
-			System.out.println("[26.3-web] sending " + spec.packNames.size() + " data pack(s) to the worker (" + bytes + " bytes): " + spec.packNames);
-		}
+		net.minecraft.client.web.mods.WebMods.appendDataPacksTo(spec);
 	}
 
 	public static void requestOpen(final WebLifecycleMsg.OpenSpec spec) {

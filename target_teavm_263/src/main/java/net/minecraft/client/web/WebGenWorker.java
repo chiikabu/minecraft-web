@@ -72,6 +72,7 @@ public final class WebGenWorker {
 		long t = System.currentTimeMillis();
 		Bootstrap.bootStrap();
 		WebPackResources.preload();
+		WebSimdKernels.install();
 		log("gen worker " + workerIndex + " bootstrapped in " + (System.currentTimeMillis() - t) + "ms");
 		listen(data -> onMessage(data.copyToJavaArray()));
 		FriendlyByteBuf ready = WebGenCodec.buf();
