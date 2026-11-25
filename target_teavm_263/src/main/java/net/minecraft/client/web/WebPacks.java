@@ -21,6 +21,7 @@ public final class WebPacks {
 		net.minecraft.client.gui.screens.packs.PackSelectionScreen.openPackFolderTitleOverride =
 			net.minecraft.network.chat.Component.literal("Add Pack...");
 		WebWorlds.install();
+		CreditsScreen.install();
 		net.minecraft.client.web.shaderpack.ShaderPacks.install();
 		net.minecraft.client.web.mods.WebMods.install();
 		net.minecraft.client.gui.screens.TitleScreen.modsScreen = net.minecraft.client.web.mods.ModsScreen::create;
