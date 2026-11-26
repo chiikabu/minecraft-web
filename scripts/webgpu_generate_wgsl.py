@@ -26,6 +26,7 @@ Conventions baked into the modules (the Java side relies on all three):
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -497,8 +498,12 @@ def generate(root, output, naga, pipelines_json, emit_locations=False):
     manifest_pipelines = {}
     location_keys = {}
     resolved_cache = {}
+    path_cache = {}
+    content_dedup = {}
+    deduped = 0
 
     def module(ident, stage, values, flags):
+        nonlocal deduped
         base = shader_path(root, ident)
         path = base.with_suffix(".vsh" if stage == "vert" else ".fsh")
         relative = pathlib.Path(path.parent.name) / f"{path.stem}.{stage}{variant_slug(values, flags)}.wgsl"
@@ -506,8 +511,10 @@ def generate(root, output, naga, pipelines_json, emit_locations=False):
         if not path.is_relative_to(root):
             source_root = root.parent.parent
             relative = pathlib.Path(path.relative_to(source_root).parts[0]) / relative
-        rel = str(relative)
-        if rel in shaders or any(f[0] == rel for f in failures):
+        rel = relative.as_posix()
+        if rel in path_cache:
+            return path_cache[rel]
+        if any(f[0] == rel for f in failures):
             return rel
         if path not in resolved_cache:
             resolved_cache[path] = resolver.resolve(str(path), str(root), source_root=str(source_root))
@@ -518,13 +525,26 @@ def generate(root, output, naga, pipelines_json, emit_locations=False):
         if error:
             failures.append((rel, error))
             return rel
-        wgsl = (output / relative).read_text()
+        wgsl_path = output / relative
+        wgsl = wgsl_path.read_text()
         entry = {"bindings": wgsl_bindings(wgsl)}
+        inputs_key = ()
         if stage == "vert":
             raw = path.read_text()
-            entry["inputs"] = vertex_inputs(
+            inputs = vertex_inputs(
                 active_source(raw, set(defines)) if re.search(r"layout\s*\(\s*location\s*=", raw) else source
             )
+            entry["inputs"] = inputs
+            inputs_key = tuple(sorted(inputs.items()))
+        dedup_key = (stage, hashlib.sha256(wgsl.encode("utf-8")).hexdigest(), inputs_key)
+        canonical = content_dedup.get(dedup_key)
+        if canonical is not None:
+            wgsl_path.unlink(missing_ok=True)
+            path_cache[rel] = canonical
+            deduped += 1
+            return canonical
+        content_dedup[dedup_key] = rel
+        path_cache[rel] = rel
         shaders[rel] = entry
         return rel
 
@@ -550,10 +570,10 @@ def generate(root, output, naga, pipelines_json, emit_locations=False):
         manifest["locations"] = locations
         if ambiguous_locations:
             manifest["ambiguous_locations"] = ambiguous_locations
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
+    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n")
     print(
         f"WGSL PASS: {len(pipelines)} pipelines -> {len(manifest_pipelines)} distinct keys, "
-        f"{len(shaders)} modules, {len(bindings)} global bindings"
+        f"{len(shaders)} modules ({deduped} deduped), {len(bindings)} global bindings"
     )
 
 def selfcheck(raw_vertex_source=None):

@@ -104,18 +104,29 @@ final class WebGpuDevice implements GpuDeviceBackend {
 			+ ", max texture " + maxTex + ", WGSL pipelines in bundle: " + (m == null ? 0 : m.getAsJsonObject("pipelines").size()));
 	}
 
+	private static boolean manifestLoaded;
+	@Nullable
+	private static JsonObject cachedManifest;
+
 	@Nullable
 	private static JsonObject loadManifest() {
+		if (manifestLoaded) {
+			return cachedManifest;
+		}
 		byte[] bytes = WebPackResources.rawAsset(WGSL_ROOT + "manifest.json");
 		if (bytes == null) {
+			manifestLoaded = true;
 			System.out.println("[26.3-web] webgpu: " + WGSL_ROOT + "manifest.json missing from the asset bundle; no pipeline can compile");
 			return null;
 		}
-		return JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject();
+		JsonObject parsed = JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject();
+		cachedManifest = parsed;
+		manifestLoaded = true;
+		return parsed;
 	}
 
 	static boolean manifestPresent() {
-		return WebPackResources.rawAsset(WGSL_ROOT + "manifest.json") != null;
+		return loadManifest() != null;
 	}
 
 	static void warnOnce(String message) {

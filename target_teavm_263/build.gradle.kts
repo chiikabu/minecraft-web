@@ -75,6 +75,7 @@ val replacedClasslibClasses = listOf(
 	"org/teavm/classlib/impl/console/JsConsolePrintStream",
 	"org/teavm/classlib/java/util/TFormatter",
 	"org/teavm/classlib/java/util/TAbstractMap",
+	"org/teavm/classlib/java/util/TCollections",
 	"org/teavm/classlib/java/util/TArrayDeque",
 	"org/teavm/classlib/java/util/stream/impl/TSimpleStreamSpliterator",
 	"org/teavm/classlib/java/util/stream/impl/TSimpleStreamImpl",

@@ -24,25 +24,48 @@ import http.server
 import json
 import os
 import re
+import shutil
 import socketserver
+import subprocess
 import sys
 import urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = os.path.join(ROOT, "target_teavm_263", "javascript-wasm-gc")
-COMPRESSIBLE = re.compile(r"\.(wasm|js|json|css|html|txt|teadbg)$")
+COMPRESSIBLE = re.compile(r"\.(wasm|js|json|css|html|txt|teadbg|wgsl)$")
 LINK = re.compile(r"^(?P<prefix>/(?:.*/)?)(?P<kind>play|r)/(?P<id>[^/?#]+)/?$")
 TYPES = {".wasm": "application/wasm", ".js": "text/javascript", ".json": "application/json",
          ".css": "text/css", ".html": "text/html; charset=utf-8", ".png": "image/png",
-         ".gz": "application/gzip", ".bin": "application/octet-stream",
-         ".jar": "application/java-archive", ".zip": "application/zip"}
+         ".gz": "application/gzip", ".zst": "application/zstd", ".bin": "application/octet-stream",
+         ".jar": "application/java-archive", ".zip": "application/zip", ".wgsl": "text/plain; charset=utf-8"}
 LOCAL_CORS_ORIGIN_RE = re.compile(r"^http://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$", re.IGNORECASE)
+
+def _zstd_packer():
+    try:
+        import zstandard
+        cctx = zstandard.ZstdCompressor(level=15)
+        return cctx.compress
+    except ImportError:
+        pass
+    try:
+        from compression import zstd as stdlib_zstd
+        return lambda d: stdlib_zstd.compress(d, level=15)
+    except ImportError:
+        pass
+    zstd_bin = shutil.which("zstd")
+    if zstd_bin:
+        def pack_cli(data):
+            proc = subprocess.run([zstd_bin, "-15", "-c"], input=data, capture_output=True, check=True)
+            return proc.stdout
+        return pack_cli
+    return None
 
 def precompress(web):
     try:
         import brotli
     except ImportError:
         brotli = None
+    zstd_pack = _zstd_packer()
     for folder, _, files in os.walk(web, followlinks=False):
         for name in files:
             path = os.path.join(folder, name)
@@ -52,7 +75,8 @@ def precompress(web):
                 data = handle.read()
             mtime = os.path.getmtime(path)
             for suffix, pack in ((".gz", lambda d: gzip.compress(d, 9)),
-                                 (".br", (lambda d: brotli.compress(d, quality=9, lgwin=24)) if brotli else None)):
+                                 (".br", (lambda d: brotli.compress(d, quality=9, lgwin=24)) if brotli else None),
+                                 (".zst", zstd_pack)):
                 out = path + suffix
                 if pack is None or os.path.exists(out) and os.path.getmtime(out) >= mtime:
                     continue
@@ -124,6 +148,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(405)
         return None
 
+    def do_HEAD(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if self.send_encoded(path, head_only=True):
+            return None
+        if self.send_static_etag(path, head_only=True):
+            return None
+        return super().do_HEAD()
+
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/mods/status":
@@ -139,7 +171,83 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.share_page(None)
         if self.send_encoded(path):
             return None
+        if self.send_static_etag(path):
+            return None
         return super().do_GET()
+
+    def _etag(self, st, encoding=None):
+        suffix = ("-" + encoding) if encoding else ""
+        return '"%x-%x%s"' % (st.st_mtime_ns, st.st_size, suffix)
+
+    def _if_none_match(self, etag):
+        raw = self.headers.get("If-None-Match")
+        if not raw:
+            return False
+        target = etag[2:] if etag.startswith("W/") else etag
+        for token in raw.split(","):
+            t = token.strip()
+            if t == "*":
+                return True
+            if t.startswith("W/"):
+                t = t[2:]
+            if t == target:
+                return True
+        return False
+
+    def _accepted_encodings(self):
+        accept = self.headers.get("Accept-Encoding", "")
+        out = set()
+        for part in accept.split(","):
+            segs = [s.strip().lower() for s in part.split(";")]
+            enc = segs[0]
+            if not enc:
+                continue
+            q = 1.0
+            for s in segs[1:]:
+                if s.startswith("q="):
+                    try:
+                        q = float(s[2:])
+                    except ValueError:
+                        q = 0.0
+            if q > 0:
+                out.add(enc)
+        return out
+
+    def _stream_file(self, path):
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1 << 20)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
+    def send_static_etag(self, path, head_only=False):
+        local = self.translate_path(path)
+        if not os.path.isfile(local):
+            return False
+        st = os.stat(local)
+        etag = self._etag(st)
+        stamp = email.utils.formatdate(st.st_mtime, usegmt=True)
+        inm = self.headers.get("If-None-Match")
+        if self._if_none_match(etag) or (not inm and self.headers.get("If-Modified-Since") == stamp):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", stamp)
+            if COMPRESSIBLE.search(local):
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            return True
+        self.send_response(200)
+        self.send_header("Content-Type", self.guess_type(local))
+        self.send_header("Content-Length", str(st.st_size))
+        self.send_header("Last-Modified", stamp)
+        self.send_header("ETag", etag)
+        if COMPRESSIBLE.search(local):
+            self.send_header("Vary", "Accept-Encoding")
+        self.end_headers()
+        if not head_only:
+            self._stream_file(local)
+        return True
 
     def json(self, status, data, cors=False):
         body = json.dumps(data).encode()
@@ -166,33 +274,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(page)
 
-    def send_encoded(self, path):
+    def send_encoded(self, path, head_only=False):
         local = self.translate_path(path)
         if not os.path.isfile(local) or not COMPRESSIBLE.search(local):
             return False
-        accept = self.headers.get("Accept-Encoding", "")
-        for suffix, encoding in ((".br", "br"), (".gz", "gzip")):
+        accepted = self._accepted_encodings()
+        local_mtime = os.path.getmtime(local)
+        for suffix, encoding in ((".zst", "zstd"), (".br", "br"), (".gz", "gzip")):
             packed = local + suffix
-            if encoding in accept and os.path.isfile(packed) and os.path.getmtime(packed) >= os.path.getmtime(local):
-                stamp = email.utils.formatdate(os.path.getmtime(local), usegmt=True)
-                if self.headers.get("If-Modified-Since") == stamp:
+            if encoding in accepted and os.path.isfile(packed) and os.path.getmtime(packed) >= local_mtime:
+                st = os.stat(packed)
+                etag = self._etag(st, encoding)
+                stamp = email.utils.formatdate(local_mtime, usegmt=True)
+                inm = self.headers.get("If-None-Match")
+                if self._if_none_match(etag) or (not inm and self.headers.get("If-Modified-Since") == stamp):
                     self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.send_header("Last-Modified", stamp)
+                    self.send_header("Vary", "Accept-Encoding")
                     self.end_headers()
                     return True
-                size = os.path.getsize(packed)
                 self.send_response(200)
                 self.send_header("Content-Type", self.guess_type(local))
                 self.send_header("Content-Encoding", encoding)
                 self.send_header("Vary", "Accept-Encoding")
-                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Length", str(st.st_size))
                 self.send_header("Last-Modified", stamp)
+                self.send_header("ETag", etag)
                 self.end_headers()
-                with open(packed, "rb") as handle:
-                    while True:
-                        chunk = handle.read(1 << 20)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
+                if not head_only:
+                    self._stream_file(packed)
                 return True
         return False
 

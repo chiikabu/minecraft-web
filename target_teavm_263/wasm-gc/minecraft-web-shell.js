@@ -169,22 +169,32 @@
 
 	var nativeFetch = window.fetch;
 	var progress = { read: 0, expect: 0 };
+	var lastProgressPaint = 0;
 	function encodedRatio(encoding) {
-		if (encoding === "br") { return 4; }
+		if (encoding === "br" || encoding === "zstd") { return 4; }
 		if (encoding === "gzip" || encoding === "deflate") { return 3.3; }
 		return 1;
 	}
-	function updateDownload() {
+	function updateDownload(force) {
 		if (!booting || progress.expect <= 0) { return; }
+		var now = performance.now();
+		if (!force && now - lastProgressPaint < 80) { return; }
+		lastProgressPaint = now;
 		var mb = progress.read / 1048576;
 		T.bootStage("Downloading " + mb.toFixed(mb < 10 ? 1 : 0) + " MB", 2 + 93 * Math.min(1, progress.read / progress.expect));
 	}
-	window.fetch = function () {
+	window.fetch = function (input) {
 		var pending = nativeFetch.apply(this, arguments);
 		if (!booting || typeof TransformStream === "undefined") { return pending; }
+		var reqUrl = typeof input === "string" ? input : (input && typeof input.url === "string" ? input.url : "");
+		// Leave .wasm fetches unwrapped so Chrome/V8 HTTP WebAssembly code caching works on compileStreaming.
+		if (/\.wasm(?:[?#]|$)/i.test(reqUrl)) { return pending; }
 		return pending.then(function (response) {
 			try {
 				if (!response.ok || !response.body) { return response; }
+				var contentType = response.headers.get("content-type") || "";
+				var resUrl = response.url || reqUrl;
+				if (/application\/wasm/i.test(contentType) || /\.wasm(?:[?#]|$)/i.test(resUrl)) { return response; }
 				var length = +response.headers.get("content-length") || 0;
 				var expect = Math.round(length * encodedRatio(response.headers.get("content-encoding")));
 				var seen = 0;
@@ -194,8 +204,11 @@
 						seen += chunk.byteLength;
 						progress.read += chunk.byteLength;
 						if (seen > expect) { progress.expect += chunk.byteLength; expect = seen; }
-						updateDownload();
+						updateDownload(false);
 						controller.enqueue(chunk);
+					},
+					flush: function () {
+						updateDownload(true);
 					}
 				});
 				return new Response(response.body.pipeThrough(counter), {

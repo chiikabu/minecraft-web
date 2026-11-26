@@ -16,7 +16,7 @@ def build(zig="zig"):
     with tempfile.TemporaryDirectory(prefix="xz-decoder-") as temporary:
         output = Path(temporary) / "decoder.wasm"
         subprocess.run([zig, "cc", "-target", "wasm32-wasi", "-mexec-model=reactor",
-                        "-Oz", "-flto", "-DXZ_DEC_SINGLE", "-I" + str(library), *map(str, sources),
+                        "-O2", "-flto", "-DXZ_DEC_SINGLE", "-I" + str(library), *map(str, sources),
                         "-Wl,--export=decode", "-Wl,--export=malloc",
                         "-Wl,--max-memory=2147483648", "-Wl,--strip-all", "-o", str(output)],
                        check=True, timeout=120)

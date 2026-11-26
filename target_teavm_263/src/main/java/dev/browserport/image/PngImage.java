@@ -34,7 +34,8 @@ public final class PngImage {
 		int width = 0, height = 0, depth = 0, color = -1, channels = 0, interlace = 0;
 		byte[] palette = null, transparency = null;
 		boolean seenData = false, endedData = false, ended = false;
-		ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+		int firstIdatOffset = -1, firstIdatLen = 0, totalCompressed = 0;
+		ByteArrayOutputStream compressed = null;
 		CRC32 crc = new CRC32();
 		for (int offset = 8; offset < data.length;) {
 			if (data.length - offset < 12) throw invalid("truncated chunk");
@@ -74,9 +75,21 @@ public final class PngImage {
 					break;
 				case 0x49444154:
 					if (endedData || color == 3 && palette == null) throw invalid("invalid IDAT order");
-					if (length > MAX_DECODE_BYTES - compressed.size()) throw invalid("compressed data exceeds decode limit");
+					if (length > MAX_DECODE_BYTES - totalCompressed) throw invalid("compressed data exceeds decode limit");
 					seenData = true;
-					compressed.write(data, body, length);
+					totalCompressed += length;
+					if (compressed == null) {
+						if (firstIdatOffset < 0) {
+							firstIdatOffset = body;
+							firstIdatLen = length;
+						} else {
+							compressed = new ByteArrayOutputStream(totalCompressed);
+							compressed.write(data, firstIdatOffset, firstIdatLen);
+							compressed.write(data, body, length);
+						}
+					} else {
+						compressed.write(data, body, length);
+					}
 					break;
 				case 0x49454e44:
 					if (length != 0 || !seenData) throw invalid("invalid IEND");
@@ -102,12 +115,115 @@ public final class PngImage {
 		if (expected + pixelBytes > MAX_DECODE_BYTES) throw invalid("image exceeds decode limit");
 		byte[] raw;
 		try {
-			raw = WebInflate.zlib(compressed.toByteArray(), (int) expected);
+			if (compressed == null) {
+				raw = WebInflate.zlib(data, firstIdatOffset, firstIdatLen, (int) expected);
+			} else {
+				raw = WebInflate.zlib(compressed.toByteArray(), (int) expected);
+			}
 		} catch (RuntimeException failure) {
 			throw new IOException("Could not load image: corrupt PNG data", failure);
 		}
 		if (raw.length != expected) throw invalid("incorrect scanline data length");
 		byte[] pixels = new byte[(int) pixelBytes];
+		if (interlace == 0 && depth == 8) {
+			if (transparency == null && color == 6 && components == 4) {
+				int stride = width * 4;
+				int cursor = 0, previous = -1;
+				for (int y = 0; y < height; y++) {
+					int filter = raw[cursor++] & 255, line = cursor;
+					unfilter(raw, line, previous, stride, 4, filter);
+					System.arraycopy(raw, line, pixels, y * stride, stride);
+					previous = line;
+					cursor += stride;
+				}
+				return new PngImage(pixels, width, height, components);
+			}
+			if (transparency == null && color == 2 && components == 4) {
+				int stride = width * 3, outStride = width * 4;
+				int cursor = 0, previous = -1;
+				for (int y = 0; y < height; y++) {
+					int filter = raw[cursor++] & 255, line = cursor;
+					unfilter(raw, line, previous, stride, 3, filter);
+					int src = line, end = line + stride, dst = y * outStride;
+					while (src < end) {
+						pixels[dst] = raw[src];
+						pixels[dst + 1] = raw[src + 1];
+						pixels[dst + 2] = raw[src + 2];
+						pixels[dst + 3] = (byte) 255;
+						src += 3;
+						dst += 4;
+					}
+					previous = line;
+					cursor += stride;
+				}
+				return new PngImage(pixels, width, height, components);
+			}
+			if (transparency == null && color == 2 && components == 3) {
+				int stride = width * 3;
+				int cursor = 0, previous = -1;
+				for (int y = 0; y < height; y++) {
+					int filter = raw[cursor++] & 255, line = cursor;
+					unfilter(raw, line, previous, stride, 3, filter);
+					System.arraycopy(raw, line, pixels, y * stride, stride);
+					previous = line;
+					cursor += stride;
+				}
+				return new PngImage(pixels, width, height, components);
+			}
+			if (color == 3 && components == 4) {
+				int paletteCount = palette.length / 3;
+				byte[] rgbaPal = new byte[paletteCount * 4];
+				int trnsLen = transparency != null ? transparency.length : 0;
+				for (int i = 0; i < paletteCount; i++) {
+					int p3 = i * 3, p4 = i << 2;
+					rgbaPal[p4] = palette[p3];
+					rgbaPal[p4 + 1] = palette[p3 + 1];
+					rgbaPal[p4 + 2] = palette[p3 + 2];
+					rgbaPal[p4 + 3] = i < trnsLen ? transparency[i] : (byte) 255;
+				}
+				int stride = width, outStride = width * 4;
+				int cursor = 0, previous = -1;
+				for (int y = 0; y < height; y++) {
+					int filter = raw[cursor++] & 255, line = cursor;
+					unfilter(raw, line, previous, stride, 1, filter);
+					int dst = y * outStride;
+					for (int x = 0; x < width; x++) {
+						int idx = raw[line + x] & 255;
+						if (idx >= paletteCount) throw invalid("palette index out of range");
+						int p4 = idx << 2;
+						pixels[dst] = rgbaPal[p4];
+						pixels[dst + 1] = rgbaPal[p4 + 1];
+						pixels[dst + 2] = rgbaPal[p4 + 2];
+						pixels[dst + 3] = rgbaPal[p4 + 3];
+						dst += 4;
+					}
+					previous = line;
+					cursor += stride;
+				}
+				return new PngImage(pixels, width, height, components);
+			}
+			if (transparency == null && color == 4 && components == 4) {
+				int stride = width * 2, outStride = width * 4;
+				int cursor = 0, previous = -1;
+				for (int y = 0; y < height; y++) {
+					int filter = raw[cursor++] & 255, line = cursor;
+					unfilter(raw, line, previous, stride, 2, filter);
+					int src = line, end = line + stride, dst = y * outStride;
+					while (src < end) {
+						byte g = raw[src];
+						pixels[dst] = g;
+						pixels[dst + 1] = g;
+						pixels[dst + 2] = g;
+						pixels[dst + 3] = raw[src + 1];
+						src += 2;
+						dst += 4;
+					}
+					previous = line;
+					cursor += stride;
+				}
+				return new PngImage(pixels, width, height, components);
+			}
+		}
 		int cursor = 0, bpp = Math.max(1, channels * depth / 8), shift = depth == 16 ? 8 : 0;
 		int maximum = depth == 16 ? 65535 : 255;
 		for (int pass = firstPass; pass < lastPass; pass++) {
@@ -158,22 +274,69 @@ public final class PngImage {
 	}
 
 	private static void unfilter(byte[] raw, int line, int previous, int count, int bpp, int filter) throws IOException {
-		if (filter > 4) throw invalid("unknown filter");
-		if (filter == 0) return;
-		for (int i = 0; i < count; i++) {
-			int a = i >= bpp ? raw[line + i - bpp] & 255 : 0;
-			int b = previous >= 0 ? raw[previous + i] & 255 : 0;
-			int predictor;
-			switch (filter) {
-				case 1: predictor = a; break;
-				case 2: predictor = b; break;
-				case 3: predictor = (a + b) >> 1; break;
-				default:
-					int c = previous >= 0 && i >= bpp ? raw[previous + i - bpp] & 255 : 0;
-					int p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-					predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+		switch (filter) {
+			case 0:
+				return;
+			case 1: {
+				int end = line + count;
+				for (int cur = line + bpp; cur < end; cur++) {
+					raw[cur] += raw[cur - bpp];
+				}
+				return;
 			}
-			raw[line + i] += (byte) predictor;
+			case 2: {
+				if (previous < 0) return;
+				int end = line + count;
+				for (int cur = line, prev = previous; cur < end; cur++, prev++) {
+					raw[cur] += raw[prev];
+				}
+				return;
+			}
+			case 3: {
+				int limit = Math.min(bpp, count);
+				int end = line + count;
+				if (previous < 0) {
+					for (int cur = line + bpp; cur < end; cur++) {
+						raw[cur] += (byte) ((raw[cur - bpp] & 255) >> 1);
+					}
+				} else {
+					for (int i = 0; i < limit; i++) {
+						raw[line + i] += (byte) ((raw[previous + i] & 255) >> 1);
+					}
+					for (int cur = line + bpp, prev = previous + bpp; cur < end; cur++, prev++) {
+						raw[cur] += (byte) (((raw[cur - bpp] & 255) + (raw[prev] & 255)) >> 1);
+					}
+				}
+				return;
+			}
+			case 4: {
+				int limit = Math.min(bpp, count);
+				int end = line + count;
+				if (previous < 0) {
+					for (int cur = line + bpp; cur < end; cur++) {
+						raw[cur] += raw[cur - bpp];
+					}
+				} else {
+					for (int i = 0; i < limit; i++) {
+						raw[line + i] += raw[previous + i];
+					}
+					for (int cur = line + bpp, prev = previous + bpp; cur < end; cur++, prev++) {
+						int a = raw[cur - bpp] & 255;
+						int b = raw[prev] & 255;
+						int c = raw[prev - bpp] & 255;
+						int pa = b - c;
+						int pb = a - c;
+						int pc = pa + pb;
+						if (pa < 0) pa = -pa;
+						if (pb < 0) pb = -pb;
+						if (pc < 0) pc = -pc;
+						raw[cur] += (byte) ((pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c));
+					}
+				}
+				return;
+			}
+			default:
+				throw invalid("unknown filter");
 		}
 	}
 

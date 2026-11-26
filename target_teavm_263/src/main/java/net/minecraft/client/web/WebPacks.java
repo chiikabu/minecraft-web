@@ -31,6 +31,51 @@ public final class WebPacks {
 		clickPicker();
 	}
 
+	/** Install and enable a resource pack zip directly from raw bytes (e.g., downloaded from Modrinth). Returns null on success or an error message. */
+	public static String installResourcePack(final String filename, final byte[] bytes) {
+		String name = sanitize(filename);
+		String problem = whyNotAPack(bytes);
+		if (SHADER_PACK.equals(problem)) {
+			String err = net.minecraft.client.web.shaderpack.ShaderPacks.accept(filename, bytes);
+			if (err == null) {
+				toast("Added shader pack " + filename, "Turn it on in Options > Video Settings > Shader Packs.");
+			}
+			return err;
+		}
+		if (problem != null) {
+			toast("Could not add " + filename, problem);
+			return problem;
+		}
+		try {
+			WebSaves.mkdirs(DIR);
+			WebSaves.writeFile(DIR + "/" + name, bytes);
+		} catch (Throwable e) {
+			toast("Could not add " + filename, "The browser refused to store it (out of space?)");
+			return "Storage write failed";
+		}
+		System.out.println("[26.3-web] added pack " + name + " to " + DIR + " (" + bytes.length + " bytes)");
+		Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft != null) {
+			PackRepository repository = minecraft.getResourcePackRepository();
+			repository.reload();
+			String id = "file/" + name;
+			if (repository.getAvailableIds().contains(id)) {
+				java.util.List<String> selected = new java.util.ArrayList<>(repository.getSelectedIds());
+				if (!selected.contains(id)) {
+					selected.add(id);
+				}
+				repository.setSelected(selected);
+				java.util.List<String> previous = java.util.List.copyOf(minecraft.options.resourcePacks);
+				minecraft.options.updateResourcePacks(repository);
+				if (previous.equals(minecraft.options.resourcePacks)) {
+					minecraft.reloadResourcePacks();
+				}
+			}
+			toast("Installed resource pack", name);
+		}
+		return null;
+	}
+
 	private static void accept(final String filename, final Int8Array data) {
 		String name = sanitize(filename);
 		byte[] bytes = data.copyToJavaArray();

@@ -1,1 +1,53 @@
-[{"start":142,"delete":0,"insert":"import com.google.gson.internal.GsonTypes;\n"},{"start":972,"delete":0,"insert":[{"copy":972,"length":35},"SoundBufferLibrary.DebugOutput;\n"]},{"start":2921,"delete":0,"insert":"@SuppressWarnings(\"unchecked\")\n   "},{"start":3020,"delete":5,"insert":"\n      ("},{"start":3071,"delete":0,"insert":")TypeToken.get"},{"start":3072,"delete":0,"insert":"\n         GsonTypes.newParameterizedTypeWithOwner(null, Map.class, String.class, SoundEventRegistration.class"},{"start":3073,"delete":3,"insert":"\n      )"},{"start":8774,"delete":19,"insert":""}]
+[
+  {
+    "start": 142,
+    "delete": 0,
+    "insert": "import com.google.gson.internal.GsonTypes;\n"
+  },
+  {
+    "start": 972,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 972,
+        "length": 35
+      },
+      "SoundBufferLibrary.DebugOutput;\n"
+    ]
+  },
+  {
+    "start": 2921,
+    "delete": 0,
+    "insert": "@SuppressWarnings(\"unchecked\")\n   "
+  },
+  {
+    "start": 3020,
+    "delete": 5,
+    "insert": "\n      ("
+  },
+  {
+    "start": 3071,
+    "delete": 0,
+    "insert": ")TypeToken.get"
+  },
+  {
+    "start": 3072,
+    "delete": 0,
+    "insert": "\n         GsonTypes.newParameterizedTypeWithOwner(null, Map.class, String.class, SoundEventRegistration.class"
+  },
+  {
+    "start": 3073,
+    "delete": 3,
+    "insert": "\n      )"
+  },
+  {
+    "start": 3720,
+    "delete": 0,
+    "insert": "      }\n\n      if (preparations.soundCache.isEmpty()) {\n         return preparations;\n"
+  },
+  {
+    "start": 8774,
+    "delete": 19,
+    "insert": ""
+  }
+]

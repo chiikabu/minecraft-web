@@ -21,14 +21,19 @@ public final class WebWorkerTransport {
 			return startPackagedServer(baseHref(), pageChunkTransportDebugRequested(),
 				pageGenWorkersRequested(), pageFixedSeed());
 		}
-		if (!embedded && sharedModuleAvailable()) {
+		if (sharedModuleAvailable(embedded)) {
 			return spawnWithSharedModule(sharedModuleBootstrap());
 		}
 		return embedded ? spawnWithEmbeddedAssets(embeddedBootstrapFor(moduleUrl)) : spawn(bootstrapFor(moduleUrl));
 	}
 
-	@JSBody(script = "return !!(globalThis.__minecraftWebSharedModule instanceof WebAssembly.Module) && !/[?&]splitwasm(?:[=&]|$)/.test(location.search || '');")
-	private static native boolean sharedModuleAvailable();
+	@JSBody(params = {"embedded"}, script =
+		"var hasMod = (globalThis.__minecraftWebSharedModule instanceof WebAssembly.Module)"
+		+ " || (globalThis.__minecraftClientModule instanceof WebAssembly.Module);"
+		+ "if (!hasMod || /[?&]splitwasm(?:[=&]|$)/.test(location.search || '')) return false;"
+		+ "if (embedded && typeof globalThis.__minecraftWorkerServerRuntime !== 'string') return false;"
+		+ "return true;")
+	private static native boolean sharedModuleAvailable(boolean embedded);
 
 	private static String sharedModuleBootstrap() {
 		return "self.__minecraftBase = " + quote(baseHref()) + ";\n"
@@ -41,22 +46,32 @@ public final class WebWorkerTransport {
 			+ "  self.onmessage = null;\n"
 			+ "  self.__minecraftDeobf = !!d.deobf;\n"
 			+ "  if (d.assets && d.index) { self.__minecraftAssetsIndex = d.index; self.__minecraftAssetsBinRaw = d.assets; self.__minecraftGenAssets = d.assets; self.__minecraftGenIndex = d.index; }\n"
-			+ "  var base = new URL('wasm-gc/', self.__minecraftBase).href;\n"
-			+ "  try { importScripts(new URL('minecraft-web-simd-kernels.js', self.__minecraftBase).href); } catch (e) {}\n"
-			+ "  importScripts(base + 'classes263.wasm-runtime.js');\n"
-			+ "  var fail = function(error) { setTimeout(function() { throw error; }, 0); };\n"
-			+ compilePassthroughShim()
-			+ "  try {\n"
-			+ "    self.__minecraftServerModule = d.module;\n"
-			+ "    Promise.resolve(self.TeaVM.wasmGC.load(d.module, {\n"
+			+ "  var loadOpts;\n"
+			+ "  if (d.serverRuntime) {\n"
+			+ "    self.__minecraftServerRuntimeSource = d.serverRuntime;\n"
+			+ "    self.__minecraftGenRuntimeSource = d.genRuntime || null;\n"
+			+ "    (0, eval)(d.serverRuntime);\n"
+			+ "    loadOpts = { stackDeobfuscator: { enabled: false } };\n"
+			+ "  } else {\n"
+			+ "    var base = new URL('wasm-gc/', self.__minecraftBase).href;\n"
+			+ "    try { importScripts(new URL('minecraft-web-simd-kernels.js', self.__minecraftBase).href); } catch (err) {}\n"
+			+ "    importScripts(base + 'classes263.wasm-runtime.js');\n"
+			+ "    loadOpts = {\n"
 			+ "      stackDeobfuscator: {\n"
 			+ "        enabled: self.__minecraftDeobf === true,\n"
 			+ "        infoLocation: 'external',\n"
 			+ "        path: base + 'classes263.wasm-deobfuscator.wasm',\n"
 			+ "        externalInfoPath: base + 'classes263.wasm.teadbg'\n"
 			+ "      }\n"
-			+ "    }).then(function(teavm) {\n"
-			+ "      try { var s = self.__mcWebSimd || self.__twitSimd; var m = self.__teavmMemory || (teavm && teavm.exports && teavm.exports['teavm.memory']); if (s && m) { s.bind(m); } } catch (e) {}\n"
+			+ "    };\n"
+			+ "  }\n"
+			+ "  var fail = function(error) { setTimeout(function() { throw error; }, 0); };\n"
+			+ compilePassthroughShim()
+			+ "  try {\n"
+			+ "    self.__minecraftServerModule = d.module;\n"
+			+ "    Promise.resolve(self.TeaVM.wasmGC.load(d.module, loadOpts).then(function(teavm) {\n"
+			+ "      try { var s = self.__mcWebSimd || self.__twitSimd; var m = self.__teavmMemory || (teavm && teavm.exports && teavm.exports['teavm.memory']); if (s && m) { s.bind(m); } } catch (err2) {}\n"
+			+ "      if (d.genWasm && d.genRuntime) { WebAssembly.compile(d.genWasm, {builtins: ['js-string']}).then(function(gm) { self.__minecraftGenModule = gm; d.genWasm = null; }).catch(fail); }\n"
 			+ "      return teavm.exports.main([]);\n"
 			+ "    })).catch(fail);\n"
 			+ "  } catch (error) { fail(error); }\n"
@@ -64,23 +79,32 @@ public final class WebWorkerTransport {
 	}
 
 	@JSBody(params = {"source"}, script =
-		"var mod = globalThis.__minecraftWebSharedModule;"
-		+ "var raw = globalThis.__minecraftWorkerAssetsRaw;"
-		+ "var indexStr = globalThis.__minecraftWorkerAssetsIndex;"
+		"var mod = (globalThis.__minecraftWebSharedModule instanceof WebAssembly.Module)"
+		+ " ? globalThis.__minecraftWebSharedModule : globalThis.__minecraftClientModule;"
+		+ "var raw = globalThis.__minecraftWorkerAssetsRaw || globalThis.__minecraftAssetsBinRaw;"
+		+ "var indexVal = globalThis.__minecraftWorkerAssetsIndex || globalThis.__minecraftAssetsIndex;"
+		+ "var serverRuntime = typeof globalThis.__minecraftWorkerServerRuntime === 'string' ? globalThis.__minecraftWorkerServerRuntime : null;"
+		+ "var genRuntime = typeof globalThis.__minecraftWorkerGenRuntime === 'string' ? globalThis.__minecraftWorkerGenRuntime : null;"
+		+ "var genWasm = globalThis.__minecraftWorkerGenWasm || null;"
 		+ "globalThis.__minecraftWorkerAssetsRaw = undefined;"
 		+ "globalThis.__minecraftWorkerAssetsIndex = undefined;"
+		+ "globalThis.__minecraftWorkerServerRuntime = undefined;"
+		+ "globalThis.__minecraftWorkerServerWasm = undefined;"
+		+ "globalThis.__minecraftWorkerGenRuntime = undefined;"
+		+ "globalThis.__minecraftWorkerGenWasm = undefined;"
 		+ "var serverAssets = null, serverIndex = null, transfer = [];"
-		+ "if (raw && raw.buffer && typeof indexStr === 'string') {"
+		+ "if (raw && raw.buffer && (typeof indexVal === 'string' || (indexVal && typeof indexVal === 'object'))) {"
 		+ "  try {"
-		+ "    var parsed = JSON.parse(indexStr), outIdx = {}, total = 0, keys = Object.keys(parsed);"
+		+ "    var parsed = typeof indexVal === 'string' ? JSON.parse(indexVal) : indexVal;"
+		+ "    var outIdx = {}, total = 0, keys = Object.keys(parsed);"
 		+ "    for (var i = 0; i < keys.length; i++) {"
 		+ "      var k = keys[i];"
-		+ "      if (!k.startsWith('assets/minecraft/') || k.startsWith('assets/minecraft/lang/')) { total += parsed[k][1]; }"
+		+ "      if (k.indexOf('assets/minecraft/') !== 0 || k.indexOf('assets/minecraft/lang/') === 0) { total += parsed[k][1]; }"
 		+ "    }"
 		+ "    var compact = new Uint8Array(total), pos = 0;"
 		+ "    for (var j = 0; j < keys.length; j++) {"
 		+ "      var k2 = keys[j];"
-		+ "      if (!k2.startsWith('assets/minecraft/') || k2.startsWith('assets/minecraft/lang/')) {"
+		+ "      if (k2.indexOf('assets/minecraft/') !== 0 || k2.indexOf('assets/minecraft/lang/') === 0) {"
 		+ "        var span = parsed[k2], off = span[0], len = span[1];"
 		+ "        compact.set(raw.subarray(off, off + len), pos);"
 		+ "        outIdx[k2] = [pos, len];"
@@ -88,14 +112,16 @@ public final class WebWorkerTransport {
 		+ "      }"
 		+ "    }"
 		+ "    serverAssets = compact; serverIndex = outIdx; transfer.push(compact.buffer);"
-		+ "  } catch (e) { serverAssets = null; serverIndex = null; }"
+		+ "  } catch (e) { serverAssets = raw; serverIndex = indexVal; }"
 		+ "}"
+		+ "if (genWasm && genWasm.buffer) { transfer.push(genWasm.buffer); }"
 		+ "var blob = new Blob([source], {type: 'text/javascript'});"
 		+ "var url = URL.createObjectURL(blob);"
 		+ "var w; try { w = new Worker(url); } catch(e) { URL.revokeObjectURL(url); throw e; }"
 		+ "w.__minecraftSourceUrl = url;"
 		+ "var deobf = /[?&]deobf=1(?:[&]|$)/.test(location.search || '');"
-		+ "try { w.postMessage({__minecraftWebSharedBoot: true, module: mod, index: serverIndex, assets: serverAssets, deobf: deobf}, transfer); }"
+		+ "try { w.postMessage({__minecraftWebSharedBoot: true, module: mod, index: serverIndex, assets: serverAssets,"
+		+ "  serverRuntime: serverRuntime, genRuntime: genRuntime, genWasm: genWasm, deobf: deobf}, transfer); }"
 		+ "catch(e) { w.terminate(); URL.revokeObjectURL(url); throw e; }"
 		+ "return w;")
 	private static native JSObject spawnWithSharedModule(String source);

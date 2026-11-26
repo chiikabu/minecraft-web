@@ -66,6 +66,7 @@ public class WebMain {
 		WebMemProbe.install();
 		final boolean tryWebGpu = com.mojang.blaze3d.webgpu.WebGpuBackend.wanted();
 		if (tryWebGpu) {
+			com.mojang.blaze3d.webgpu.WebGpuNatives.hookEarlyProbe();
 			com.mojang.blaze3d.webgpu.WebGpuBackend.startProbe();
 		}
 		System.setProperty(Credits.open(16150, 30252, 50378, 23864, 65121, 56953, 20163, 9233, 4513, 32803, 63638, 55468, 13928, 63354, 22928, 47281, 34039, 2192, 25633, 23918, 62245, 16541), "true");
@@ -194,10 +195,32 @@ public class WebMain {
 	@JSBody(params = { "k", "v" }, script = "try { window.localStorage.setItem(k, v); } catch (e) {}")
 	private static native void lsSet(String k, String v);
 
+	private static String seedFastOptions() {
+		return "version:" + SharedConstants.getCurrentVersion().dataVersion().version() + "\n"
+			+ "renderDistance:4\n"
+			+ "simulationDistance:5\n"
+			+ "chunkSectionFadeInTime:0.0\n"
+			+ "cutoutLeaves:false\n"
+			+ "improvedTransparency:false\n"
+			+ "entityShadows:false\n"
+			+ "entityDistanceScaling:0.5\n"
+			+ "particles:2\n"
+			+ "biomeBlendRadius:0\n"
+			+ "ao:false\n"
+			+ "menuBackgroundBlurriness:0\n"
+			+ "vignette:false\n"
+			+ "mipmapLevels:1\n"
+			+ "weatherRadius:5\n";
+	}
+
 	private static void boot(HTMLCanvasElement canvas) {
 		long t = System.currentTimeMillis();
 		try {
-			boolean firstRun = net.minecraft.client.OptionsStorage.read(new File("/options.txt")) == null;
+			File optionsFile = new File("/options.txt");
+			boolean firstRun = net.minecraft.client.OptionsStorage.read(optionsFile) == null;
+			if (firstRun) {
+				net.minecraft.client.OptionsStorage.write(optionsFile, seedFastOptions());
+			}
 			Minecraft.allowOfflineProfileKeys = true;
 			Minecraft.web263MaxTicksPerFrame = Math.max(1, Math.min(10, queryInt("maxticks", 4)));
 			net.minecraft.client.FramerateLimiter.externallyPaced = true;

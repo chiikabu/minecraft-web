@@ -29,6 +29,14 @@
       }
       return root.__minecraftWebStore || null;
     };
+    root.__minecraftIdbBackendMulti = api.idbBackendMulti;
+    root.__minecraftInstallOfflineCache = function () {
+      if (!root.__minecraftOfflineCache && typeof root.indexedDB !== "undefined" && root.indexedDB) {
+        try { root.__minecraftOfflineCache = api.idbBackendMulti(root.indexedDB, "minecraft-offline-cache", "blobs"); }
+        catch (e) { root.__minecraftOfflineCache = null; }
+      }
+      return root.__minecraftOfflineCache || null;
+    };
     root.__minecraftFetchThenCache = api.fetchThenCache;
     root.__minecraftPruneStore = api.prune;
   }
@@ -54,13 +62,44 @@
     });
   }
 
+  function cachedDb(idb, dbName, storeName) {
+    var dbPromise = null;
+    function reset() { dbPromise = null; }
+    function getDb() {
+      if (!dbPromise) {
+        dbPromise = open(idb, dbName, storeName).then(function (db) {
+          db.onclose = reset;
+          db.onversionchange = function () {
+            reset();
+            try { db.close(); } catch (e) {}
+          };
+          return db;
+        }, function (err) {
+          reset();
+          throw err;
+        });
+      }
+      return dbPromise;
+    }
+    return function withDb(fn) {
+      return getDb().then(function (db) {
+        try {
+          return fn(db);
+        } catch (e) {
+          reset();
+          return getDb().then(fn);
+        }
+      });
+    };
+  }
+
   function idbBackend(idb, dbName, storeName) {
+    var withDb = cachedDb(idb, dbName, storeName);
     return {
       get: function (key) {
-        return open(idb, dbName, storeName).then(function (db) {
+        return withDb(function (db) {
           var tx = db.transaction(storeName, "readonly");
           return req(tx.objectStore(storeName).get(key)).then(function (v) {
-            db.close();
             if (v === undefined || v === null) { return null; }
             if (typeof Blob !== "undefined" && v instanceof Blob) {
               return v.arrayBuffer().then(function (b) { return new Uint8Array(b); });
@@ -70,25 +109,27 @@
         });
       },
       put: function (key, bytes) {
-        return open(idb, dbName, storeName).then(function (db) {
+        var payload = (typeof Blob !== "undefined") ? new Blob([bytes]) : bytes;
+        return withDb(function (db) {
           return new Promise(function (resolve, reject) {
             var tx = db.transaction(storeName, "readwrite");
             var os = tx.objectStore(storeName);
             os.clear();
-            os.put((typeof Blob !== "undefined") ? new Blob([bytes]) : bytes, key);
-            tx.oncomplete = function () { db.close(); resolve(); };
-            tx.onerror = function () { db.close(); reject(tx.error); };
-            tx.onabort = function () { db.close(); reject(tx.error); };
+            os.put(payload, key);
+            tx.oncomplete = function () { resolve(); };
+            tx.onerror = function () { reject(tx.error); };
+            tx.onabort = function () { reject(tx.error); };
           });
         });
       },
       clear: function () {
-        return open(idb, dbName, storeName).then(function (db) {
+        return withDb(function (db) {
           return new Promise(function (resolve, reject) {
             var tx = db.transaction(storeName, "readwrite");
             tx.objectStore(storeName).clear();
-            tx.oncomplete = function () { db.close(); resolve(); };
-            tx.onerror = function () { db.close(); reject(tx.error); };
+            tx.oncomplete = function () { resolve(); };
+            tx.onerror = function () { reject(tx.error); };
+            tx.onabort = function () { reject(tx.error); };
           });
         });
       }
@@ -96,12 +137,12 @@
   }
 
   function idbBackendMulti(idb, dbName, storeName) {
+    var withDb = cachedDb(idb, dbName, storeName);
     return {
       get: function (key) {
-        return open(idb, dbName, storeName).then(function (db) {
+        return withDb(function (db) {
           var tx = db.transaction(storeName, "readonly");
           return req(tx.objectStore(storeName).get(key)).then(function (v) {
-            db.close();
             if (v === undefined || v === null) { return null; }
             if (typeof Blob !== "undefined" && v instanceof Blob) {
               return v.arrayBuffer().then(function (b) { return new Uint8Array(b); });
@@ -111,33 +152,33 @@
         });
       },
       put: function (key, bytes) {
-        return open(idb, dbName, storeName).then(function (db) {
+        var payload = (typeof Blob !== "undefined") ? new Blob([bytes]) : bytes;
+        return withDb(function (db) {
           return new Promise(function (resolve, reject) {
             var tx = db.transaction(storeName, "readwrite");
-            tx.objectStore(storeName).put((typeof Blob !== "undefined") ? new Blob([bytes]) : bytes, key);
-            tx.oncomplete = function () { db.close(); resolve(); };
-            tx.onerror = function () { db.close(); reject(tx.error); };
-            tx.onabort = function () { db.close(); reject(tx.error); };
+            tx.objectStore(storeName).put(payload, key);
+            tx.oncomplete = function () { resolve(); };
+            tx.onerror = function () { reject(tx.error); };
+            tx.onabort = function () { reject(tx.error); };
           });
         });
       },
       keys: function () {
-        return open(idb, dbName, storeName).then(function (db) {
+        return withDb(function (db) {
           var tx = db.transaction(storeName, "readonly");
           return req(tx.objectStore(storeName).getAllKeys()).then(function (ks) {
-            db.close();
             return ks || [];
           });
         });
       },
       del: function (key) {
-        return open(idb, dbName, storeName).then(function (db) {
+        return withDb(function (db) {
           return new Promise(function (resolve, reject) {
             var tx = db.transaction(storeName, "readwrite");
             tx.objectStore(storeName).delete(key);
-            tx.oncomplete = function () { db.close(); resolve(); };
-            tx.onerror = function () { db.close(); reject(tx.error); };
-            tx.onabort = function () { db.close(); reject(tx.error); };
+            tx.oncomplete = function () { resolve(); };
+            tx.onerror = function () { reject(tx.error); };
+            tx.onabort = function () { reject(tx.error); };
           });
         });
       }

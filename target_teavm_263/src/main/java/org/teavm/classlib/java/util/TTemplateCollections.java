@@ -215,21 +215,29 @@ public final class TTemplateCollections {
         }
     }
 
+    private static int nextPow2(int minCap) {
+        int cap = 4;
+        while (cap < minCap) {
+            cap <<= 1;
+        }
+        return cap;
+    }
+
+    private static int mixHash(int h) {
+        return h ^ (h >>> 16);
+    }
+
     static class NElementSet<T> extends AbstractImmutableSet<T> {
         private T[] data;
         private Object[] index;
         private int mask;
 
-        @SuppressWarnings("unchecked")
         private void buildIndex() {
-            int cap = 4;
-            while (cap < data.length * 2) {
-                cap <<= 1;
-            }
+            int cap = nextPow2(Math.max(4, data.length * 2));
             Object[] idx = new Object[cap];
             int m = cap - 1;
             for (T element : data) {
-                int i = element.hashCode() & m;
+                int i = mixHash(element.hashCode()) & m;
                 while (idx[i] != null) {
                     i = (i + 1) & m;
                 }
@@ -242,44 +250,34 @@ public final class TTemplateCollections {
         /**
          * Throws an exception on duplicate elements.
          */
+        @SuppressWarnings("unchecked")
         @SafeVarargs
         NElementSet(T... data) {
-            T[] table = data.clone();
-            Arrays.fill(table, null);
+            int n = data.length;
+            int cap = nextPow2(Math.max(4, n * 2));
+            Object[] idx = new Object[cap];
+            int m = cap - 1;
+            T[] dense = (T[]) new Object[n];
 
-            for (T element : data) {
-                Objects.requireNonNull(element);
-
-                int suggestedIndex = (element.hashCode() & 0x7FFFFFFF) % data.length;
-                int index = suggestedIndex;
-                boolean found = false;
-                while (index < data.length) {
-                    T existingElement = table[index];
-                    if (existingElement == null) {
-                        found = true;
+            for (int k = 0; k < n; k++) {
+                T element = Objects.requireNonNull(data[k]);
+                int i = mixHash(element.hashCode()) & m;
+                while (true) {
+                    Object existing = idx[i];
+                    if (existing == null) {
+                        idx[i] = element;
+                        dense[k] = element;
                         break;
-                    } else if (existingElement.equals(element)) {
+                    } else if (existing == element || existing.equals(element)) {
                         throw new IllegalArgumentException();
                     }
-                    ++index;
+                    i = (i + 1) & m;
                 }
-                if (!found) {
-                    index = 0;
-                    while (index < suggestedIndex) {
-                        T existingElement = table[index];
-                        if (existingElement == null) {
-                            break;
-                        } else if (existingElement.equals(element)) {
-                            throw new IllegalArgumentException();
-                        }
-                        ++index;
-                    }
-                }
-                table[index] = element;
             }
 
-            this.data = table;
-            buildIndex();
+            this.data = dense;
+            this.index = idx;
+            this.mask = m;
         }
 
         /**
@@ -287,36 +285,41 @@ public final class TTemplateCollections {
          */
         @SuppressWarnings("unchecked")
         NElementSet(TCollection<T> collection) {
-            T[] temp = (T[]) new Object[collection.size()];
+            Object[] raw = collection.toArray();
+            int n = raw.length;
+            int cap = nextPow2(Math.max(4, n * 2));
+            Object[] idx = new Object[cap];
+            int m = cap - 1;
+            T[] temp = (T[]) new Object[n];
 
-            int index = 0;
+            int count = 0;
             outerLoop:
-            for (T element : (T[]) collection.toArray()) {
+            for (int k = 0; k < n; k++) {
+                T element = (T) raw[k];
                 if (element == null) {
-                    throw new NullPointerException(String.format("Element at index %s is null", index));
+                    throw new NullPointerException(String.format("Element at index %s is null", count));
                 }
-
-                int indexTemp = (element.hashCode() & 0x7FFFFFFF) % temp.length;
-                while (temp[indexTemp] != null) {
-                    if (temp[indexTemp].equals(element)) {
+                int i = mixHash(element.hashCode()) & m;
+                while (true) {
+                    Object existing = idx[i];
+                    if (existing == null) {
+                        idx[i] = element;
+                        temp[count++] = element;
+                        break;
+                    } else if (existing == element || existing.equals(element)) {
                         continue outerLoop;
                     }
-                    indexTemp = (indexTemp + 1) % temp.length;
-                }
-                temp[indexTemp] = element;
-                index++;
-            }
-
-            T[] result = (T[]) new Object[index];
-            index = 0;
-            for (T element : temp) {
-                if (element != null) {
-                    result[index++] = element;
+                    i = (i + 1) & m;
                 }
             }
 
-            this.data = result;
-            buildIndex();
+            this.data = count == n ? temp : Arrays.copyOf(temp, count);
+            if (cap > 4 && count * 4 < cap) {
+                buildIndex();
+            } else {
+                this.index = idx;
+                this.mask = m;
+            }
         }
 
         @Override
@@ -356,7 +359,7 @@ public final class TTemplateCollections {
             }
             Object[] idx = index;
             int m = mask;
-            for (int i = o.hashCode() & m; ; i = (i + 1) & m) {
+            for (int i = mixHash(o.hashCode()) & m; ; i = (i + 1) & m) {
                 Object e = idx[i];
                 if (e == null) {
                     return false;
@@ -499,32 +502,13 @@ public final class TTemplateCollections {
         private Entry<K, V>[] index;
         private int mask;
 
-        @SuppressWarnings("unchecked")
-        private void buildIndex() {
-            int cap = 4;
-            while (cap < data.length * 2) {
-                cap <<= 1;
-            }
-            Entry<K, V>[] idx = new Entry[cap];
-            int m = cap - 1;
-            for (Entry<K, V> entry : data) {
-                int i = entry.getKey().hashCode() & m;
-                while (idx[i] != null) {
-                    i = (i + 1) & m;
-                }
-                idx[i] = entry;
-            }
-            this.index = idx;
-            this.mask = m;
-        }
-
         private Entry<K, V> find(Object key) {
             if (key == null || data.length == 0) {
                 return null;
             }
             Entry<K, V>[] idx = index;
             int m = mask;
-            for (int i = key.hashCode() & m; ; i = (i + 1) & m) {
+            for (int i = mixHash(key.hashCode()) & m; ; i = (i + 1) & m) {
                 Entry<K, V> e = idx[i];
                 if (e == null) {
                     return null;
@@ -539,58 +523,53 @@ public final class TTemplateCollections {
         @SuppressWarnings("unchecked")
         @SafeVarargs
         NEtriesMap(Entry<K, V>... data) {
-            this.data = toEntryArray(data);
-            buildIndex();
+            initFromEntries(data);
         }
 
         @SuppressWarnings("unchecked")
         NEtriesMap(TMap<? extends K, ? extends V> map) {
-            this.data = toEntryArray(map.entrySet().toArray(new TMap.Entry[0]));
-            buildIndex();
+            initFromEntries(map.entrySet().toArray(new TMap.Entry[0]));
         }
 
         /**
-         * Creates an array where the {@code Entry} elements are positioned in such a way they
-         * are compatible with the contract of {@link java.util.Map}.
+         * Validates non-null keys/values and rejects duplicate keys in O(N) using a power-of-two
+         * open-addressing table (load <= 0.5), populating both {@link #data} and {@link #index}.
          */
         @SuppressWarnings("unchecked")
-        private Entry<K, V>[] toEntryArray(Entry<K, V>[] entries) {
-            Entry<K, V>[] table = new Entry[entries.length];
-            Arrays.fill(table, null);
+        private void initFromEntries(Entry<K, V>[] entries) {
+            int n = entries.length;
+            int cap = nextPow2(Math.max(4, n * 2));
+            Entry<K, V>[] idx = new Entry[cap];
+            int m = cap - 1;
+            Entry<K, V>[] dense = new Entry[n];
 
-            for (Entry<K, V> entry : entries) {
-                Objects.requireNonNull(entry.getKey());
-                Objects.requireNonNull(entry.getValue());
+            for (int k = 0; k < n; k++) {
+                Entry<K, V> entry = entries[k];
+                K key = Objects.requireNonNull(entry.getKey());
+                V value = Objects.requireNonNull(entry.getValue());
+                Entry<K, V> immutable = entry instanceof ImmutableEntry
+                        ? entry
+                        : new ImmutableEntry<>(key, value);
 
-                int suggestedIndex = (entry.getKey().hashCode() & 0x7FFFFFFF) % entries.length;
-                int index = suggestedIndex;
-                boolean found = false;
-                while (index < entries.length) {
-                    Entry<K, V> existingEntry = table[index];
-                    if (existingEntry == null) {
-                        found = true;
+                int i = mixHash(key.hashCode()) & m;
+                while (true) {
+                    Entry<K, V> existing = idx[i];
+                    if (existing == null) {
+                        idx[i] = immutable;
+                        dense[k] = immutable;
                         break;
-                    } else if (existingEntry.getKey().equals(entry.getKey())) {
+                    }
+                    K existingKey = existing.getKey();
+                    if (existingKey == key || existingKey.equals(key)) {
                         throw new IllegalArgumentException();
                     }
-                    ++index;
+                    i = (i + 1) & m;
                 }
-                if (!found) {
-                    index = 0;
-                    while (index < suggestedIndex) {
-                        Entry<K, V> existingElement = table[index];
-                        if (existingElement == null) {
-                            break;
-                        } else if (existingElement.getKey().equals(entry.getKey())) {
-                            throw new IllegalArgumentException();
-                        }
-                        ++index;
-                    }
-                }
-                table[index] = new ImmutableEntry<>(entry.getKey(), entry.getValue());
             }
 
-            return table;
+            this.data = dense;
+            this.index = idx;
+            this.mask = m;
         }
 
         @Override

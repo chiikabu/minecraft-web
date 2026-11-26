@@ -67,7 +67,8 @@ TEMPLATES = REPO / "target_teavm_263" / "wasm-gc"
 PAGE_FILES = ("index.html", "minecraft-web.css", "minecraft-web-net.js", "minecraft-web-shell.js",
               "minecraft-web-touch.js", "minecraft-web-mesh.js", "minecraft-web-mesh-worker.js",
               "minecraft-web-simd-kernels.js",
-              "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js")
+              "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js",
+              "minecraft-web-modrinth.js")
 ENGINE_FILES = ("classes263.wasm", "classes263.wasm-runtime.js")
 
 ENGINE_DEBUG_FILES = ("classes263.wasm-deobfuscator.wasm", "classes263.wasm.teadbg")

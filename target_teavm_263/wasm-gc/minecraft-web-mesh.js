@@ -95,7 +95,15 @@
 		};
 		return slot;
 	}
-	for (var i = 0; i < workerCount; i++) { workers.push(start(i)); }
+	var spawned = false;
+	function ensureWorkers() {
+		if (spawned) { return; }
+		spawned = true;
+		for (var i = 0; i < workerCount; i++) { workers.push(start(i)); }
+	}
+	if (typeof window !== "undefined" && window.MinecraftWeb && typeof window.MinecraftWeb.on === "function") {
+		window.MinecraftWeb.on("ready", ensureWorkers);
+	}
 
 	var LAYER_NAMES = ["solid", "cutout", "translucent"];
 	function quadText(i32, f32, at) {
@@ -169,7 +177,9 @@
 
 	var api = {
 		stats: stats,
+		ensureWorkers: ensureWorkers,
 		caps: function () {
+			ensureWorkers();
 			if (ready === 0) { return 0; }
 			var caps = kernelCaps & NEED_MASK & capMask;
 			if (engineHalo >= 20 && capMask !== 0) { caps |= kernelCapsHalo2 & CAP_AO; }
@@ -177,6 +187,7 @@
 		},
 		canTag: function () { return ready > 0 && kernelTags; },
 		capacity: function () {
+			ensureWorkers();
 			if (verify) { return 1 << 20; }
 			var free = 0;
 			for (var i = 0; i < workers.length; i++) {
@@ -185,6 +196,7 @@
 			return free;
 		},
 		post: function (memory, address, length) {
+			ensureWorkers();
 			var bytes = new Uint8Array(memory, address, length).slice().buffer;
 			var h = new Int32Array(bytes, 0, 2), kind = h[0], i;
 			if (kind !== 2) {

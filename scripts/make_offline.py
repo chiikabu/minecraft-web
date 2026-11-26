@@ -6,12 +6,17 @@ Reads what target_teavm_263/javascript-wasm-gc serves (the page scripts, the lin
 engine, the asset shards) and writes self-contained files that run from file:// with no server
 and no network (multiplayer still needs a relay or a ws:// server):
 
-  * one XZ archive holds the client runtime + module, assets.bin, the asset index, the object
-    pack (sounds, languages) and the small JSON catalogs; a tiny WASM xz decoder unpacks it;
-  * the server worker runs the same client module, started via WebWorkerTransport's embedded path;
-  * the chunk mesh worker starts from a blob: URL.
+  * two parallel XZ archives hold (1) the client WASM module (`p-wasm`) and (2) assets.bin,
+    the asset index, the object pack (sounds, languages), small JSON catalogs, the TeaVM
+    runtime, and large non-boot page scripts (`p-rest`); a tiny WASM xz decoder unpacks both
+    in parallel across 2 inline Web Workers while overlapping WebAssembly.compile;
+  * `html` uses Base122-HTML (+14.29% UTF-8 overhead); `xhtml`, `xml`, and `svg` use
+    XML-UTF8-hybrid (+17.77% UTF-8 overhead, strictly XML 1.0 & expat-safe);
+  * the server worker runs the same client module, started via WebWorkerTransport's embedded
+    or shared-module path;
+  * the chunk mesh worker starts from a blob: URL unpacked from `p-rest`.
 
-Formats (one archive, several containers):
+Formats (one archive pair, several containers):
 
   html   ordinary HTML page
   xhtml  the same page as XHTML (application/xhtml+xml)
@@ -30,17 +35,29 @@ past what a browser will hold as one string); "silent" embeds none.
 
 import argparse
 import base64
+import concurrent.futures
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
 import struct
 import sys
 import time
+import zipfile
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from minecraft_xz import container as xz_container, html85, unpack_container
+from minecraft_xz import (
+    base122_html_decode,
+    base122_html_encode,
+    container as xz_container,
+    html85,
+    unpack_container,
+    xml_utf8_decode,
+    xml_utf8_encode,
+)
 from build_xz_decoder import build as build_decoder
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,9 +65,20 @@ SRC = os.path.join(REPO, "target_teavm_263", "javascript-wasm-gc")
 MC_OBJECTS = os.path.join(os.path.expanduser("~"), "AppData", "Roaming", ".minecraft", "assets", "objects")
 DEFAULT_ZIG = os.environ.get("ZIG", "")
 MESH_WORKER_SPAWN = 'new Worker(new URL("minecraft-web-mesh-worker.js", location.href))'
-PAGE_SCRIPTS = ("minecraft_blobstore.js", "minecraft-web-net.js", "minecraft-web-shell.js",
-                "minecraft-web-touch.js", "minecraft-web-mesh.js", "minecraft-web-simd-kernels.js",
-                "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js")
+PAGE_SCRIPTS = (
+    "minecraft_blobstore.js",
+    "minecraft-web-net.js",
+    "minecraft-web-shell.js",
+    "minecraft-web-touch.js",
+    "minecraft-web-mesh.js",
+)
+PACKED_SCRIPTS = (
+    ("js_translator", "minecraft-web-jvm-translator.js"),
+    ("js_bridge", "minecraft-web-jvm-bridge.js"),
+    ("js_modrinth", "minecraft-web-modrinth.js"),
+    ("js_mesh_worker", "minecraft-web-mesh-worker.js"),
+    ("js_simd_kernels", "minecraft-web-simd-kernels.js"),
+)
 FORMATS = ("html", "xhtml", "xml", "svg")
 VARIANTS = {"sound": "sfx", "silent": "none"}
 XHTML_NS = "http://www.w3.org/1999/xhtml"
@@ -68,6 +96,114 @@ def sha256(data):
 
 def data_uri(path, mime):
     return "data:%s;base64,%s" % (mime, base64.b64encode(read(path)).decode("ascii"))
+
+def _opt_nbt(data):
+    if len(data) < 2 or data[:2] != b"\x1f\x8b":
+        return data, False
+    try:
+        raw = gzip.decompress(data)
+        co = zlib.compressobj(0, zlib.DEFLATED, 31)
+        repacked = co.compress(raw) + co.flush()
+        return repacked, True
+    except Exception:
+        return data, False
+
+def _opt_zip(data):
+    if len(data) < 4 or data[:2] != b"PK":
+        return data, False
+    try:
+        src_buf = io.BytesIO(data)
+        dst_buf = io.BytesIO()
+        with zipfile.ZipFile(src_buf, "r") as zin, zipfile.ZipFile(dst_buf, "w", compression=zipfile.ZIP_STORED) as zout:
+            for info in zin.infolist():
+                payload = zin.read(info.filename)
+                out_info = zipfile.ZipInfo(filename=info.filename, date_time=(1980, 1, 1, 0, 0, 0))
+                out_info.compress_type = zipfile.ZIP_STORED
+                out_info.external_attr = info.external_attr
+                zout.writestr(out_info, payload)
+        return dst_buf.getvalue(), True
+    except Exception:
+        return data, False
+
+def _opt_png(data):
+    if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        return data, False
+    try:
+        pos = 8
+        n = len(data)
+        chunks = []
+        idat_indices = []
+        while pos + 12 <= n:
+            clen = struct.unpack_from(">I", data, pos)[0]
+            ctype = data[pos + 4:pos + 8]
+            end = pos + 12 + clen
+            if end > n:
+                return data, False
+            if ctype == b"IDAT":
+                idat_indices.append(len(chunks))
+            chunks.append((ctype, data[pos + 8:pos + 8 + clen], data[pos:end]))
+            pos = end
+        if pos != n or not idat_indices:
+            return data, False
+        first_idat, last_idat = idat_indices[0], idat_indices[-1]
+        if last_idat - first_idat + 1 != len(idat_indices):
+            return data, False
+        idat_zlib = b"".join(chunks[i][1] for i in idat_indices)
+        raw_scanlines = zlib.decompress(idat_zlib)
+        repacked_idat = zlib.compress(raw_scanlines, level=0)
+        crc = zlib.crc32(b"IDAT" + repacked_idat) & 0xFFFFFFFF
+        new_idat = struct.pack(">I", len(repacked_idat)) + b"IDAT" + repacked_idat + struct.pack(">I", crc)
+        parts = [b"\x89PNG\r\n\x1a\n"]
+        for c in chunks[:first_idat]:
+            parts.append(c[2])
+        parts.append(new_idat)
+        for c in chunks[last_idat + 1:]:
+            parts.append(c[2])
+        return b"".join(parts), True
+    except Exception:
+        return data, False
+
+def _opt_json(data):
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+        minified = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(minified) < len(data):
+            return minified, True
+        return data, False
+    except Exception:
+        return data, False
+
+def optimize_assets_bundle(assets_bytes, index_bytes):
+    """Losslessly pre-unpack gzipped .nbt, .zip, PNG IDAT zlib streams, and minify .json inside assets.bin."""
+    index = json.loads(index_bytes.decode("utf-8"))
+    out_chunks = []
+    new_index = {}
+    cursor = 0
+    counts = {"nbt": 0, "zip": 0, "png": 0, "json": 0}
+    for path, (off, length) in sorted(index.items(), key=lambda kv: (kv[1][0], kv[0])):
+        data = assets_bytes[off:off + length]
+        low = path.lower()
+        if low.endswith(".nbt"):
+            data, ok = _opt_nbt(data)
+            if ok:
+                counts["nbt"] += 1
+        elif low.endswith(".zip"):
+            data, ok = _opt_zip(data)
+            if ok:
+                counts["zip"] += 1
+        elif low.endswith(".png"):
+            data, ok = _opt_png(data)
+            if ok:
+                counts["png"] += 1
+        elif low.endswith(".json"):
+            data, ok = _opt_json(data)
+            if ok:
+                counts["json"] += 1
+        new_index[path] = [cursor, len(data)]
+        out_chunks.append(data)
+        cursor += len(data)
+    new_index_bytes = json.dumps(new_index, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return b"".join(out_chunks), new_index_bytes, counts
 
 def object_pack(sounds_mode):
     served = gzip.decompress(read(os.path.join(SRC, "objects.bin.gz")))
@@ -128,6 +264,41 @@ XML_PRELUDE = r"""(function () {
 
 BOOT = r""""use strict";
 (function () {
+	var earlyGpuWanted = true;
+	try {
+		var sp = new URLSearchParams(location.search);
+		if ((sp.has("webgl") && sp.get("webgl") !== "0") || sp.get("webgpu") === "0") { earlyGpuWanted = false; }
+		if (sessionStorage.getItem("minecraft-web.webgpuFailed")) { earlyGpuWanted = false; }
+		if (!sp.has("webgpu") && localStorage.getItem("minecraft.shaderpack.selected")) { earlyGpuWanted = false; }
+	} catch (e) {}
+	if (earlyGpuWanted && typeof navigator !== "undefined" && navigator.gpu && navigator.gpu.requestAdapter && !window.__minecraftWebGpuState) {
+		window.__minecraftWebGpuState = "probing";
+		var gpuT0 = performance.now();
+		window.__minecraftEarlyWebGpu = navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).then(function (adapter) {
+			if (window.__minecraftWebGpuState !== "probing") { return null; }
+			if (!adapter) { window.__minecraftWebGpuState = "no adapter"; return null; }
+			var limits = {};
+			for (var k in adapter.limits) { limits[k] = adapter.limits[k]; }
+			window.__minecraftWebGpuLimits = limits;
+			window.__minecraftWebGpuAdapterInfo = adapter.info || {};
+			if (adapter.isFallbackAdapter) { window.__minecraftWebGpuState = "software fallback adapter"; return null; }
+			return adapter.requestDevice().then(function (device) {
+				if (window.__minecraftWebGpuState !== "probing") { try { device.destroy(); } catch (e) {} return null; }
+				window.__minecraftWebGpuDevice = device;
+				window.__minecraftWebGpuState = "ready";
+				window.__minecraftWebGpuProbeMs = Math.round(performance.now() - gpuT0);
+				device.lost.then(function (info) { window.__minecraftWebGpuState = "lost: " + info.reason; });
+				return { adapter: adapter, device: device, info: window.__minecraftWebGpuAdapterInfo };
+			});
+		}).catch(function (e) {
+			if (window.__minecraftWebGpuState === "probing") { window.__minecraftWebGpuState = "error: " + e; }
+			return null;
+		});
+	} else {
+		window.__minecraftEarlyWebGpu = null;
+	}
+})();
+(function () {
 	if (typeof WebGL2RenderingContext !== "undefined") {
 		// 26.3's compiler emits two forms WebGL2 rejects (same fix as the served index.html).
 		var proto = WebGL2RenderingContext.prototype;
@@ -154,26 +325,37 @@ BOOT = r""""use strict";
 
 	var PHONE_PIXEL_BUDGET = 1150000;
 	var WEAK_GPU_PIXEL_BUDGET = 921600;
+	var WEAK_GPU_RE = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Intel\(R\) Graphics\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) ([1-5]\d\d|61\d)|Panfrost|Freedreno|Turnip|virgl|V3D|AMD.*(Stoney|Radeon\(TM\) R[2-5]|Vega [1-3]|610M)|SwiftShader|llvmpipe/i;
 	var forcedScale = parseFloat((/[?&]scale=([0-9.]+)/.exec(location.search) || [])[1]);
 	// Same as index.html: laptops with weak integrated GPUs stay within WEAK_GPU_PIXEL_BUDGET (~720p)
-	// and avoid HiDPI over-rendering. Touch devices keep the phone budget below. ?scale overrides.
+	// and avoid HiDPI over-rendering. Avoid blocking cold unpack with a throwaway WebGL2 context.
 	var weakGpu = null;
+	var glProbeReady = false;
 	function isWeakGpu() {
 		if (weakGpu !== null) { return weakGpu; }
-		weakGpu = false;
 		try {
 			if (typeof navigator !== "undefined" && (/\bCrOS\b/.test(navigator.userAgent || "") || (navigator.deviceMemory > 0 && navigator.deviceMemory <= 4))) {
 				weakGpu = true;
 				return weakGpu;
 			}
+			var gpuInfo = window.__minecraftWebGpuAdapterInfo;
+			if (gpuInfo) {
+				var desc = [gpuInfo.vendor, gpuInfo.architecture, gpuInfo.device, gpuInfo.description].filter(Boolean).join(" ");
+				if (desc) {
+					weakGpu = WEAK_GPU_RE.test(desc);
+					return weakGpu;
+				}
+			}
+			if (!glProbeReady) { return false; }
+			weakGpu = false;
 			var gl = document.createElement("canvas").getContext("webgl2");
 			var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
 			var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
-			weakGpu = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Intel\(R\) Graphics\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) ([1-5]\d\d|61\d)|Panfrost|Freedreno|Turnip|virgl|V3D|AMD.*(Stoney|Radeon\(TM\) R[2-5]|Vega [1-3]|610M)|SwiftShader|llvmpipe/i.test(name);
+			weakGpu = WEAK_GPU_RE.test(name);
 			var lose = gl && gl.getExtension("WEBGL_lose_context");
 			if (lose) { lose.loseContext(); }
-		} catch (e) { /* keep devicePixelRatio */ }
-		return weakGpu;
+		} catch (e) { weakGpu = false; }
+		return !!weakGpu;
 	}
 	window.__minecraftWebWeakGpu = isWeakGpu;
 	// The game mirrors its shader pack choice here (ShaderPacks.LS_SELECTED).
@@ -227,8 +409,11 @@ BOOT = r""""use strict";
 	function payload(id) {
 		var el = document.getElementById(id);
 		var t = el ? el.textContent : null;
-		if (el) { el.parentNode.removeChild(el); }
+		if (el && el.parentNode) { el.parentNode.removeChild(el); }
 		return t;
+	}
+	function removeEl(el) {
+		if (el && el.parentNode) { el.parentNode.removeChild(el); }
 	}
 	function b64(s) {
 		s = String(s || "").replace(/\s+/g, "");
@@ -244,6 +429,15 @@ BOOT = r""""use strict";
 			if (typeof requestAnimationFrame === "function") { requestAnimationFrame(function () { setTimeout(r, 0); }); }
 			setTimeout(r, 100); // hidden tabs pause animation frames
 		});
+	}
+	function getCacheKey() {
+		var metaEl = document.querySelector('meta[name="minecraft-cache-key"]');
+		if (metaEl && metaEl.content) { return metaEl.content; }
+		var buildEl = document.querySelector('meta[name="minecraft-build"]');
+		return buildEl && buildEl.content ? buildEl.content : "";
+	}
+	function isWasmMagic(b) {
+		return b && b.length >= 8 && b[0] === 0 && b[1] === 97 && b[2] === 115 && b[3] === 109;
 	}
 
 	function installObjectShim(bin, map) {
@@ -361,41 +555,139 @@ BOOT = r""""use strict";
 			if (navigator.storage && navigator.storage.persist) { try { navigator.storage.persist().catch(function () {}); } catch (e) {} }
 			stage("Unpacking", 3);
 			await idle();
-			var packed = window.__minecraftHTML85Decode(payload("p-xz"));
-			var loader = b64(payload("p-loader"));
-			stage("Unpacking", 10);
-			await idle();
-			var archive = await window.__minecraftXZDecode(packed, loader);
-			packed = loader = null;
+
+			var wasmEl = document.getElementById("p-wasm");
+			var restEl = document.getElementById("p-rest");
 			var td = new TextDecoder();
-			var runtime = td.decode(archive.runtime);
+			var wasm = null;
+			var rest = null;
+			var compilePromise = null;
+
+			if (wasmEl && restEl) {
+				var cacheKey = getCacheKey();
+				var skipCache = /[?&]nocache=1(?:[&]|$)/.test(location.search || "");
+				var offlineCache = (!skipCache && cacheKey && window.__minecraftInstallOfflineCache)
+					? window.__minecraftInstallOfflineCache() : null;
+				var wasmKey = cacheKey + ":wasm";
+				var restKey = cacheKey + ":rest";
+				var warmHit = false;
+
+				if (offlineCache) {
+					try {
+						var cachedWasmP = Promise.resolve(offlineCache.get(wasmKey)).catch(function () { return null; }).then(function (w) {
+							if (isWasmMagic(w)) {
+								compilePromise = WebAssembly.compile(w, { builtins: ["js-string"] });
+								return w;
+							}
+							return null;
+						});
+						var cachedRestP = Promise.resolve(offlineCache.get(restKey)).catch(function () { return null; });
+						var cachedPair = await Promise.all([cachedWasmP, cachedRestP]);
+						if (cachedPair[0] && cachedPair[1] && cachedPair[1].length) {
+							rest = window.__minecraftArchiveUnpack(cachedPair[1]);
+							wasm = cachedPair[0];
+							warmHit = true;
+							removeEl(wasmEl);
+							removeEl(restEl);
+							removeEl(document.getElementById("p-loader"));
+							stage("Compiling", 40);
+							console.info("[26.3-offline] warm-boot hit from IndexedDB cache");
+						}
+					} catch (cacheErr) {
+						warmHit = false;
+						wasm = null;
+						rest = null;
+						compilePromise = null;
+					}
+				}
+
+				if (!warmHit) {
+					stage("Unpacking", 10);
+					var loaderB64 = payload("p-loader");
+					var unpack = window.__minecraftParallelUnpack(wasmEl, restEl, loaderB64, function (kind, data, rawRestBytes) {
+						if (kind === "wasm") {
+							wasm = data;
+							compilePromise = WebAssembly.compile(wasm, { builtins: ["js-string"] });
+							stage("Compiling", 35);
+							if (offlineCache) {
+								try { Promise.resolve(offlineCache.put(wasmKey, wasm)).catch(function () {}); } catch (e) {}
+							}
+						} else if (kind === "rest") {
+							if (offlineCache && rawRestBytes) {
+								try {
+									Promise.resolve(offlineCache.put(restKey, rawRestBytes)).then(function () {
+										if (window.__minecraftPruneStore) {
+											return window.__minecraftPruneStore(offlineCache, [wasmKey, restKey]);
+										}
+									}).catch(function () {});
+								} catch (e) {}
+							}
+						}
+					});
+					var unpacked = await unpack;
+					wasm = unpacked.wasm;
+					rest = unpacked.rest;
+					if (!compilePromise) {
+						compilePromise = WebAssembly.compile(wasm, { builtins: ["js-string"] });
+					}
+				}
+			} else {
+				var xzEl = document.getElementById("p-xz");
+				var packed = window.__minecraftPayloadDecode(xzEl);
+				removeEl(xzEl);
+				var loader = b64(payload("p-loader"));
+				stage("Unpacking", 10);
+				await idle();
+				var singleArchive = await window.__minecraftXZDecode(packed, loader);
+				packed = loader = null;
+				wasm = singleArchive.wasm.slice();
+				compilePromise = WebAssembly.compile(wasm, { builtins: ["js-string"] });
+				rest = singleArchive;
+			}
+
+			var simdSrc = "";
+			if (rest.js_mesh_worker && rest.js_mesh_worker.length) {
+				window.__minecraftWebMeshWorkerUrl = URL.createObjectURL(
+					new Blob([rest.js_mesh_worker], { type: "text/javascript" })
+				);
+			}
+			if (rest.js_simd_kernels && rest.js_simd_kernels.length) {
+				simdSrc = td.decode(rest.js_simd_kernels);
+				window.__minecraftWebSimdKernelsText = simdSrc;
+				(0, eval)(simdSrc);
+			} else {
+				var simdEl = document.getElementById("simd-kernels-src");
+				if (simdEl) { simdSrc = simdEl.textContent; }
+			}
+			var runtime = td.decode(rest.runtime);
 			(0, eval)(runtime);
 			if (!window.TeaVM || !TeaVM.wasmGC) { throw new Error("TeaVM WASM-GC runtime did not load"); }
-			var meta = JSON.parse(td.decode(archive.meta));
+			if (rest.js_translator && rest.js_translator.length) { (0, eval)(td.decode(rest.js_translator)); }
+			if (rest.js_bridge && rest.js_bridge.length) { (0, eval)(td.decode(rest.js_bridge)); }
+			if (rest.js_modrinth && rest.js_modrinth.length) { (0, eval)(td.decode(rest.js_modrinth)); }
+
+			var meta = JSON.parse(td.decode(rest.meta));
 			window.__minecraftFiles = JSON.stringify(meta.files);
-			window.__minecraftAssetsIndex = td.decode(archive.index);
-			// Own buffers: subarrays would pin the whole decoder memory for the session.
-			var assets = archive.assets.slice();
-			var objects = archive.objects.slice();
-			var wasm = archive.wasm.slice();
-			var shaderPacks = archive.shaderpacks ? archive.shaderpacks.slice() : null;
-			archive = null;
+			window.__minecraftAssetsIndex = td.decode(rest.index);
+			// Own buffers: subarrays would pin the whole archive buffer for the session.
+			var assets = rest.assets.slice();
+			var objects = rest.objects.slice();
+			var shaderPacks = rest.shaderpacks ? rest.shaderpacks.slice() : null;
+			rest = null;
 			window.__minecraftAssetsBinRaw = assets;
 			window.__minecraftWorkerAssetsRaw = assets;
 			window.__minecraftWorkerAssetsIndex = window.__minecraftAssetsIndex;
 			installObjectShim(objects, meta.objects);
 			shell.mark("assets");
 
-			stage("Compiling", 40);
-			await idle();
-			var module = await WebAssembly.compile(wasm, { builtins: ["js-string"] });
+			stage("Compiling", 45);
+			var module = await compilePromise;
 			shell.mark("engine");
+			window.__minecraftWebSharedModule = module;
 			window.__minecraftClientModule = module;
 			// The server worker runs this same module (the served page shares it the same way);
-			// WebWorkerTransport.spawnWithEmbeddedAssets transfers these bytes to it.
+			// WebWorkerTransport can reuse __minecraftWebSharedModule or transfer __minecraftWorkerServerWasm.
 			// Prepend the offline WASM-SIMD128 kernels and auto-bind hook so server and gen workers get self.__mcWebSimd too.
-			var simdEl = document.getElementById("simd-kernels-src");
-			var simdSrc = simdEl ? simdEl.textContent : "";
 			var simdBindHook = "\n;(function(){var G=typeof globalThis!=='undefined'?globalThis:self;"
 				+ "var T=G.TeaVM&&G.TeaVM.wasmGC;if(T&&T.load&&!T.__mcWebSimdHook){T.__mcWebSimdHook=1;"
 				+ "var origLoad=T.load;T.load=function(){return Promise.resolve(origLoad.apply(this,arguments)).then(function(inst){"
@@ -416,6 +708,7 @@ BOOT = r""""use strict";
 				var simdMem = window.__teavmMemory || teavm.exports["teavm.memory"];
 				if (simdMem) { simd.bind(simdMem); }
 			}
+			glProbeReady = true;
 			stage("Starting", 100);
 			fitCanvas();
 			shell.engineStarting();
@@ -447,19 +740,49 @@ def _check_index_html():
     index_html = text(os.path.join(SRC, "index.html"))
     for needle in ("floatfloat(", "_frag_output_00", "classes263.wasm-runtime.js", "minecraft-web-mesh.js",
                    "minecraft-web-simd-kernels.js",
-                   "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js", "WEAK_GPU_PIXEL_BUDGET"):
+                   "minecraft-web-jvm-translator.js", "minecraft-web-jvm-bridge.js",
+                   "minecraft-web-modrinth.js", "WEAK_GPU_PIXEL_BUDGET"):
         if needle not in index_html:
             raise ValueError("served index.html changed (%s missing); update this packager's BOOT" % needle)
 
-def _extract_script_payload(doc, script_id):
-    pattern = r'<script\s+type="application/octet-stream"\s+id="%s">(.*?)</script>' % re.escape(script_id)
+def _extract_script_payload_with_enc(doc, script_id):
+    pattern = r'<script\s+([^>]*\bid="%s"[^>]*)>(.*?)</script>' % re.escape(script_id)
     match = re.search(pattern, doc, re.S)
     if not match:
-        raise ValueError("script#%s not found in source offline bundle" % script_id)
-    body = match.group(1).strip()
+        return None, None
+    attrs, body = match.group(1), match.group(2)
+    enc_match = re.search(r'\bdata-enc="([^"]+)"', attrs)
+    enc = enc_match.group(1) if enc_match else "h85"
     if body.startswith("<![CDATA[") and body.endswith("]]>"):
         body = body[9:-3].replace("]]]]><![CDATA[>", "]]>")
+    elif script_id == "p-loader" or enc == "h85":
+        body = body.strip()
+    return body, enc
+
+def _extract_script_payload(doc, script_id):
+    body, _ = _extract_script_payload_with_enc(doc, script_id)
+    if body is None:
+        raise ValueError("script#%s not found in source offline bundle" % script_id)
     return body
+
+def _decode_payload_text(body, enc):
+    if enc == "b122":
+        return base122_html_decode(body)
+    if enc == "xutf":
+        return xml_utf8_decode(body)
+    if enc == "h85":
+        cleaned = re.sub(r"[\t\n\f\r ]+", "", body)
+        return base64.b85decode(cleaned.replace(".", "<"))
+    raise ValueError("unknown payload encoding: %s" % enc)
+
+def _check_container_header(packed, label):
+    if len(packed) < 16 or packed[:8] not in (b"MCXC001\x00", b"MCGC001\x00"):
+        raise ValueError("%s has invalid compressed container magic" % label)
+    raw_size, packed_size = struct.unpack_from("<II", packed, 8)
+    if raw_size < 12 or packed_size != len(packed) - 16 or raw_size + packed_size > 1024 * 1024 * 1024:
+        raise ValueError("%s failed container size check (raw=%d, packed=%d, len=%d)" % (
+            label, raw_size, packed_size, len(packed)))
+    return raw_size, packed_size
 
 def load_prebuilt_decoder(path):
     """Load the compiled XZ decoder WASM from a .wasm file or an existing offline HTML/XML/SVG bundle."""
@@ -474,7 +797,7 @@ def load_prebuilt_decoder(path):
     return wasm
 
 def load_archive_from_bundle(path, verify_archive=False):
-    """Reuse the verified XZ archive + WASM XZ decoder from an existing offline bundle (<2s rebuild)."""
+    """Reuse the verified XZ archive(s) + WASM XZ decoder from an existing offline bundle (<2s rebuild)."""
     started = time.time()
     _check_index_html()
     doc = text(path)
@@ -482,17 +805,6 @@ def load_archive_from_bundle(path, verify_archive=False):
     loader_wasm = base64.b64decode(loader_b64)
     if loader_wasm[:4] != b"\x00asm":
         raise ValueError("p-loader in %s is not a valid WebAssembly module" % path)
-    xz_b85 = _extract_script_payload(doc, "p-xz")
-    if len(xz_b85) < 20 or len(xz_b85) % 5 == 1:
-        raise ValueError("p-xz in %s has invalid HTML85 payload length (%d)" % (path, len(xz_b85)))
-    header = base64.b85decode(xz_b85[:20].replace(".", "<"))
-    if len(header) != 16 or header[:8] not in (b"MCXC001\x00", b"MCGC001\x00"):
-        raise ValueError("p-xz in %s has invalid compressed container magic" % path)
-    raw_size, packed_size = struct.unpack_from("<II", header, 8)
-    decoded_len = (len(xz_b85) * 4) // 5
-    if raw_size < 12 or packed_size != decoded_len - 16 or raw_size + packed_size > 1024 * 1024 * 1024:
-        raise ValueError("p-xz in %s failed container size check (raw=%d, packed=%d, decoded=%d)" % (
-            path, raw_size, packed_size, decoded_len))
 
     version = json.loads(text(os.path.join(SRC, "version.json")))["id"]
     wasm_sha = ""
@@ -504,28 +816,61 @@ def load_archive_from_bundle(path, verify_archive=False):
             version = build_match.group(1)
             wasm_sha = build_match.group(2)
             inferred_variant = build_match.group(3)
+    cache_match = re.search(r'<meta\s+name="minecraft-cache-key"\s+content="([0-9a-f]+)_([^"]+)"', doc)
+    if cache_match:
+        wasm_sha = cache_match.group(1)
+        inferred_variant = cache_match.group(2)
 
+    wasm_body, wasm_enc = _extract_script_payload_with_enc(doc, "p-wasm")
+    rest_body, rest_enc = _extract_script_payload_with_enc(doc, "p-rest")
+    if wasm_body is not None and rest_body is not None:
+        wasm_packed = _decode_payload_text(wasm_body, wasm_enc)
+        rest_packed = _decode_payload_text(rest_body, rest_enc)
+        w_raw, _ = _check_container_header(wasm_packed, "p-wasm in " + path)
+        r_raw, _ = _check_container_header(rest_packed, "p-rest in " + path)
+        meta = {"version": version, "wasmSha256": wasm_sha}
+        if verify_archive:
+            unpack_container(wasm_packed)
+            rest_entries = unpack_container(rest_packed)
+            meta = json.loads(rest_entries["meta"].decode("utf-8"))
+            version = meta.get("version", version)
+            wasm_sha = meta.get("wasmSha256", wasm_sha)
+        else:
+            wasm_path = os.path.join(SRC, "wasm-gc", "classes263.wasm")
+            if os.path.isfile(wasm_path):
+                cur_sha = sha256(read(wasm_path))
+                if wasm_sha and not cur_sha.startswith(wasm_sha):
+                    print("warning: staged classes263.wasm (%s) differs from reused archive (%s)" % (
+                        cur_sha[:12], wasm_sha[:12]), flush=True)
+                elif not wasm_sha:
+                    meta["wasmSha256"] = cur_sha
+        print("[reuse] loaded 2-stream archive from %s (loader %d B, wasm %.1f MB + rest %.1f MB -> %.1f MB raw) in %.2fs" % (
+            os.path.relpath(path, REPO), len(loader_wasm), len(wasm_packed) / 1e6, len(rest_packed) / 1e6,
+            (w_raw + r_raw) / 1e6, time.time() - started), flush=True)
+        out = {"version": version, "meta": meta, "wasm_packed": wasm_packed, "rest_packed": rest_packed,
+               "loader": loader_b64, "variant": inferred_variant}
+        if wasm_enc in ("b122", "xutf"):
+            out["wasm_" + wasm_enc] = wasm_body
+        if rest_enc in ("b122", "xutf"):
+            out["rest_" + rest_enc] = rest_body
+        return out
+
+    # Legacy single-stream bundle reuse
+    xz_body, xz_enc = _extract_script_payload_with_enc(doc, "p-xz")
+    if xz_body is None:
+        raise ValueError("neither p-wasm/p-rest nor p-xz found in %s" % path)
+    packed_bytes = _decode_payload_text(xz_body, xz_enc)
+    raw_size, _ = _check_container_header(packed_bytes, "p-xz in " + path)
     meta = {"version": version, "wasmSha256": wasm_sha}
     if verify_archive:
-        packed_bytes = base64.b85decode(xz_b85.replace(".", "<"))
         entries = unpack_container(packed_bytes)
         meta = json.loads(entries["meta"].decode("utf-8"))
         version = meta.get("version", version)
         wasm_sha = meta.get("wasmSha256", wasm_sha)
-    else:
-        wasm_path = os.path.join(SRC, "wasm-gc", "classes263.wasm")
-        if os.path.isfile(wasm_path):
-            cur_sha = sha256(read(wasm_path))
-            if wasm_sha and not cur_sha.startswith(wasm_sha):
-                print("warning: staged classes263.wasm (%s) differs from reused archive (%s)" % (
-                    cur_sha[:12], wasm_sha[:12]), flush=True)
-            elif not wasm_sha:
-                meta["wasmSha256"] = cur_sha
-
-    print("[reuse] loaded archive from %s (loader %d B, container %.1f MB -> %.1f MB raw) in %.2fs" % (
-        os.path.relpath(path, REPO), len(loader_wasm), decoded_len / 1e6, raw_size / 1e6,
+    print("[reuse] loaded legacy archive from %s (loader %d B, container %.1f MB -> %.1f MB raw) in %.2fs" % (
+        os.path.relpath(path, REPO), len(loader_wasm), len(packed_bytes) / 1e6, raw_size / 1e6,
         time.time() - started), flush=True)
-    return {"version": version, "meta": meta, "xz": xz_b85, "loader": loader_b64,
+    return {"version": version, "meta": meta, "xz": xz_body, "xz_enc": xz_enc, "loader": loader_b64,
             "variant": inferred_variant}
 
 def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None, prebuilt_decoder=None):
@@ -539,15 +884,20 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
         raise ValueError("classes263.wasm-runtime.js is unpatched (patchWasmGCRuntime did not run)")
     _check_index_html()
 
-    assets = gzip.decompress(read(os.path.join(SRC, "assets.bin.gz")))
-    index = gzip.decompress(read(os.path.join(SRC, "assets_index.json.gz")))
+    raw_assets = gzip.decompress(read(os.path.join(SRC, "assets.bin.gz")))
+    raw_index = gzip.decompress(read(os.path.join(SRC, "assets_index.json.gz")))
+    assets, index, opt_counts = optimize_assets_bundle(raw_assets, raw_index)
+    print("[%s] OPT pre-unpack: assets %.1f MB -> %.1f MB (nbt=%d, zip=%d, png=%d, json=%d)" % (
+        sounds_mode, len(raw_assets) / 1e6, len(assets) / 1e6,
+        opt_counts["nbt"], opt_counts["zip"], opt_counts["png"], opt_counts["json"]), flush=True)
+
     objects, sha_map, sounds, languages = object_pack(sounds_mode)
     version = json.loads(text(os.path.join(SRC, "version.json")))["id"]
     files = {
         "sounds_index.json": json.dumps(sounds, separators=(",", ":")),
         "lang_index.json": json.dumps(languages, separators=(",", ":")),
         "version.json": text(os.path.join(SRC, "version.json")),
-        "sounds.json": text(os.path.join(SRC, "sounds.json")),
+        "sounds.json": "{}" if sounds_mode == "none" else text(os.path.join(SRC, "sounds.json")),
         "pipelines.json": text(os.path.join(SRC, "pipelines.json")),
     }
     meta = {"version": version, "files": files, "objects": sha_map, "sounds": sounds_mode,
@@ -556,24 +906,51 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
     packs, pack_spans = shader_pack_bundle(shaderpacks_dir)
     if pack_spans:
         meta["shaderpacks"] = pack_spans
-    entries = {"meta": json.dumps(meta, separators=(",", ":")).encode(), "index": index,
-               "runtime": runtime, "assets": assets, "objects": objects, "wasm": wasm}
+
+    wasm_entries = {"wasm": wasm}
+    rest_entries = {
+        "meta": json.dumps(meta, separators=(",", ":")).encode("utf-8"),
+        "index": index,
+        "runtime": runtime,
+        "assets": assets,
+        "objects": objects,
+    }
+    for entry_key, filename in PACKED_SCRIPTS:
+        rest_entries[entry_key] = read(os.path.join(SRC, filename))
     if pack_spans:
-        entries["shaderpacks"] = packs
+        rest_entries["shaderpacks"] = packs
         print("[%s] shader packs: %d, %.1f MB" % (sounds_mode, len(pack_spans), len(packs) / 1e6), flush=True)
-    print("[%s] archive: wasm %.1f MB, assets %.1f MB, objects %.1f MB (%d sounds); xz -%d%s ..." % (
+
+    print("[%s] 2-stream archive: wasm %.1f MB | rest: assets %.1f MB, objects %.1f MB (%d sounds), %d packed JS; xz -%d%s ..." % (
         sounds_mode, len(wasm) / 1e6, len(assets) / 1e6, len(objects) / 1e6, len(sounds),
-        xz_preset, "e" if xz_extreme else ""), flush=True)
+        len(PACKED_SCRIPTS), xz_preset, "e" if xz_extreme else ""), flush=True)
     loader_wasm = load_prebuilt_decoder(prebuilt_decoder) if prebuilt_decoder else build_decoder(zig)
-    packed, raw_bytes, packed_bytes = xz_container(entries, xz_preset, xz_extreme, 128)
-    unpacked = unpack_container(packed)
-    if unpacked["wasm"] != wasm or unpacked["assets"] != assets or unpacked["objects"] != objects \
-            or (pack_spans and unpacked["shaderpacks"] != packs):
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f_wasm = pool.submit(xz_container, wasm_entries, xz_preset, xz_extreme, 128)
+        f_rest = pool.submit(xz_container, rest_entries, xz_preset, xz_extreme, 128)
+        wasm_packed, wasm_raw_b, wasm_packed_b = f_wasm.result()
+        rest_packed, rest_raw_b, rest_packed_b = f_rest.result()
+
+    unpacked_wasm = unpack_container(wasm_packed)
+    unpacked_rest = unpack_container(rest_packed)
+    if unpacked_wasm["wasm"] != wasm or unpacked_rest["assets"] != assets or unpacked_rest["objects"] != objects \
+            or (pack_spans and unpacked_rest["shaderpacks"] != packs):
         raise ValueError("archive round trip failed")
-    print("[%s] compressed %.1f MB -> %.1f MB in %.0fs" % (sounds_mode, raw_bytes / 1e6, packed_bytes / 1e6,
-                                                          time.time() - started), flush=True)
-    return {"version": version, "meta": meta, "xz": html85(packed),
-            "loader": base64.b64encode(loader_wasm).decode("ascii")}
+    for entry_key, _ in PACKED_SCRIPTS:
+        if unpacked_rest[entry_key] != rest_entries[entry_key]:
+            raise ValueError("packed script round trip failed: " + entry_key)
+
+    print("[%s] compressed %.1f MB -> %.1f MB (wasm %.1f MB + rest %.1f MB) in %.0fs" % (
+        sounds_mode, (wasm_raw_b + rest_raw_b) / 1e6, (wasm_packed_b + rest_packed_b) / 1e6,
+        wasm_packed_b / 1e6, rest_packed_b / 1e6, time.time() - started), flush=True)
+    return {
+        "version": version,
+        "meta": meta,
+        "wasm_packed": wasm_packed,
+        "rest_packed": rest_packed,
+        "loader": base64.b64encode(loader_wasm).decode("ascii"),
+    }
 
 def page_parts():
     mesh = text(os.path.join(SRC, "minecraft-web-mesh.js"))
@@ -582,8 +959,6 @@ def page_parts():
     mesh = mesh.replace(MESH_WORKER_SPAWN,
                         'new Worker(window.__minecraftWebMeshWorkerUrl || new URL("minecraft-web-mesh-worker.js", location.href))')
     scripts = [("minecraft_xz_loader.js", text(os.path.join(REPO, "scripts", "minecraft_xz_loader.js")))]
-    scripts.append(("mesh worker url", 'window.__minecraftWebMeshWorkerUrl = URL.createObjectURL(new Blob('
-                    '[document.getElementById("mesh-worker-src").textContent], {type: "text/javascript"}));'))
     for name in PAGE_SCRIPTS:
         scripts.append((name, mesh if name == "minecraft-web-mesh.js" else text(os.path.join(SRC, name))))
     for required in ("boot-logo.png", "favicon.png"):
@@ -591,7 +966,6 @@ def page_parts():
             raise ValueError("%s missing from %s: stage the site first" % (required, SRC))
     return {
         "css": text(os.path.join(SRC, "minecraft-web.css")),
-        "mesh_worker": text(os.path.join(SRC, "minecraft-web-mesh-worker.js")),
         "scripts": scripts,
         "logo": data_uri(os.path.join(SRC, "boot-logo.png"), "image/png"),
         "icon": data_uri(os.path.join(SRC, "favicon.png"), "image/png"),
@@ -605,19 +979,37 @@ def html_raw(source, name):
 def cdata(source):
     return "<![CDATA[" + source.replace("]]>", "]]]]><![CDATA[>") + "]]>"
 
+def _encode_stream(archive, key, fmt):
+    enc = "b122" if fmt == "html" else "xutf"
+    cache_field = "%s_%s" % (key, enc)
+    if cache_field in archive:
+        return archive[cache_field], enc
+    raw = archive[key + "_packed"]
+    encoded = base122_html_encode(raw) if enc == "b122" else xml_utf8_encode(raw)
+    archive[cache_field] = encoded
+    return encoded, enc
+
 def render(fmt, parts, archive, variant):
     xml = fmt != "html"
-    build_tag = "%s offline, engine %s, %s" % (archive["version"], archive["meta"]["wasmSha256"][:12], variant)
+    wasm_sha = archive["meta"]["wasmSha256"]
+    build_tag = "%s offline, engine %s, %s" % (archive["version"], wasm_sha[:12], variant)
+    cache_key = "%s_%s" % (wasm_sha, variant)
 
     def script(source, name, attrs=""):
         body = cdata("\n" + source + "\n") if xml else "\n" + html_raw(source, name) + "\n"
         return "<script%s>%s</script>" % (attrs, body)
 
-    def data(sid, payload):
-        body = cdata(payload) if xml else payload
-        if not xml and "</script" in payload:
-            raise ValueError("payload %s contains </script" % sid)
-        return '<script type="application/octet-stream" id="%s">%s</script>' % (sid, body)
+    def data(sid, payload, enc=None):
+        if re.search(r"</script|<!--", payload, re.I):
+            raise ValueError("payload %s contains </script or <!--" % sid)
+        enc_attr = (' data-enc="%s"' % enc) if enc else ""
+        if xml and enc == "xutf":
+            if "<" in payload or "&" in payload or "]]>" in payload:
+                raise ValueError("xutf payload %s contains forbidden XML sequence" % sid)
+            body = payload
+        else:
+            body = cdata(payload) if xml else payload
+        return '<script type="application/octet-stream" id="%s"%s>%s</script>' % (sid, enc_attr, body)
 
     css = parts["css"]
     if "</style" in css:
@@ -630,36 +1022,36 @@ def render(fmt, parts, archive, variant):
         '<meta name="author" content="chiikabu (github.com/chiikabu)" />',
         '<meta name="theme-color" content="%s" />' % BG,
         '<meta name="minecraft-build" content="%s" />' % build_tag,
+        '<meta name="minecraft-cache-key" content="%s" />' % cache_key,
         '<link rel="icon" href="%s" />' % parts["icon"],
         style,
     ]
     if xml:
         head.append(script(XML_PRELUDE, "xml prelude"))
-    head.append(script(parts["scripts"][0][1], parts["scripts"][0][0]))
+    for name, source in parts["scripts"]:
+        head.append(script(source, name))
 
-    worker = parts["mesh_worker"]
-    if not xml and re.search(r"</script|<!--", worker, re.I):
-        raise ValueError("minecraft-web-mesh-worker.js contains </script")
-    head.append('<script type="text/plain" id="mesh-worker-src">%s</script>' % (cdata(worker) if xml else worker))
-    head += [
-        script(source, name, ' id="simd-kernels-src"' if name == "minecraft-web-simd-kernels.js" else "")
-        for name, source in parts["scripts"][1:]
-    ]
     body = [
         '<canvas id="game_frame" width="854" height="480"></canvas>',
         '<div id="log"></div>',
         '<div id="boot" role="progressbar" aria-label="Loading Minecraft" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">',
         '<img id="logo" src="%s" alt="Mojang Studios" />' % parts["logo"],
         '<div id="bar"><div id="fill"></div></div>',
-
         '<div id="stage">Loading. If this stays here, open the file with Chrome, Edge or Safari instead of a file viewer.</div>',
         '<div id="joining" hidden="hidden"></div>',
         '<div id="credit"><span>minecraft-web</span> by <a href="https://github.com/chiikabu">chiikabu</a></div>',
         '</div>',
         data("p-loader", archive["loader"]),
-        data("p-xz", archive["xz"]),
-        script(BOOT, "boot"),
     ]
+    if "wasm_packed" in archive and "rest_packed" in archive:
+        wasm_text, wasm_enc = _encode_stream(archive, "wasm", fmt)
+        rest_text, rest_enc = _encode_stream(archive, "rest", fmt)
+        body.append(data("p-wasm", wasm_text, wasm_enc))
+        body.append(data("p-rest", rest_text, rest_enc))
+    else:
+        body.append(data("p-xz", archive["xz"], archive.get("xz_enc", "h85")))
+    body.append(script(BOOT, "boot"))
+
     html_attrs = 'lang="en" style="width:100%%;height:100%%;margin:0;background:%s;"' % BG
     page = "<head>\n%s\n</head>\n<body>\n%s\n</body>" % ("\n".join(head), "\n".join(body))
     if fmt == "html":

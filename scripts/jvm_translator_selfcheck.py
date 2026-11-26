@@ -1217,15 +1217,19 @@ def check_wiring_and_packaging() -> list:
     report.append("stage_site.py PAGE_FILES + all index.html src/href references verified")
 
     import make_offline  # noqa: E402
-    assert TRANSLATOR_FILE in make_offline.PAGE_SCRIPTS, "make_offline.PAGE_SCRIPTS missing translator"
-    assert BRIDGE_FILE in make_offline.PAGE_SCRIPTS, "make_offline.PAGE_SCRIPTS missing bridge"
-    assert make_offline.PAGE_SCRIPTS.index(TRANSLATOR_FILE) < make_offline.PAGE_SCRIPTS.index(BRIDGE_FILE), (
-        "make_offline.PAGE_SCRIPTS must order translator before bridge"
+    offline_scripts = list(make_offline.PAGE_SCRIPTS) + [fname for _, fname in getattr(make_offline, "PACKED_SCRIPTS", ())]
+    assert TRANSLATOR_FILE in offline_scripts, "make_offline scripts missing translator"
+    assert BRIDGE_FILE in offline_scripts, "make_offline scripts missing bridge"
+    assert offline_scripts.index(TRANSLATOR_FILE) < offline_scripts.index(BRIDGE_FILE), (
+        "make_offline scripts must order translator before bridge"
     )
     for needle in ("floatfloat(", "_frag_output_00", "classes263.wasm-runtime.js", "minecraft-web-mesh.js",
                    TRANSLATOR_FILE, BRIDGE_FILE):
         assert needle in idx_text, f"make_offline.py needle missing from index.html: {needle}"
-    report.append(f"make_offline.py PAGE_SCRIPTS ({len(make_offline.PAGE_SCRIPTS)} entries) + index needles verified")
+    report.append(
+        f"make_offline.py PAGE_SCRIPTS ({len(make_offline.PAGE_SCRIPTS)} inline) + "
+        f"PACKED_SCRIPTS ({len(getattr(make_offline, 'PACKED_SCRIPTS', ()))} compressed) + index needles verified"
+    )
 
     return report
 
@@ -1337,10 +1341,12 @@ def check_js_files_and_offline_dry_run(skip_sync_check: bool = False) -> list:
 
     sys.path.insert(0, str(SCRIPTS_DIR))
     import make_offline  # noqa: E402
-    if (JS_WASM_GC_DIR / "boot-logo.png").is_file() and TRANSLATOR_FILE in make_offline.PAGE_SCRIPTS:
+    import minecraft_xz  # noqa: E402
+    packed_map = dict(getattr(make_offline, "PACKED_SCRIPTS", ()))
+    assert packed_map.get("js_translator") == TRANSLATOR_FILE, "make_offline.PACKED_SCRIPTS missing translator"
+    assert packed_map.get("js_bridge") == BRIDGE_FILE, "make_offline.PACKED_SCRIPTS missing bridge"
+    if (JS_WASM_GC_DIR / "boot-logo.png").is_file():
         parts = make_offline.page_parts()
-        script_names = [name for name, _ in parts["scripts"]]
-        assert TRANSLATOR_FILE in script_names and BRIDGE_FILE in script_names
     else:
         mesh_src = (WASM_GC_DIR / "minecraft-web-mesh.js").read_text(encoding="utf-8")
         mesh_src = mesh_src.replace(
@@ -1349,34 +1355,44 @@ def check_js_files_and_offline_dry_run(skip_sync_check: bool = False) -> list:
         )
         scripts = [
             ("minecraft_xz_loader.js", (SCRIPTS_DIR / "minecraft_xz_loader.js").read_text(encoding="utf-8")),
-            ("mesh worker url", 'window.__minecraftWebMeshWorkerUrl = URL.createObjectURL(new Blob('
-             '[document.getElementById("mesh-worker-src").textContent], {type: "text/javascript"}));'),
             ("minecraft_blobstore.js", (SCRIPTS_DIR / "minecraft_blobstore.js").read_text(encoding="utf-8")),
             ("minecraft-web-net.js", (WASM_GC_DIR / "minecraft-web-net.js").read_text(encoding="utf-8")),
             ("minecraft-web-shell.js", (WASM_GC_DIR / "minecraft-web-shell.js").read_text(encoding="utf-8")),
-            (TRANSLATOR_FILE, t_src),
-            (BRIDGE_FILE, b_src),
             ("minecraft-web-touch.js", (WASM_GC_DIR / "minecraft-web-touch.js").read_text(encoding="utf-8")),
             ("minecraft-web-mesh.js", mesh_src),
         ]
         parts = {
             "css": (WASM_GC_DIR / CSS_FILE).read_text(encoding="utf-8"),
-            "mesh_worker": (WASM_GC_DIR / "minecraft-web-mesh-worker.js").read_text(encoding="utf-8"),
             "scripts": scripts,
             "logo": "data:image/png;base64,iVBORw0KGgo=",
             "icon": "data:image/png;base64,iVBORw0KGgo=",
         }
 
+    dummy_wasm_packed, _, _ = minecraft_xz.container({"wasm": b"\x00asm\x01\x00\x00\x00"}, preset=0, extreme=False)
+    dummy_rest_packed, _, _ = minecraft_xz.container({
+        "js_translator": t_src.encode("utf-8"),
+        "js_bridge": b_src.encode("utf-8"),
+        "js_mesh_worker": (WASM_GC_DIR / "minecraft-web-mesh-worker.js").read_text(encoding="utf-8").encode("utf-8"),
+        "js_simd_kernels": (WASM_GC_DIR / "minecraft-web-simd-kernels.js").read_text(encoding="utf-8").encode("utf-8"),
+    }, preset=0, extreme=False)
     dummy_archive = {
         "version": "26.3-selfcheck",
         "meta": {"wasmSha256": "0" * 64},
-        "xz": "DUMMYXZ",
+        "wasm_packed": dummy_wasm_packed,
+        "rest_packed": dummy_rest_packed,
         "loader": "QUFB",
     }
     for fmt in make_offline.FORMATS:
         doc = make_offline.render(fmt, parts, dummy_archive, "silent")
-        assert "EaglerJvmTranslator" in doc and "EaglerJvmBridge" in doc, (
-            f"Offline {fmt} output missing translator/bridge code"
+        expected_enc = "b122" if fmt == "html" else "xutf"
+        assert f'id="p-wasm" data-enc="{expected_enc}"' in doc, f"Offline {fmt} missing p-wasm ({expected_enc})"
+        assert f'id="p-rest" data-enc="{expected_enc}"' in doc, f"Offline {fmt} missing p-rest ({expected_enc})"
+        assert "js_translator" in doc and "js_bridge" in doc, f"Offline {fmt} BOOT missing packed script eval"
+        rest_body, rest_enc = make_offline._extract_script_payload_with_enc(doc, "p-rest")
+        assert rest_enc == expected_enc
+        unpacked_rest = minecraft_xz.unpack_container(make_offline._decode_payload_text(rest_body, rest_enc))
+        assert b"EaglerJvmTranslator" in unpacked_rest["js_translator"] and b"EaglerJvmBridge" in unpacked_rest["js_bridge"], (
+            f"Offline {fmt} packed rest archive missing translator/bridge code"
         )
         assert "#eagler-drop-overlay" in doc and "#eagler-mod-build-toast" in doc and "#eagler-mod-hud-canvas" in doc, (
             f"Offline {fmt} output missing Minecraft mod UI CSS rules"
@@ -1384,7 +1400,7 @@ def check_js_files_and_offline_dry_run(skip_sync_check: bool = False) -> list:
         if fmt != "html":
             parser = xml.parsers.expat.ParserCreate()
             parser.Parse(doc.encode("utf-8"), True)
-    report.append("make_offline.py dry-run passed across all 4 formats (html, xhtml, xml, svg + expat XML check)")
+    report.append("make_offline.py dry-run passed across all 4 formats (html/b122, xhtml/xml/svg/xutf + packed scripts + expat XML check)")
     return report
 
 

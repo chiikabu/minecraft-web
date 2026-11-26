@@ -38,7 +38,7 @@ index a69933d..62cf23d 100644
          wasmGCHost.addIntrinsic(new MethodReference(MethodInfoList.class, "count", int.class), intrinsics);
          wasmGCHost.addIntrinsic(new MethodReference(MethodInfoList.class, "get", int.class, MethodInfo.class),
 diff --git a/classlib/src/main/java/org/teavm/classlib/impl/ReflectionDependencyListener.java b/classlib/src/main/java/org/teavm/classlib/impl/ReflectionDependencyListener.java
-index 0389b41..88fa4ce 100644
+index 0389b41..54c9a1e 100644
 --- a/classlib/src/main/java/org/teavm/classlib/impl/ReflectionDependencyListener.java
 +++ b/classlib/src/main/java/org/teavm/classlib/impl/ReflectionDependencyListener.java
 @@ -55,19 +55,30 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
@@ -155,7 +155,7 @@ index 0389b41..88fa4ce 100644
      }
  
      public boolean isGetReached() {
-@@ -206,21 +233,37 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -206,21 +233,38 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
      @Override
      public void methodReached(DependencyAgent agent, MethodDependency method) {
          if (method.getReference().equals(fieldGet)) {
@@ -191,30 +191,36 @@ index 0389b41..88fa4ce 100644
 +                    method.getReference().equals(getConstructors) ? constructorTypes : nullaryConstructorTypes);
          } else if (method.getReference().equals(getFields)) {
              method.getVariable(0).getClassValueNode().addConsumer(type -> {
-                 if (!type.getName().startsWith("[")) {
-                     classesWithReflectableFields.add(type.getName());
+-                if (!type.getName().startsWith("[")) {
+-                    classesWithReflectableFields.add(type.getName());
++                String name = type.getName();
++                if (!isSkippedReflectionType(name)) {
++                    classesWithReflectableFields.add(name);
  
 -                    ClassReader cls = agent.getClassSource().get(type.getName());
-+                    ClassReader cls = getReflectionClass(type.getName());
++                    ClassReader cls = getReflectionClass(name);
                      if (cls != null) {
                          var skipPrivates = shouldSkipPrivates(cls);
                          for (FieldReader field : cls.getFields()) {
-@@ -235,12 +278,12 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -235,12 +279,13 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                      }
                  }
              });
 -        } else if (method.getReference().equals(getConstructors) || method.getReference().equals(getMethods)) {
 +        } else if (method.getReference().equals(getConstructorMetadata) || method.getReference().equals(getMethods)) {
              method.getVariable(0).getClassValueNode().addConsumer(type -> {
-                 if (!type.getName().startsWith("[")) {
-                     classesWithReflectableMethods.add(type.getName());
+-                if (!type.getName().startsWith("[")) {
+-                    classesWithReflectableMethods.add(type.getName());
++                String name = type.getName();
++                if (!isSkippedReflectionType(name)) {
++                    classesWithReflectableMethods.add(name);
  
 -                    ClassReader cls = agent.getClassSource().get(type.getName());
-+                    ClassReader cls = getReflectionClass(type.getName());
++                    ClassReader cls = getReflectionClass(name);
                      if (cls != null) {
                          var skipPrivates = shouldSkipPrivates(cls);
                          for (MethodReader reflectableMethod : cls.getMethods()) {
-@@ -258,11 +301,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -258,11 +303,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                      }
                  }
              });
@@ -229,7 +235,19 @@ index 0389b41..88fa4ce 100644
          } else if (method.getReference().equals(fieldGetType) || method.getReference().equals(methodGetReturnType)) {
              method.getResult().propagate(agent.getType("java.lang.Class"));
              typesInReflectableSignaturesNode.connect(method.getResult().getClassValueNode());
-@@ -292,6 +334,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -276,6 +320,11 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+         }
+     }
+ 
++    private static boolean isSkippedReflectionType(String name) {
++        return name.startsWith("[") || name.contains("$lambda$_") || name.contains("$PROXY$")
++                || name.startsWith("$$teavm_generated_class$$");
++    }
++
+     public static boolean shouldSkipPrivates(ClassReader cls) {
+         return cls.getName().equals("java.lang.Object") || cls.getName().equals("java.lang.Class");
+     }
+@@ -292,6 +341,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
              }
              Set<String> accessibleFields = getAccessibleFields(agent, reflectedType.getName());
              ClassReader cls = agent.getClassSource().get(reflectedType.getName());
@@ -237,7 +255,7 @@ index 0389b41..88fa4ce 100644
              for (String fieldName : accessibleFields) {
                  FieldReader field = cls.getField(fieldName);
                  FieldDependency fieldDep = agent.linkField(field.getReference())
-@@ -300,7 +343,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -300,7 +350,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                      readFields.add(field.getReference());
                      propagateGet(agent, field.getType(), fieldDep.getValue(), method.getResult(), location);
                  } else {
@@ -249,7 +267,7 @@ index 0389b41..88fa4ce 100644
                              method, location));
                  }
                  linkClassIfNecessary(agent, field, location);
-@@ -321,6 +367,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -321,6 +374,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
              Set<String> accessibleFields = getAccessibleFields(agent, reflectedType.getName());
              ClassReader cls = agent.getClassSource().get(reflectedType.getName());
@@ -257,7 +275,7 @@ index 0389b41..88fa4ce 100644
              for (String fieldName : accessibleFields) {
                  FieldReader field = cls.getField(fieldName);
                  FieldDependency fieldDep = agent.linkField(field.getReference()).addLocation(location);
-@@ -328,7 +375,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -328,7 +382,10 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                      writtenFields.add(field.getReference());
                      propagateSet(agent, field.getType(), method.getVariable(2), fieldDep.getValue(), location);
                  } else {
@@ -269,7 +287,7 @@ index 0389b41..88fa4ce 100644
                              method, location));
                  }
                  linkClassIfNecessary(agent, field, location);
-@@ -337,11 +387,16 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -337,11 +394,16 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
      }
  
      private void handleNewInstance(DependencyAgent agent, MethodDependency method) {
@@ -290,7 +308,7 @@ index 0389b41..88fa4ce 100644
          callReached = true;
          classValueNode.addConsumer(reflectedType -> {
              if (reflectedType.getName().startsWith("[") || reflectedType.getName().startsWith("~")) {
-@@ -355,27 +410,55 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -355,27 +417,55 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
              }
  
              Set<MethodDescriptor> accessibleMethods = getAccessibleMethods(agent, reflectedType.getName());
@@ -359,7 +377,7 @@ index 0389b41..88fa4ce 100644
          });
      }
  
-@@ -419,6 +502,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -419,6 +509,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
              Set<MethodDescriptor> accessibleMethods = getAccessibleMethods(agent, reflectedType.getName());
              ClassReader cls = agent.getClassSource().get(reflectedType.getName());
@@ -367,7 +385,7 @@ index 0389b41..88fa4ce 100644
              for (MethodDescriptor methodDescriptor : accessibleMethods) {
                  if (methodDescriptor.getName().equals("<init>")) {
                      continue;
-@@ -440,13 +524,28 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -440,13 +531,28 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                  } else {
                      var virtual = !calledMethod.hasModifier(ElementModifier.FINAL)
                              && calledMethod.getLevel() != AccessLevel.PRIVATE;
@@ -397,7 +415,7 @@ index 0389b41..88fa4ce 100644
      private class InstanceCallConsumer implements DependencyConsumer {
          private final DependencyAgent agent;
          private final MethodReference methodRef;
-@@ -468,10 +567,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -468,10 +574,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
          @Override
          public void consume(DependencyType type) {
@@ -408,7 +426,7 @@ index 0389b41..88fa4ce 100644
              var className = type.getName();
  
              if (className.startsWith("[")) {
-@@ -482,10 +577,17 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -482,10 +584,17 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                  return;
              }
  
@@ -426,7 +444,7 @@ index 0389b41..88fa4ce 100644
              if (!knownMethods.add(methodDep.getReference())) {
                  return;
              }
-@@ -495,7 +597,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -495,7 +604,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
                  calledMethods.add(methodRef);
                  methodDep.use();
                  virtualMethods.add(methodDep.getReference());
@@ -434,7 +452,7 @@ index 0389b41..88fa4ce 100644
                  for (var i = 0; i < methodRef.parameterCount(); ++i) {
                      propagateSet(agent, methodRef.parameterType(i), invokeDep.getVariable(2).getArrayItem(),
                              methodDep.getVariable(i + 1), location);
-@@ -514,7 +615,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -514,7 +622,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
          private final MethodDependency readDep;
          private final CallLocation location;
  
@@ -442,7 +460,7 @@ index 0389b41..88fa4ce 100644
          private boolean done;
  
          InstanceGetConsumer(DependencyAgent agent, FieldReference fieldRef, MethodDependency readDep,
-@@ -527,7 +627,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -527,7 +634,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
          @Override
          public void consume(DependencyType type) {
@@ -451,7 +469,7 @@ index 0389b41..88fa4ce 100644
                  return;
              }
  
-@@ -557,7 +657,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -557,7 +664,6 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
          private final MethodDependency readDep;
          private final CallLocation location;
  
@@ -459,7 +477,7 @@ index 0389b41..88fa4ce 100644
          private boolean done;
  
          InstanceSetConsumer(DependencyAgent agent, FieldReference fieldRef, MethodDependency readDep,
-@@ -570,7 +669,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -570,7 +676,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
          @Override
          public void consume(DependencyType type) {
@@ -468,7 +486,7 @@ index 0389b41..88fa4ce 100644
                  return;
              }
  
-@@ -640,6 +739,12 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -640,6 +746,12 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
      private Set<MethodDescriptor> gatherAccessibleMethods(DependencyAgent agent, String className) {
          ReflectionContextImpl context = new ReflectionContextImpl(agent);
          Set<MethodDescriptor> methods = new LinkedHashSet<>();
@@ -481,7 +499,7 @@ index 0389b41..88fa4ce 100644
          for (ReflectionSupplier supplier : reflectionSuppliers) {
              methods.addAll(supplier.getAccessibleMethods(context, className));
          }
-@@ -727,7 +832,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -727,7 +839,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
          }
      }
  
@@ -490,7 +508,7 @@ index 0389b41..88fa4ce 100644
          private DependencyAgent agent;
  
          public ReflectionContextImpl(DependencyAgent agent) {
-@@ -741,7 +846,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
+@@ -741,7 +853,7 @@ public class ReflectionDependencyListener extends AbstractDependencyListener {
  
          @Override
          public ClassReaderSource getClassSource() {
@@ -868,10 +886,10 @@ index 0000000..89aa581
 +}
 diff --git a/classlib/src/main/java/org/teavm/classlib/impl/reflection/GenericMetadataGenerator.java b/classlib/src/main/java/org/teavm/classlib/impl/reflection/GenericMetadataGenerator.java
 new file mode 100644
-index 0000000..5d36558
+index 0000000..b070fd8
 --- /dev/null
 +++ b/classlib/src/main/java/org/teavm/classlib/impl/reflection/GenericMetadataGenerator.java
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,487 @@
 +package org.teavm.classlib.impl.reflection;
 +
 +import static org.teavm.metaprogramming.Metaprogramming.arrayClass;
@@ -907,11 +925,16 @@ index 0000000..5d36558
 +    private GenericMetadataGenerator() {
 +    }
 +
++    private static boolean isSyntheticTeaVm(String name) {
++        return name.startsWith("~") || name.contains("$lambda$_") || name.contains("$PROXY$")
++                || name.startsWith("$$teavm_generated_class$$") || name.startsWith("org.teavm.");
++    }
++
 +    @Meta
 +    public static native Class<?>[] declaredClasses(Class<?> owner);
 +
 +    public static void declaredClasses(ReflectClass<?> owner) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit(() -> new Class<?>[0]);
 +            return;
 +        }
@@ -945,7 +968,7 @@ index 0000000..5d36558
 +    public static native void fill(Class<?> owner, GenericMetadata metadata);
 +
 +    public static void fill(ReflectClass<?> owner, Value<GenericMetadata> metadata) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit();
 +            return;
 +        }
@@ -963,7 +986,7 @@ index 0000000..5d36558
 +    public static native void fillSuperclass(Class<?> owner, GenericMetadata metadata);
 +
 +    public static void fillSuperclass(ReflectClass<?> owner, Value<GenericMetadata> metadata) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit();
 +            return;
 +        }
@@ -980,7 +1003,7 @@ index 0000000..5d36558
 +    public static native void fillInterfaces(Class<?> owner, GenericMetadata metadata);
 +
 +    public static void fillInterfaces(ReflectClass<?> owner, Value<GenericMetadata> metadata) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit();
 +            return;
 +        }
@@ -1006,7 +1029,7 @@ index 0000000..5d36558
 +    public static native Type fieldType(Class<?> owner, String fieldName, Type erasedType);
 +
 +    public static void fieldType(ReflectClass<?> owner, Value<String> fieldName, Value<Type> erasedType) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit(() -> erasedType.get());
 +            return;
 +        }
@@ -1031,7 +1054,7 @@ index 0000000..5d36558
 +
 +    public static void fillMember(ReflectClass<?> owner, Value<GenericDeclaration> member,
 +            Value<GenericMetadata> metadata) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit();
 +            return;
 +        }
@@ -1056,7 +1079,7 @@ index 0000000..5d36558
 +
 +    public static void constructorParameterTypes(ReflectClass<?> owner, Value<Constructor<?>> member,
 +            Value<Type[]> erasedTypes) {
-+        if (owner.isPrimitive() || owner.isArray() || owner.getName().startsWith("~")) {
++        if (owner.isPrimitive() || owner.isArray() || isSyntheticTeaVm(owner.getName())) {
 +            exit(() -> erasedTypes.get());
 +            return;
 +        }
@@ -3257,6 +3280,55 @@ index 0000000..6612a6c
 +        super(cause);
 +    }
 +}
+diff --git a/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/ArrayDependencyPlugin.java b/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/ArrayDependencyPlugin.java
+index a90d358..5a31dce 100644
+--- a/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/ArrayDependencyPlugin.java
++++ b/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/ArrayDependencyPlugin.java
+@@ -43,19 +43,31 @@ public class ArrayDependencyPlugin implements DependencyPlugin {
+                 reachGetLength(agent, method);
+                 break;
+             case "newInstance":
+-                method.getVariable(1).getClassValueNode().addConsumer(t -> {
+-                    String arrayTypeName;
+-                    if (t.getName().startsWith("[")) {
+-                        arrayTypeName = t.getName();
+-                    } else if (t.getName().startsWith("~")) {
+-                        arrayTypeName = t.getName().substring(1);
+-                    } else {
+-                        arrayTypeName = ValueType.object(t.getName()).toString();
+-                    }
+-                    if (!arrayTypeName.startsWith("[[[")) {
+-                        method.getResult().propagate(agent.getType("[" + arrayTypeName));
+-                    }
+-                });
++                if (!agent.isPrecise()) {
++                    boolean[] objectArrayPropagated = new boolean[1];
++                    method.getVariable(1).getClassValueNode().addConsumer(t -> {
++                        if (t.getName().startsWith("~")) {
++                            method.getResult().propagate(agent.getType("[" + t.getName().substring(1)));
++                        } else if (!objectArrayPropagated[0]) {
++                            objectArrayPropagated[0] = true;
++                            method.getResult().propagate(agent.getType("[Ljava/lang/Object;"));
++                        }
++                    });
++                } else {
++                    method.getVariable(1).getClassValueNode().addConsumer(t -> {
++                        String arrayTypeName;
++                        if (t.getName().startsWith("[")) {
++                            arrayTypeName = t.getName();
++                        } else if (t.getName().startsWith("~")) {
++                            arrayTypeName = t.getName().substring(1);
++                        } else {
++                            arrayTypeName = ValueType.object(t.getName()).toString();
++                        }
++                        if (!arrayTypeName.startsWith("[[[")) {
++                            method.getResult().propagate(agent.getType("[" + arrayTypeName));
++                        }
++                    });
++                }
+                 break;
+             case "getImpl":
+                 reachGet(agent, method);
 diff --git a/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/BaseAnnotationDependencyListener.java b/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/BaseAnnotationDependencyListener.java
 index 0794021..0601036 100644
 --- a/classlib/src/main/java/org/teavm/classlib/java/lang/reflect/BaseAnnotationDependencyListener.java
@@ -16014,7 +16086,7 @@ index 880e67f..280e7bb 100644
                      ConstructArrayInstruction insn = new ConstructArrayInstruction();
                      insn.setItemType(reflectClass.type);
 diff --git a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/MetaprogrammingDependencyListener.java b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/MetaprogrammingDependencyListener.java
-index 2cefd0f..67ee7a6 100644
+index 2cefd0f..944431a 100644
 --- a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/MetaprogrammingDependencyListener.java
 +++ b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/MetaprogrammingDependencyListener.java
 @@ -15,13 +15,14 @@
@@ -16041,17 +16113,45 @@ index 2cefd0f..67ee7a6 100644
      private Set<MethodModel> installedProxies = new HashSet<>();
      private MetaprogrammingClassLoader proxyClassLoader;
  
-@@ -110,6 +112,9 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
+@@ -91,14 +93,18 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
+                 paramVars[i] = pe.var(i + offset, model.getMetaParameterType(i));
+             }
  
-     private void emitSingleUsage(MethodModel model, ProgramEmitter pe, ValueEmitter[] paramVars) {
-         MethodReference usage = model.getUsages().values().stream().findFirst().orElse(null);
+-            if (model.getUsages().size() == 1) {
+-                emitSingleUsage(model, pe, paramVars);
++            if (model.getUsages().size() == 1 && model.getDefaultUsage() == null) {
++                emitSingleUsage(model, model.getUsages().values().iterator().next(), pe, paramVars);
+             } else if (model.getUsages().isEmpty()) {
+-                var returnType = model.getMethod().getReturnType();
+-                if (returnType == ValueType.VOID) {
+-                    pe.exit();
++                if (model.getDefaultUsage() != null) {
++                    emitSingleUsage(model, model.getDefaultUsage(), pe, paramVars);
+                 } else {
+-                    pe.defaultValue(returnType).returnValue();
++                    var returnType = model.getMethod().getReturnType();
++                    if (returnType == ValueType.VOID) {
++                        pe.exit();
++                    } else {
++                        pe.defaultValue(returnType).returnValue();
++                    }
+                 }
+             } else {
+                 emitMultipleUsage(model, pe, agent, paramVars);
+@@ -108,8 +114,10 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
+         }
+     }
+ 
+-    private void emitSingleUsage(MethodModel model, ProgramEmitter pe, ValueEmitter[] paramVars) {
+-        MethodReference usage = model.getUsages().values().stream().findFirst().orElse(null);
++    private void emitSingleUsage(MethodModel model, MethodReference usage, ProgramEmitter pe, ValueEmitter[] paramVars) {
 +        if (model.getMetaClassParameterIndex() >= 0) {
 +            paramVars[model.getMetaClassParameterIndex()] = pe.constantNull(Class.class);
 +        }
          ValueEmitter result = pe.invoke(usage, paramVars);
          if (usage.getReturnType() == ValueType.VOID) {
              pe.exit();
-@@ -121,17 +126,62 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
+@@ -121,17 +129,62 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
  
      private void emitMultipleUsage(MethodModel model, ProgramEmitter pe, DependencyAgent agent,
              ValueEmitter[] paramVars) {
@@ -16120,17 +16220,39 @@ index 2cefd0f..67ee7a6 100644
                  MethodReference implMethod = usageEntry.getValue();
                  ValueEmitter[] castParamVars = new ValueEmitter[paramVars.length];
                  for (int i = 0; i < castParamVars.length; ++i) {
-@@ -148,7 +198,7 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
+@@ -148,11 +201,26 @@ public class MetaprogrammingDependencyListener extends AbstractDependencyListene
          }
  
          choice.otherwise(() -> {
 -            var returnType = methodDep.getReference().getReturnType();
-+            var returnType = model.getMethod().getReturnType();
-             if (returnType == ValueType.VOID) {
-                 pe.exit();
+-            if (returnType == ValueType.VOID) {
+-                pe.exit();
++            MethodReference defaultUsage = model.getDefaultUsage();
++            if (defaultUsage != null) {
++                ValueEmitter[] castParamVars = new ValueEmitter[paramVars.length];
++                for (int i = 0; i < castParamVars.length; ++i) {
++                    castParamVars[i] = paramVars[i].cast(defaultUsage.parameterType(i));
++                }
++                ValueEmitter result = pe.invoke(defaultUsage, castParamVars);
++                if (defaultUsage.getReturnType() == ValueType.VOID) {
++                    pe.exit();
++                } else {
++                    assert result != null : "Expected non-null result at " + model.getMethod();
++                    result.returnValue();
++                }
              } else {
+-                pe.defaultValue(returnType).returnValue();
++                var returnType = model.getMethod().getReturnType();
++                if (returnType == ValueType.VOID) {
++                    pe.exit();
++                } else {
++                    pe.defaultValue(returnType).returnValue();
++                }
+             }
+         });
+     }
 diff --git a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/UsageGenerator.java b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/UsageGenerator.java
-index 8abe5f9..dbf24a4 100644
+index 8abe5f9..39ff874 100644
 --- a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/UsageGenerator.java
 +++ b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/UsageGenerator.java
 @@ -20,6 +20,8 @@ import java.io.StringWriter;
@@ -16200,7 +16322,7 @@ index 8abe5f9..dbf24a4 100644
          MethodDependency hashCodeDep = agent.linkMethod(new MethodReference(String.class, "hashCode", int.class));
          hashCodeDep.addLocation(location);
          hashCodeDep.getVariable(0).propagate(agent.getType("java.lang.String"));
-@@ -171,8 +190,19 @@ class UsageGenerator {
+@@ -171,8 +190,27 @@ class UsageGenerator {
              return;
          }
  
@@ -16209,19 +16331,27 @@ index 8abe5f9..dbf24a4 100644
 +        int returnedParameter = trivialResult(program, implRef);
 +        MethodReference shared = trivialUsages.get(returnedParameter);
 +        if (shared != null) {
++            if (shared.equals(model.getDefaultUsage())) {
++                return;
++            }
 +            model.getUsages().put(type, shared);
 +            reserveDispatchers();
 +            return;
 +        }
-+        model.getUsages().put(type, implRef);
-+        reserveDispatchers();
-+        if (returnedParameter >= 0) {
++        if (returnedParameter >= 0 && model.getDefaultUsage() == null && trivialUsages.isEmpty()) {
++            model.setDefaultUsage(implRef);
 +            trivialUsages.put(returnedParameter, implRef);
++        } else {
++            model.getUsages().put(type, implRef);
++            reserveDispatchers();
++            if (returnedParameter >= 0) {
++                trivialUsages.put(returnedParameter, implRef);
++            }
 +        }
          //new BoxingEliminator().optimize(program);
  
          ClassHolder cls = new ClassHolder(implRef.getClassName());
-@@ -191,12 +221,10 @@ class UsageGenerator {
+@@ -191,12 +229,10 @@ class UsageGenerator {
          MethodDependency implMethod = agent.linkMethod(implRef);
          implMethod.addLocation(location);
          for (int i = 0; i < implRef.parameterCount(); ++i) {
@@ -16238,7 +16368,7 @@ index 8abe5f9..dbf24a4 100644
          }
  
          if (implMethod.getResult() != null) {
-@@ -209,6 +237,10 @@ class UsageGenerator {
+@@ -209,6 +245,10 @@ class UsageGenerator {
      }
  
      private ValueType findClass(String name) {
@@ -16249,7 +16379,7 @@ index 8abe5f9..dbf24a4 100644
          // TODO: dirty hack due to bugs somewhere in TeaVM
          if (name.startsWith("[")) {
              ValueType type = ValueType.parseIfPossible(name);
-@@ -248,6 +280,88 @@ class UsageGenerator {
+@@ -248,6 +288,88 @@ class UsageGenerator {
                  model.getMethod().getName(), signature);
      }
  
@@ -16339,10 +16469,10 @@ index 8abe5f9..dbf24a4 100644
          return suffix + "_" + ownSuffix++;
      }
 diff --git a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/model/MethodModel.java b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/model/MethodModel.java
-index a7d8569..8244528 100644
+index a7d8569..6b291af 100644
 --- a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/model/MethodModel.java
 +++ b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/model/MethodModel.java
-@@ -21,6 +21,10 @@ import org.teavm.model.MethodReference;
+@@ -21,11 +21,16 @@ import org.teavm.model.MethodReference;
  import org.teavm.model.ValueType;
  
  public class MethodModel {
@@ -16353,6 +16483,27 @@ index a7d8569..8244528 100644
      private MethodReference method;
      private MethodReference metaMethod;
      private int classParameterIndex;
+     private boolean isStatic;
+     private Map<ValueType, MethodReference> usages = new HashMap<>();
++    private MethodReference defaultUsage;
+ 
+     MethodModel(MethodReference method, MethodReference metaMethod, int classParameterIndex, boolean isStatic) {
+         this.method = method;
+@@ -54,6 +59,14 @@ public class MethodModel {
+         return usages;
+     }
+ 
++    public MethodReference getDefaultUsage() {
++        return defaultUsage;
++    }
++
++    public void setDefaultUsage(MethodReference defaultUsage) {
++        this.defaultUsage = defaultUsage;
++    }
++
+     public int getMetaParameterCount() {
+         return (isStatic ? 0 : 1) + method.parameterCount();
+     }
 diff --git a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/reflect/ReflectClassImpl.java b/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/reflect/ReflectClassImpl.java
 index cc77f20..d7db62e 100644
 --- a/metaprogramming/impl/src/main/java/org/teavm/metaprogramming/impl/reflect/ReflectClassImpl.java
@@ -16478,7 +16629,7 @@ index 6737e80..9d36c99 100644
                  WasmExpression map = manager.generate(invocation.getArguments().get(0));
                  WasmExpression key = manager.generate(invocation.getArguments().get(1));
 diff --git a/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java b/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
-index 1e6271a..c39a826 100644
+index 1e6271a..0413b3b 100644
 --- a/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
 +++ b/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
 @@ -379,6 +379,11 @@ public class TeaVMTool {

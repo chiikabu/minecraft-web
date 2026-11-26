@@ -28,6 +28,7 @@
 	<script src="minecraft-web-simd-kernels.js"></script>
 	<script src="minecraft-web-jvm-translator.js"></script>
 	<script src="minecraft-web-jvm-bridge.js"></script>
+	<script src="minecraft-web-modrinth.js"></script>
 </head>
 <body>
 	<canvas id="game_frame" width="854" height="480"></canvas>
@@ -41,6 +42,41 @@
 	</div>
 	<script>
 		"use strict";
+		(function () {
+			var earlyGpuWanted = true;
+			try {
+				var sp = new URLSearchParams(location.search);
+				if ((sp.has("webgl") && sp.get("webgl") !== "0") || sp.get("webgpu") === "0") { earlyGpuWanted = false; }
+				if (sessionStorage.getItem("minecraft-web.webgpuFailed")) { earlyGpuWanted = false; }
+				if (!sp.has("webgpu") && localStorage.getItem("minecraft.shaderpack.selected")) { earlyGpuWanted = false; }
+			} catch (e) {}
+			if (earlyGpuWanted && typeof navigator !== "undefined" && navigator.gpu && navigator.gpu.requestAdapter && !window.__minecraftWebGpuState) {
+				window.__minecraftWebGpuState = "probing";
+				var gpuT0 = performance.now();
+				window.__minecraftEarlyWebGpu = navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).then(function (adapter) {
+					if (window.__minecraftWebGpuState !== "probing") { return null; }
+					if (!adapter) { window.__minecraftWebGpuState = "no adapter"; return null; }
+					var limits = {};
+					for (var k in adapter.limits) { limits[k] = adapter.limits[k]; }
+					window.__minecraftWebGpuLimits = limits;
+					window.__minecraftWebGpuAdapterInfo = adapter.info || {};
+					if (adapter.isFallbackAdapter) { window.__minecraftWebGpuState = "software fallback adapter"; return null; }
+					return adapter.requestDevice().then(function (device) {
+						if (window.__minecraftWebGpuState !== "probing") { try { device.destroy(); } catch (e) {} return null; }
+						window.__minecraftWebGpuDevice = device;
+						window.__minecraftWebGpuState = "ready";
+						window.__minecraftWebGpuProbeMs = Math.round(performance.now() - gpuT0);
+						device.lost.then(function (info) { window.__minecraftWebGpuState = "lost: " + info.reason; });
+						return { adapter: adapter, device: device, info: window.__minecraftWebGpuAdapterInfo };
+					});
+				}).catch(function (e) {
+					if (window.__minecraftWebGpuState === "probing") { window.__minecraftWebGpuState = "error: " + e; }
+					return null;
+				});
+			} else {
+				window.__minecraftEarlyWebGpu = null;
+			}
+		})();
 		(function () {
 			if (typeof WebGL2RenderingContext !== "undefined") {
 				var proto = WebGL2RenderingContext.prototype;
@@ -94,24 +130,35 @@
 
 			var PHONE_PIXEL_BUDGET = 1150000;
 			var WEAK_GPU_PIXEL_BUDGET = 921600;
+			var WEAK_GPU_RE = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Intel\(R\) Graphics\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) ([1-5]\d\d|61\d)|Panfrost|Freedreno|Turnip|virgl|V3D|AMD.*(Stoney|Radeon\(TM\) R[2-5]|Vega [1-3]|610M)|SwiftShader|llvmpipe/i;
 			var forcedScale = parseFloat((/[?&]scale=([0-9.]+)/.exec(location.search) || [])[1]);
 			var weakGpu = null;
+			var glProbeReady = false;
 			function isWeakGpu() {
 				if (weakGpu !== null) { return weakGpu; }
-				weakGpu = false;
 				try {
 					if (typeof navigator !== "undefined" && (/\bCrOS\b/.test(navigator.userAgent || "") || (navigator.deviceMemory > 0 && navigator.deviceMemory <= 4))) {
 						weakGpu = true;
 						return weakGpu;
 					}
+					var gpuInfo = window.__minecraftWebGpuAdapterInfo;
+					if (gpuInfo) {
+						var desc = [gpuInfo.vendor, gpuInfo.architecture, gpuInfo.device, gpuInfo.description].filter(Boolean).join(" ");
+						if (desc) {
+							weakGpu = WEAK_GPU_RE.test(desc);
+							return weakGpu;
+						}
+					}
+					if (!glProbeReady) { return false; }
+					weakGpu = false;
 					var gl = document.createElement("canvas").getContext("webgl2");
 					var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
 					var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
-					weakGpu = /Intel.*\b(U?HD|Iris\(R\) Graphics [56]|GMA)\b|Intel\(R\) Graphics\b|Mesa Intel|Mali|PowerVR|Adreno \(TM\) ([1-5]\d\d|61\d)|Panfrost|Freedreno|Turnip|virgl|V3D|AMD.*(Stoney|Radeon\(TM\) R[2-5]|Vega [1-3]|610M)|SwiftShader|llvmpipe/i.test(name);
+					weakGpu = WEAK_GPU_RE.test(name);
 					var lose = gl && gl.getExtension("WEBGL_lose_context");
 					if (lose) { lose.loseContext(); }
-				} catch (e) {  }
-				return weakGpu;
+				} catch (e) { weakGpu = false; }
+				return !!weakGpu;
 			}
 			window.__minecraftWebWeakGpu = isWeakGpu;
 			function shaderPackSelected() {
@@ -374,6 +421,7 @@
 					}
 					window.__eaglerBootedModProfile = requestedProfile || "vanilla";
 					var engine = loadEngine(wasmUrl, !!requestedProfile);
+					glProbeReady = true;
 					if (!requestedProfile) {
 						fetchProfilesManifest();
 					}

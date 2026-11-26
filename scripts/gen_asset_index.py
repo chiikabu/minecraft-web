@@ -16,6 +16,11 @@ import zipfile
 EXCLUDED_PREFIXES = (
     "assets/minecraft/sounds/",
     "assets/minecraft/resourcepacks/",
+    "assets/minecraft/textures/gui/realms/",
+)
+
+EXCLUDED_EXACT = (
+    "assets/minecraft/textures/gui/title/realms.png",
 )
 
 KEPT_LANG = ("en_us.json", "deprecated.json")
@@ -70,7 +75,7 @@ def wanted(name: str) -> bool:
         return True
     if not (name.startswith("assets/") or name.startswith("data/")):
         return False
-    if name.startswith(EXCLUDED_PREFIXES):
+    if name.startswith(EXCLUDED_PREFIXES) or name in EXCLUDED_EXACT:
         return False
     if "/lang/" in name and name.rsplit("/", 1)[-1] not in KEPT_LANG:
         return False
@@ -207,6 +212,8 @@ def selfcheck() -> int:
         "assets/minecraft/lang/de_de.json",
         "assets/minecraft/sounds/ambient/cave/cave1.ogg",
         "assets/minecraft/resourcepacks/programmer_art.zip",
+        "assets/minecraft/textures/gui/realms/configure_icon.png",
+        "assets/minecraft/textures/gui/title/realms.png",
         "net/minecraft/client/Minecraft.class",
         "pack.png",
     ]
