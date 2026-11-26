@@ -1396,8 +1396,17 @@ public class ModsScreen extends Screen {
 				if (mod.hasExtractedPacks()) {
 					sb.append(" (active)");
 				}
-			} else if (mod.canRunViaTranslator() && mod.jvmTranslated && !mod.jvmSummary.isEmpty()) {
-				sb.append(" - Translated offline: ").append(mod.jvmSummary);
+			} else if (mod.canRunViaTranslator() && mod.jvmTranslated) {
+				sb.append(" - ").append(mod.jvmClassesLoaded).append(" classes");
+				if (mod.jvmEntrypointsRun > 0) {
+					sb.append(", ").append(mod.jvmEntrypointsRun).append(mod.jvmEntrypointsRun == 1 ? " entrypoint" : " entrypoints");
+				}
+				if (mod.jvmMixinsAttached > 0) {
+					sb.append(", ").append(mod.jvmMixinsAttached).append(mod.jvmMixinsAttached == 1 ? " mixin" : " mixins");
+				}
+				if (mod.jvmMixinsUnsupported > 0) {
+					sb.append(" (").append(mod.jvmMixinsUnsupported).append(" unsupported)");
+				}
 				if (mod.hasExtractedPacks()) {
 					sb.append(" (assets active)");
 				}

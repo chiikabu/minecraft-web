@@ -103,8 +103,19 @@ public final class WebMods {
 	private static boolean hasJvmPlayerTickHooks;
 	private static boolean hasJvmTickEndHooks;
 	private static boolean hasJvmScreenHooks;
+	private static boolean hasJvmScreenChangeHooks;
+	private static boolean hasJvmContainerOpenHooks;
+	private static boolean hasJvmContainerCloseHooks;
+	private static boolean hasJvmContainerRenderHooks;
 	private static boolean hasJvmWorldJoinHooks;
 	private static boolean hasJvmWorldLeaveHooks;
+	private static boolean hasJvmServerStartHooks;
+	private static boolean hasJvmRecipesUpdatedHooks;
+	private static boolean hasJvmTagsUpdatedHooks;
+	private static boolean hasJvmDimChangeHooks;
+	private static boolean hasJvmHurtHooks;
+	private static boolean hasJvmDeathHooks;
+	private static boolean hasJvmRespawnHooks;
 	private static boolean builderActive;
 
 	// Lifecycle tracking for JS/JVM event hooks
@@ -115,7 +126,11 @@ public final class WebMods {
 	private static long lastLevelGameTime = Long.MIN_VALUE;
 	private static boolean explicitTickHookSeen;
 	private static String lastScreenName = "";
+	private static boolean lastScreenContainer;
 	private static boolean lastInWorld;
+	private static String lastTrackedDim = "";
+	private static float lastTrackedHealth = -1.0F;
+	private static boolean lastTrackedDead;
 
 	// Zero-allocation reference caches for syncLiveState string fields
 	private static boolean liveStateStringsInit;
@@ -294,8 +309,19 @@ public final class WebMods {
 			hasJvmPlayerTickHooks = false;
 			hasJvmTickEndHooks = false;
 			hasJvmScreenHooks = false;
+			hasJvmScreenChangeHooks = false;
+			hasJvmContainerOpenHooks = false;
+			hasJvmContainerCloseHooks = false;
+			hasJvmContainerRenderHooks = false;
 			hasJvmWorldJoinHooks = false;
 			hasJvmWorldLeaveHooks = false;
+			hasJvmServerStartHooks = false;
+			hasJvmRecipesUpdatedHooks = false;
+			hasJvmTagsUpdatedHooks = false;
+			hasJvmDimChangeHooks = false;
+			hasJvmHurtHooks = false;
+			hasJvmDeathHooks = false;
+			hasJvmRespawnHooks = false;
 		} else {
 			hasFovHooks = jsJvmHasHook("fovModifier", anyRunningJvm);
 			hasGammaHooks = jsJvmHasHook("gammaModifier", anyRunningJvm);
@@ -304,8 +330,19 @@ public final class WebMods {
 			hasJvmPlayerTickHooks = jsJvmHasHook("playerTick", anyRunningJvm);
 			hasJvmTickEndHooks = jsJvmHasHook("tickEnd", anyRunningJvm);
 			hasJvmScreenHooks = jsJvmHasHook("screenInit", anyRunningJvm);
+			hasJvmScreenChangeHooks = jsJvmHasHook("screenChange", anyRunningJvm);
+			hasJvmContainerOpenHooks = jsJvmHasHook("containerOpen", anyRunningJvm);
+			hasJvmContainerCloseHooks = jsJvmHasHook("containerClose", anyRunningJvm);
+			hasJvmContainerRenderHooks = jsJvmHasHook("containerRender", anyRunningJvm);
 			hasJvmWorldJoinHooks = jsJvmHasHook("worldJoin", anyRunningJvm);
 			hasJvmWorldLeaveHooks = jsJvmHasHook("worldLeave", anyRunningJvm);
+			hasJvmServerStartHooks = jsJvmHasHook("serverStart", anyRunningJvm);
+			hasJvmRecipesUpdatedHooks = jsJvmHasHook("recipesUpdated", anyRunningJvm);
+			hasJvmTagsUpdatedHooks = jsJvmHasHook("tagsUpdated", anyRunningJvm);
+			hasJvmDimChangeHooks = jsJvmHasHook("playerChangeDimension", anyRunningJvm);
+			hasJvmHurtHooks = jsJvmHasHook("entityHurt", anyRunningJvm);
+			hasJvmDeathHooks = jsJvmHasHook("entityDeath", anyRunningJvm);
+			hasJvmRespawnHooks = jsJvmHasHook("playerRespawn", anyRunningJvm);
 		}
 		hasTickHooks = hasJvmTickStartHooks || hasJvmPlayerTickHooks || hasJvmTickEndHooks;
 		jsSetLiveStateAutoSync(hasActiveJsMods || hasActiveJvmMods);
@@ -356,34 +393,73 @@ public final class WebMods {
 		// Push live state once per frame using flat WASM primitives (zero JSON / zero allocations)
 		syncLiveState(mc);
 
-		// 1. Screen change detection (reuses cachedScreenName / cachedScreenTitle from syncLiveState)
+		// 1. Screen change & container screen detection (reuses cachedScreenName / cachedScreenTitle from syncLiveState)
 		String screenName = cachedScreenName;
+		boolean isContainerScreen = lastScreen instanceof net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 		if (!screenName.equals(lastScreenName)) {
 			String prev = lastScreenName;
+			boolean wasContainer = lastScreenContainer;
 			lastScreenName = screenName;
+			lastScreenContainer = isContainerScreen;
 			if (hasJsScreenListeners) {
 				jsEmitScreenChange(screenName, prev, cachedScreenTitle);
 			}
+			boolean dispatchedScreen = false;
+			if (hasJvmScreenChangeHooks) {
+				jsDispatchJvmSimpleScreenHook("screenChange", screenName, prev, cachedScreenTitle);
+				dispatchedScreen = true;
+			}
 			if (hasJvmScreenHooks) {
 				jsDispatchJvmScreenInit(screenName, prev, cachedScreenTitle);
+				dispatchedScreen = true;
+			}
+			if (wasContainer && !isContainerScreen && hasJvmContainerCloseHooks) {
+				jsDispatchJvmSimpleHook("containerClose", prev);
+				dispatchedScreen = true;
+			}
+			if (isContainerScreen && !wasContainer && hasJvmContainerOpenHooks) {
+				jsDispatchJvmSimpleScreenHook("containerOpen", screenName, prev, cachedScreenTitle);
+				dispatchedScreen = true;
+			}
+			if (dispatchedScreen) {
 				refreshJvmHookFlags();
 			}
 		}
 
-		// 2. World join / leave detection
+		// 2. World join / leave, recipe & tag sync, dimension & player health/death/respawn detection
 		boolean inWorld = mc.level != null;
 		if (inWorld != lastInWorld) {
 			lastInWorld = inWorld;
 			lastLevelGameTime = Long.MIN_VALUE;
+			lastTrackedHealth = -1.0F;
+			lastTrackedDead = false;
 			if (inWorld) {
+				lastTrackedDim = cachedDimension;
 				if (hasJsWorldJoinListeners) {
 					jsEmitWorldJoin(cachedDimension);
 				}
+				boolean dispatchedWorld = false;
+				if (hasJvmServerStartHooks && mc.hasSingleplayerServer()) {
+					jsDispatchJvmSimpleHook("serverStart", cachedDimension);
+					dispatchedWorld = true;
+				}
 				if (hasJvmWorldJoinHooks) {
 					jsDispatchJvmWorldJoin(cachedDimension);
+					dispatchedWorld = true;
+				}
+				if (hasJvmTagsUpdatedHooks) {
+					jsDispatchJvmSimpleHook("tagsUpdated", cachedDimension);
+					dispatchedWorld = true;
+				}
+				if (hasJvmRecipesUpdatedHooks) {
+					jsDispatchJvmSimpleHook("recipesUpdated", cachedDimension);
+					dispatchedWorld = true;
+				}
+				if (dispatchedWorld) {
 					refreshJvmHookFlags();
 				}
 			} else {
+				lastTrackedDim = "";
 				if (hasJsWorldLeaveListeners) {
 					jsEmitWorldLeave();
 				}
@@ -391,6 +467,37 @@ public final class WebMods {
 					jsDispatchJvmWorldLeave();
 					refreshJvmHookFlags();
 				}
+			}
+		} else if (inWorld) {
+			if (!cachedDimension.isEmpty() && !cachedDimension.equals(lastTrackedDim)) {
+				lastTrackedDim = cachedDimension;
+				if (hasJvmDimChangeHooks) {
+					jsDispatchJvmSimpleHook("playerChangeDimension", cachedDimension);
+				}
+				if (hasJvmRespawnHooks) {
+					jsDispatchJvmSimpleHook("playerRespawn", cachedDimension);
+				}
+			}
+			LocalPlayer lp = mc.player;
+			if (lp != null && (hasJvmHurtHooks || hasJvmDeathHooks || hasJvmRespawnHooks)) {
+				float hp = lp.getHealth();
+				if (lastTrackedHealth >= 0.0F) {
+					if (hp < lastTrackedHealth && hasJvmHurtHooks) {
+						jsDispatchJvmSimpleHook("entityHurt", cachedDimension);
+					}
+					if (!lastTrackedDead && hp <= 0.0F) {
+						lastTrackedDead = true;
+						if (hasJvmDeathHooks) {
+							jsDispatchJvmSimpleHook("entityDeath", cachedDimension);
+						}
+					} else if (lastTrackedDead && hp > 0.0F) {
+						lastTrackedDead = false;
+						if (hasJvmRespawnHooks) {
+							jsDispatchJvmSimpleHook("playerRespawn", cachedDimension);
+						}
+					}
+				}
+				lastTrackedHealth = hp;
 			}
 		}
 
@@ -402,8 +509,8 @@ public final class WebMods {
 			jsEmitFrame((double) frameCounter, (double) System.currentTimeMillis(), dtMs, mc.getFps(), screenName, inWorld);
 		}
 
-		// 4. Per-frame JVM HUD render + pixel-aligned overlay canvas (only when HUD hooks exist)
-		if (hasHudHooks) {
+		// 4. Per-frame JVM HUD / Container render + pixel-aligned overlay canvas
+		if (hasHudHooks || (isContainerScreen && hasJvmContainerRenderHooks)) {
 			Window win = mc.getWindow();
 			int guiWidth = win != null ? win.getGuiScaledWidth() : 0;
 			int guiHeight = win != null ? win.getGuiScaledHeight() : 0;
@@ -415,7 +522,7 @@ public final class WebMods {
 					partialTick = pt;
 				}
 			}
-			jsEmitJvmHudRender(guiWidth, guiHeight, guiScale, partialTick, lastScreen != null, inWorld, mc.isPaused());
+			jsEmitJvmHudRender(guiWidth, guiHeight, guiScale, partialTick, lastScreen != null, inWorld, mc.isPaused(), isContainerScreen);
 		}
 
 		// 5. Fallback 20 Hz tick dispatch when WebMods.onClientTick() is not hooked directly
@@ -2854,13 +2961,13 @@ public final class WebMods {
 		+ "}")
 	private static native void jsEmitJvmTick(double tick, boolean hasPlayer, boolean doStart, boolean doPlayer, boolean doEnd);
 
-	@JSBody(params = {"guiWidth", "guiHeight", "guiScale", "partialTick", "screenOpen", "inWorld", "paused"}, script = ""
+	@JSBody(params = {"guiWidth", "guiHeight", "guiScale", "partialTick", "screenOpen", "inWorld", "paused", "containerScreen"}, script = ""
 		+ "var rt = window.__eaglerModsInternal;"
 		+ "var ctx = window.__eaglerJvmHudCtx;"
-		+ "if (!ctx) { ctx = { rt: null, state: null, guiWidth: 0, guiHeight: 0, guiScale: 1, partialTick: 1, tickDelta: 1, screenOpen: false, inWorld: false, paused: false, guiGraphics: null }; window.__eaglerJvmHudCtx = ctx; }"
+		+ "if (!ctx) { ctx = { rt: null, state: null, guiWidth: 0, guiHeight: 0, guiScale: 1, partialTick: 1, tickDelta: 1, screenOpen: false, inWorld: false, paused: false, containerScreen: false, guiGraphics: null }; window.__eaglerJvmHudCtx = ctx; }"
 		+ "ctx.guiWidth = guiWidth; ctx.guiHeight = guiHeight; ctx.guiScale = guiScale;"
 		+ "ctx.partialTick = partialTick; ctx.tickDelta = partialTick;"
-		+ "ctx.screenOpen = !!screenOpen; ctx.inWorld = !!inWorld; ctx.paused = !!paused;"
+		+ "ctx.screenOpen = !!screenOpen; ctx.inWorld = !!inWorld; ctx.paused = !!paused; ctx.containerScreen = !!containerScreen;"
 		+ "ctx.state = rt ? rt.liveState : null;"
 		+ "var bridge = window.EaglerJvmBridge;"
 		+ "var t = window.EaglerJvmTranslator;"
@@ -2877,11 +2984,29 @@ public final class WebMods {
 		+ "}"
 		+ "if (t && typeof t.dispatchHook === 'function') {"
 		+ "  try { t.dispatchHook('hudRender', ctx); } catch (e) { console.error('[webmods] JVM hudRender error:', e); }"
+		+ "  if (ctx.containerScreen) { try { t.dispatchHook('containerRender', ctx); } catch (e) {} }"
 		+ "}"
 		+ "if (bridge && typeof bridge.renderHudOverlay === 'function') {"
 		+ "  try { bridge.renderHudOverlay(ctx); } catch (e) { console.error('[webmods] renderHudOverlay error:', e); }"
 		+ "}")
-	private static native void jsEmitJvmHudRender(int guiWidth, int guiHeight, int guiScale, float partialTick, boolean screenOpen, boolean inWorld, boolean paused);
+	private static native void jsEmitJvmHudRender(int guiWidth, int guiHeight, int guiScale, float partialTick, boolean screenOpen, boolean inWorld, boolean paused, boolean containerScreen);
+
+	@JSBody(params = {"hookName", "screen", "prev", "title"}, script = ""
+		+ "var bridge = window.EaglerJvmBridge;"
+		+ "if (bridge && typeof bridge.invalidateStateCache === 'function') { try { bridge.invalidateStateCache(); } catch (e) {} }"
+		+ "var t = window.EaglerJvmTranslator;"
+		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
+		+ "var screenObj = (bridge && typeof bridge.makeScreenObj === 'function') ? bridge.makeScreenObj(screen || null, title || '') : null;"
+		+ "try { t.dispatchHook(hookName, { screen: screen || null, screenName: screen || '', prev: prev || null, prevScreen: prev || null, title: title || '', screenObj: screenObj }); }"
+		+ "catch (e) { console.warn('[webmods] JVM ' + hookName + ' warn:', e); }")
+	private static native void jsDispatchJvmSimpleScreenHook(String hookName, String screen, String prev, String title);
+
+	@JSBody(params = {"hookName", "detail"}, script = ""
+		+ "var t = window.EaglerJvmTranslator;"
+		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
+		+ "try { t.dispatchHook(hookName, { dimension: detail || '', detail: detail || '' }); }"
+		+ "catch (e) { console.warn('[webmods] JVM ' + hookName + ' warn:', e); }")
+	private static native void jsDispatchJvmSimpleHook(String hookName, String detail);
 
 	@JSBody(params = {"screen", "prev", "title"}, script = ""
 		+ "var bridge = window.EaglerJvmBridge;"

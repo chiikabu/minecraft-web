@@ -1062,6 +1062,13 @@
 					mev.cancelled = false;
 					self.fireInputHook("mouse", mev);
 				}
+				if (typeof document !== "undefined" && document.pointerLockElement) {
+					if (btn === 0 && self.hasInputHooks("clientLeftClick")) {
+						self.fireInputHook("clientLeftClick", { button: 0, cancelled: false });
+					} else if (btn === 2 && self.hasInputHooks("clientRightClick")) {
+						self.fireInputHook("clientRightClick", { button: 2, cancelled: false });
+					}
+				}
 			}, true);
 
 			window.addEventListener("mouseup", function (ev) {
@@ -1126,6 +1133,15 @@
 		if (e.__cls) { return e.__cls + (e.detailMessage ? ": " + e.detailMessage : ""); }
 		if (e.message) { return String(e.message); }
 		return String(e);
+	}
+
+	function makeJavaList(ctx, items) {
+		var arr = items ? items.slice() : [];
+		return ctx.makeObj("java/util/ArrayList", { _arr: arr, _items: arr });
+	}
+
+	function makeJavaMap(ctx) {
+		return ctx.makeObj("java/util/HashMap", { _entries: [] });
 	}
 
 	function logHookErrorOnce(ctx, hookName, modId, e) {
@@ -3575,6 +3591,14 @@
 			for (var i = 0; i < a.length; i++) { h = (Math.imul(h, 31) + javaHashCode(rt, a[i])) | 0; }
 			return h;
 		}, ["hashCode", "hashCode()I"]);
+		// Java 21 SequencedCollection methods on List / ArrayList
+		addOverloads(listMethods, function () { var a = arrOf(this); return a.length ? a[0] : null; }, ["getFirst", "getFirst()Ljava/lang/Object;"]);
+		addOverloads(listMethods, function () { var a = arrOf(this); return a.length ? a[a.length - 1] : null; }, ["getLast", "getLast()Ljava/lang/Object;"]);
+		addOverloads(listMethods, function (e) { arrOf(this).unshift(e); }, ["addFirst", "addFirst(Ljava/lang/Object;)V"]);
+		addOverloads(listMethods, function (e) { arrOf(this).push(e); }, ["addLast", "addLast(Ljava/lang/Object;)V"]);
+		addOverloads(listMethods, function () { var a = arrOf(this); return a.length ? a.shift() : null; }, ["removeFirst", "removeFirst()Ljava/lang/Object;"]);
+		addOverloads(listMethods, function () { var a = arrOf(this); return a.length ? a.pop() : null; }, ["removeLast", "removeLast()Ljava/lang/Object;"]);
+		addOverloads(listMethods, function () { return makeListObj(arrOf(this).slice().reverse()); }, ["reversed", "reversed()Ljava/util/List;", "reversed()Ljava/util/SequencedCollection;"]);
 
 		var listStatics = {};
 		function listOfFn() {
@@ -4028,6 +4052,23 @@
 		addOverloads(optStatics, function (v) { return v === null || v === undefined ? optEmpty : ctx.makeObj("java/util/Optional", { _value: v, _val: v }); }, ["ofNullable", "ofNullable(Ljava/lang/Object;)Ljava/util/Optional;"]);
 		ctx.regClass("java/util/Optional", { methods: optMethods, staticMethods: optStatics });
 		optEmpty = ctx.makeObj("java/util/Optional", { _value: null, _val: null });
+
+		var optIntEmpty = null;
+		var optIntMethods = {
+			isPresent: function () { return !!this._present; }, "isPresent()Z": function () { return !!this._present; },
+			isEmpty: function () { return !this._present; }, "isEmpty()Z": function () { return !this._present; },
+			getAsInt: function () { return this._val | 0; }, "getAsInt()I": function () { return this._val | 0; },
+			orElse: function (d) { return this._present ? (this._val | 0) : (d | 0); },
+			"orElse(I)I": function (d) { return this._present ? (this._val | 0) : (d | 0); }
+		};
+		var optIntStatics = {
+			empty: function () { return optIntEmpty; }, "empty()Ljava/util/OptionalInt;": function () { return optIntEmpty; },
+			of: function (v) { return ctx.makeObj("java/util/OptionalInt", { _present: true, _val: toInt(v) }); },
+			"of(I)Ljava/util/OptionalInt;": function (v) { return ctx.makeObj("java/util/OptionalInt", { _present: true, _val: toInt(v) }); }
+		};
+		ctx.regClass("java/util/OptionalInt", { methods: optIntMethods, staticMethods: optIntStatics });
+		optIntEmpty = ctx.makeObj("java/util/OptionalInt", { _present: false, _val: 0 });
+		ctx._optIntOne = ctx.makeObj("java/util/OptionalInt", { _present: true, _val: 1 });
 
 		// ---- java/util/Random ----
 		var randMethods = {};
@@ -5383,12 +5424,18 @@
 				fabric_getAllowMouseScrollEvent: function () { return noopScreenEvt; },
 				fabric_getBeforeMouseScrollEvent: function () { return noopScreenEvt; },
 				fabric_getAfterMouseScrollEvent: function () { return noopScreenEvt; },
+				fabric_getAllowMouseDragEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeMouseDragEvent: function () { return noopScreenEvt; },
+				fabric_getAfterMouseDragEvent: function () { return noopScreenEvt; },
 				fabric_getAllowKeyPressEvent: function () { return noopScreenEvt; },
 				fabric_getBeforeKeyPressEvent: function () { return noopScreenEvt; },
 				fabric_getAfterKeyPressEvent: function () { return noopScreenEvt; },
 				fabric_getAllowKeyReleaseEvent: function () { return noopScreenEvt; },
 				fabric_getBeforeKeyReleaseEvent: function () { return noopScreenEvt; },
 				fabric_getAfterKeyReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getAllowCharTypeEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeCharTypeEvent: function () { return noopScreenEvt; },
+				fabric_getAfterCharTypeEvent: function () { return noopScreenEvt; },
 				fabric_getButtons: function () { return makeJavaList(ctx, []); }
 			}
 		});
@@ -5849,16 +5896,27 @@
 			return ctx._cachedScreenObj;
 		}
 		var cls = "net/minecraft/client/gui/screens/Screen";
+		var isContainer = false;
 		if (name === "TitleScreen") { cls = "net/minecraft/client/gui/screens/TitleScreen"; }
 		else if (name === "PauseScreen") { cls = "net/minecraft/client/gui/screens/PauseScreen"; }
 		else if (name === "ChatScreen") { cls = "net/minecraft/client/gui/screens/ChatScreen"; }
+		else if (/(Inventory|Crafting|Container|Furnace|Smoker|Brewing|Enchantment|Anvil|Grindstone|Loom|Cartography|Stonecutter|Smithing|Merchant|Shulker|Hopper|Dispenser|Beacon|Crafter)Screen$/.test(name)) {
+			cls = "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen";
+			isContainer = true;
+		}
 		var noopEvt = ctx._noopScreenEvt || null;
+		var imgW = 176, imgH = 166;
 		var scr = ctx.makeObj(cls, {
 			_screenName: name,
 			_title: makeComponentLiteral(ctx, t),
 			minecraft: getMinecraftInstance(ctx),
 			width: w,
 			height: h,
+			imageWidth: imgW,
+			imageHeight: imgH,
+			leftPos: Math.max(0, ((w - imgW) / 2) | 0),
+			topPos: Math.max(0, ((h - imgH) / 2) | 0),
+			_isContainer: isContainer,
 			__interfaces: ["net/fabricmc/fabric/impl/client/screen/ScreenExtensions"],
 			fabric_getRemoveEvent: function () { return noopEvt; },
 			fabric_getBeforeRenderEvent: function () { return noopEvt; },
@@ -5874,12 +5932,18 @@
 			fabric_getAllowMouseScrollEvent: function () { return noopEvt; },
 			fabric_getBeforeMouseScrollEvent: function () { return noopEvt; },
 			fabric_getAfterMouseScrollEvent: function () { return noopEvt; },
+			fabric_getAllowMouseDragEvent: function () { return noopEvt; },
+			fabric_getBeforeMouseDragEvent: function () { return noopEvt; },
+			fabric_getAfterMouseDragEvent: function () { return noopEvt; },
 			fabric_getAllowKeyPressEvent: function () { return noopEvt; },
 			fabric_getBeforeKeyPressEvent: function () { return noopEvt; },
 			fabric_getAfterKeyPressEvent: function () { return noopEvt; },
 			fabric_getAllowKeyReleaseEvent: function () { return noopEvt; },
 			fabric_getBeforeKeyReleaseEvent: function () { return noopEvt; },
 			fabric_getAfterKeyReleaseEvent: function () { return noopEvt; },
+			fabric_getAllowCharTypeEvent: function () { return noopEvt; },
+			fabric_getBeforeCharTypeEvent: function () { return noopEvt; },
+			fabric_getAfterCharTypeEvent: function () { return noopEvt; },
 			fabric_getButtons: function () { return makeJavaList(ctx, []); }
 		});
 		ctx._cachedScreenName = name;
@@ -6790,7 +6854,16 @@
 				getValue: function () { return this._code | 0; }, "getValue()I": function () { return this._code | 0; },
 				getType: function () { return icTypeStatics[this._type] || icTypeStatics.KEYSYM; },
 				getName: function () { return glfwKeyName(this._code | 0); }, "getName()Ljava/lang/String;": function () { return glfwKeyName(this._code | 0); },
-				getDisplayName: function () { return makeComponentLiteral(ctx, glfwKeyName(this._code | 0)); },
+				getDisplayName: function () {
+					var defComp = makeComponentLiteral(ctx, glfwKeyName(this._code | 0));
+					if (hasRegisteredHooks(ctx, "keyDisplayName")) {
+						var ev = { keyObj: this, key: this._code | 0, value: defComp, returnValue: undefined, cancelled: false };
+						fireHooks(ctx, "keyDisplayName", ev);
+						if (ev.returnValue !== undefined && ev.returnValue !== null) { return ev.returnValue; }
+					}
+					return defComp;
+				},
+				"getDisplayName()Lnet/minecraft/network/chat/Component;": function () { return this.getDisplayName(); },
 				toString: function () { return glfwKeyName(this._code | 0); },
 				equals: function (o) { return !!(o && o._type === this._type && (o._code | 0) === (this._code | 0)); }
 			}
@@ -6805,22 +6878,26 @@
 			var kn = gkNames[gi];
 			if (kn.indexOf("GLFW_") === 0) { icStatics[kn.slice(5)] = GLFW_KEYS[kn]; }
 		}
+		function checkInputKeyDown(k) {
+			InputState.attachDomListeners();
+			var down = k >= 0 && k < 512 && InputState.keyDownBits[k] !== 0;
+			if (hasRegisteredHooks(ctx, "isKeyDown")) {
+				var ev = { key: k, value: down, returnValue: undefined, cancelled: false };
+				fireHooks(ctx, "isKeyDown", ev);
+				if (ev.cancelled || ev.returnValue !== undefined) { return !!ev.returnValue; }
+			}
+			return down;
+		}
 		ctx.regClass("com/mojang/blaze3d/platform/InputConstants", {
 			statics: icStatics,
 			staticMethods: {
-				isKeyDown: function (_win, key) {
-					InputState.attachDomListeners();
-					var k = toInt(key);
-					return k >= 0 && k < 512 && InputState.keyDownBits[k] !== 0;
+				isKeyDown: function (a, b) {
+					var k = arguments.length >= 2 ? toInt(b) : toInt(a);
+					return checkInputKeyDown(k);
 				},
-				"isKeyDown(JI)Z": function (_w, key) {
-					var k = toInt(key);
-					return k >= 0 && k < 512 && InputState.keyDownBits[k] !== 0;
-				},
-				"isKeyDown(Lcom/mojang/blaze3d/platform/Window;I)Z": function (_w, key) {
-					var k = toInt(key);
-					return k >= 0 && k < 512 && InputState.keyDownBits[k] !== 0;
-				},
+				"isKeyDown(I)Z": function (key) { return checkInputKeyDown(toInt(key)); },
+				"isKeyDown(JI)Z": function (_w, key) { return checkInputKeyDown(toInt(key)); },
+				"isKeyDown(Lcom/mojang/blaze3d/platform/Window;I)Z": function (_w, key) { return checkInputKeyDown(toInt(key)); },
 				getKey: function (a, b) {
 					if (isJavaString(a)) { return ctx.makeObj("com/mojang/blaze3d/platform/InputConstants$Key", { _type: "KEYSYM", _code: -1, _name: toJsStr(a) }); }
 					return ctx.makeObj("com/mojang/blaze3d/platform/InputConstants$Key", { _type: "KEYSYM", _code: toInt(a) });
@@ -7441,17 +7518,276 @@
 			"<init>(Lnet/minecraft/network/chat/Component;)V": function (t) { this._title = t || makeComponentLiteral(ctx, ""); },
 			getTitle: function () { return this._title || makeComponentLiteral(ctx, this._screenName || ""); },
 			"getTitle()Lnet/minecraft/network/chat/Component;": function () { return this.getTitle(); },
-			init: function () {}, render: function () {}, tick: function () {}, onClose: function () {},
+			children: function () { return this._children || (this._children = makeJavaList(ctx, [])); },
+			"children()Ljava/util/List;": function () { return this.children(); },
+			init: function () {}, render: function () {}, tick: function () {}, onClose: function () {}, removed: function () {},
 			isPauseScreen: function () { return this._screenName === "PauseScreen"; }
 		};
-		ctx.regClass("net/minecraft/client/gui/screens/Screen", { methods: screenMethods });
+		ctx.regClass("net/minecraft/client/gui/screens/Screen", {
+			interfaces: ["net/fabricmc/fabric/impl/client/screen/ScreenExtensions"],
+			methods: screenMethods
+		});
 		ctx.regClass("net/minecraft/client/gui/screens/TitleScreen", { superName: "net/minecraft/client/gui/screens/Screen" });
 		ctx.regClass("net/minecraft/client/gui/screens/PauseScreen", { superName: "net/minecraft/client/gui/screens/Screen" });
 		ctx.regClass("net/minecraft/client/gui/screens/ChatScreen", { superName: "net/minecraft/client/gui/screens/Screen" });
+		ctx.regClass("net/minecraft/client/gui/screens/inventory/AbstractContainerScreen", {
+			superName: "net/minecraft/client/gui/screens/Screen",
+			methods: {
+				getMenu: function () {
+					if (!this._menu) { this._menu = ctx.makeObj("net/minecraft/world/inventory/AbstractContainerMenu", { slots: makeJavaList(ctx, []) }); }
+					return this._menu;
+				},
+				extractContents: function () {},
+				extractLabels: function () {}
+			}
+		});
 		ctx.regClass("net/minecraft/client/renderer/GameRenderer", { methods: { getFov: function () { return ctx.getGameState(false).fov || 70; } } });
 		ctx.regClass("net/minecraft/client/Camera", {});
 		ctx.regClass("net/minecraft/client/KeyboardHandler", {});
 		ctx.regClass("net/minecraft/client/MouseHandler", {});
+
+		// ---- 26.3 Input Records (KeyEvent, MouseButtonInfo, MouseButtonEvent) ----
+		ctx.regClass("net/minecraft/client/input/KeyEvent", {
+			methods: {
+				key: function () { return this.key | 0; }, "key()I": function () { return this.key | 0; },
+				scancode: function () { return this.scancode | 0; }, "scancode()I": function () { return this.scancode | 0; },
+				modifiers: function () { return this.modifiers | 0; }, "modifiers()I": function () { return this.modifiers | 0; }
+			}
+		});
+		ctx.regClass("net/minecraft/client/input/MouseButtonInfo", {
+			methods: {
+				button: function () { return this.button | 0; }, "button()I": function () { return this.button | 0; },
+				modifiers: function () { return this.modifiers | 0; }, "modifiers()I": function () { return this.modifiers | 0; }
+			}
+		});
+		ctx.regClass("net/minecraft/client/input/MouseButtonEvent", {
+			methods: {
+				x: function () { return toNum(this.x); }, "x()D": function () { return toNum(this.x); },
+				y: function () { return toNum(this.y); }, "y()D": function () { return toNum(this.y); },
+				button: function () { return this.button | 0; }, "button()I": function () { return this.button | 0; },
+				modifiers: function () { return this.modifiers | 0; }, "modifiers()I": function () { return this.modifiers | 0; },
+				buttonInfo: function () { return this._info || ctx.makeObj("net/minecraft/client/input/MouseButtonInfo", { button: this.button | 0, modifiers: this.modifiers | 0 }); }
+			}
+		});
+
+		// ---- Biome, Fluid, Block, BucketItem, LiquidBlock & World Accessor Targets ----
+		ctx.regClass("net/minecraft/world/level/biome/Biome$ClimateSettings", {
+			methods: {
+				hasPrecipitation: function () { return !!this.hasPrecipitation; },
+				temperature: function () { return Math.fround(this.temperature || 0.8); },
+				downfall: function () { return Math.fround(this.downfall || 0.4); }
+			}
+		});
+		var defaultClimate = ctx.makeObj("net/minecraft/world/level/biome/Biome$ClimateSettings", { hasPrecipitation: true, temperature: 0.8, downfall: 0.4 });
+		ctx.regClass("net/minecraft/world/level/biome/Biome", {
+			fields: { climateSettings: defaultClimate },
+			methods: {
+				getClimateSettings: function () { return this.climateSettings || defaultClimate; },
+				getBaseTemperature: function () { return Math.fround((this.climateSettings && this.climateSettings.temperature) || 0.8); }
+			}
+		});
+		ctx.regClass("net/minecraft/world/level/material/Fluid", {
+			methods: { isSame: function (o) { return o === this; } }
+		});
+		ctx.regClass("net/minecraft/world/level/material/FlowingFluid", {
+			superName: "net/minecraft/world/level/material/Fluid"
+		});
+		var emptyFluid = ctx.makeObj("net/minecraft/world/level/material/FlowingFluid", { _id: "minecraft:empty" });
+		var waterFluid = ctx.makeObj("net/minecraft/world/level/material/FlowingFluid", { _id: "minecraft:water" });
+		var lavaFluid = ctx.makeObj("net/minecraft/world/level/material/FlowingFluid", { _id: "minecraft:lava" });
+		ctx.regClass("net/minecraft/world/level/material/Fluids", {
+			statics: { EMPTY: emptyFluid, WATER: waterFluid, FLOWING_WATER: waterFluid, LAVA: lavaFluid, FLOWING_LAVA: lavaFluid }
+		});
+		ctx.regClass("net/minecraft/world/level/block/Block", {
+			methods: {
+				defaultBlockState: function () { return ctx.makeObj("net/minecraft/world/level/block/state/BlockState", { _block: this }); },
+				toString: function () { return this._id || "minecraft:air"; }
+			}
+		});
+		var airBlock = ctx.makeObj("net/minecraft/world/level/block/Block", { _id: "minecraft:air" });
+		ctx.regClass("net/minecraft/world/level/block/state/BlockState", {
+			methods: {
+				getBlock: function () { return this._block || airBlock; },
+				isAir: function () { return !this._block || this._block._id === "minecraft:air"; }
+			}
+		});
+		ctx.regClass("net/minecraft/world/level/block/LiquidBlock", {
+			superName: "net/minecraft/world/level/block/Block",
+			fields: { fluid: waterFluid },
+			methods: { getFluid: function () { return this.fluid || waterFluid; } }
+		});
+		ctx.regClass("net/minecraft/world/level/block/FarmlandBlock", { superName: "net/minecraft/world/level/block/Block" });
+		ctx.regClass("net/minecraft/world/level/block/piston/PistonBaseBlock", { superName: "net/minecraft/world/level/block/Block" });
+		ctx.regClass("net/minecraft/world/item/Item$Properties", {});
+		ctx.regClass("net/minecraft/world/item/BlockItem", { superName: "net/minecraft/world/item/Item" });
+		ctx.regClass("net/minecraft/world/item/BucketItem", {
+			superName: "net/minecraft/world/item/Item",
+			fields: { content: emptyFluid },
+			methods: { getContent: function () { return this.content || emptyFluid; } }
+		});
+		ctx.regClass("net/minecraft/world/item/context/BlockPlaceContext", {
+			methods: {
+				getLevel: function () { return getLevelInstance(ctx); },
+				getPlayer: function () { return getPlayerInstance(ctx); },
+				getClickedPos: function () { return makeBlockPos(0, 64, 0); }
+			}
+		});
+
+		// ---- Interaction, Inventory, Network, Recipes, Tags & Server Lifecycle Bridges ----
+		var handStatics = {};
+		ctx.regClass("net/minecraft/world/InteractionHand", { superName: "java/lang/Enum", statics: handStatics });
+		handStatics.MAIN_HAND = ctx.makeObj("net/minecraft/world/InteractionHand", { _enumName: "MAIN_HAND", _ordinal: 0 });
+		handStatics.OFF_HAND = ctx.makeObj("net/minecraft/world/InteractionHand", { _enumName: "OFF_HAND", _ordinal: 1 });
+		ctx.setStaticField("net/minecraft/world/InteractionHand", "MAIN_HAND", handStatics.MAIN_HAND);
+		ctx.setStaticField("net/minecraft/world/InteractionHand", "OFF_HAND", handStatics.OFF_HAND);
+		ctx.regClass("net/minecraft/world/InteractionResult", {});
+		ctx.regClass("net/minecraft/world/damagesource/DamageSource", {
+			methods: { getMsgId: function () { return this._msgId || "generic"; } }
+		});
+		ctx.regClass("net/minecraft/world/phys/HitResult", {
+			methods: { getLocation: function () { return makeVec3(0, 0, 0); } }
+		});
+		ctx.regClass("net/minecraft/world/phys/BlockHitResult", {
+			superName: "net/minecraft/world/phys/HitResult",
+			methods: { getBlockPos: function () { return makeBlockPos(0, 64, 0); } }
+		});
+		ctx.regClass("net/minecraft/world/phys/EntityHitResult", {
+			superName: "net/minecraft/world/phys/HitResult",
+			methods: { getEntity: function () { return getPlayerInstance(ctx); } }
+		});
+		ctx.regClass("net/minecraft/world/inventory/AbstractContainerMenu", {
+			methods: { getItems: function () { return makeJavaList(ctx, []); } }
+		});
+		ctx.regClass("net/minecraft/world/inventory/Slot", {
+			methods: { getItem: function () { return ctx.emptyItemStack; } }
+		});
+		ctx.regClass("net/minecraft/world/inventory/ResultSlot", { superName: "net/minecraft/world/inventory/Slot" });
+		ctx.regClass("net/minecraft/world/inventory/FurnaceResultSlot", { superName: "net/minecraft/world/inventory/Slot" });
+		ctx.regClass("net/minecraft/world/Container", { isInterface: true });
+		ctx.regClass("net/minecraft/world/inventory/CraftingContainer", { isInterface: true, interfaces: ["net/minecraft/world/Container"] });
+		ctx.regClass("net/minecraft/world/MenuProvider", { isInterface: true });
+		ctx.regClass("net/minecraft/client/gui/components/toasts/ToastManager", {
+			methods: { addToast: function () {} }
+		});
+		ctx.regClass("net/minecraft/client/gui/components/toasts/RecipeToast", {
+			staticMethods: {
+				addOrUpdate: function (tm, display) {
+					if (hasRegisteredHooks(ctx, "recipeToast")) {
+						var ev = { toastManager: tm, recipeDisplay: display, cancelled: false };
+						fireHooks(ctx, "recipeToast", ev);
+						if (ev.cancelled) { return; }
+					}
+				}
+			}
+		});
+		ctx.regClass("net/minecraft/world/item/crafting/RecipeAccess", { isInterface: true });
+		ctx.regClass("net/minecraft/world/item/crafting/RecipeMap", { interfaces: ["net/minecraft/world/item/crafting/RecipeAccess"] });
+		ctx.regClass("net/minecraft/core/RegistryAccess", { isInterface: true });
+		ctx.regClass("net/minecraft/core/RegistryAccess$Frozen", { isInterface: true, interfaces: ["net/minecraft/core/RegistryAccess"] });
+		ctx.regClass("net/fabricmc/fabric/impl/networking/PacketListenerExtensions", {
+			isInterface: true,
+			methods: {
+				getAddon: function () { return null; }
+			}
+		});
+		ctx.regClass("net/minecraft/client/multiplayer/ClientCommonPacketListenerImpl", {
+			interfaces: ["net/fabricmc/fabric/impl/networking/PacketListenerExtensions"],
+			fields: { minecraft: { get: function () { return getMinecraftInstance(ctx); } } },
+			methods: { getAddon: function () { return null; } }
+		});
+		ctx.regClass("net/minecraft/client/multiplayer/ClientPacketListener", {
+			superName: "net/minecraft/client/multiplayer/ClientCommonPacketListenerImpl",
+			fields: {
+				level: { get: function () { return getLevelInstance(ctx); } },
+				minecraft: { get: function () { return getMinecraftInstance(ctx); } }
+			},
+			methods: {
+				getLevel: function () { return getLevelInstance(ctx); },
+				"getLevel()Lnet/minecraft/client/multiplayer/ClientLevel;": function () { return getLevelInstance(ctx); },
+				send: function () {},
+				sendChat: function (msg) {
+					var em = ctx.eagler();
+					if (em && typeof em.sendChat === "function") { em.sendChat(toJsStr(msg)); }
+				},
+				sendCommand: function (cmd) {
+					var em = ctx.eagler();
+					if (em && typeof em.sendChat === "function") { em.sendChat("/" + toJsStr(cmd)); }
+				},
+				recipes: function () { return ctx._recipeMapObj || (ctx._recipeMapObj = ctx.makeObj("net/minecraft/world/item/crafting/RecipeMap", {})); },
+				"recipes()Lnet/minecraft/world/item/crafting/RecipeAccess;": function () { return this.recipes(); },
+				getRecipeManager: function () { return this.recipes(); },
+				registryAccess: function () { return ctx._regAccessObj || (ctx._regAccessObj = ctx.makeObj("net/minecraft/core/RegistryAccess$Frozen", {})); },
+				"registryAccess()Lnet/minecraft/core/RegistryAccess$Frozen;": function () { return this.registryAccess(); }
+			}
+		});
+		ctx.regClass("net/minecraft/client/multiplayer/MultiPlayerGameMode", {
+			methods: { getPlayerMode: function () { return null; } }
+		});
+		ctx.regClass("net/minecraft/client/multiplayer/chat/ChatListener", {});
+		ctx.regClass("net/minecraft/network/PacketEncoder", {});
+		ctx.regClass("net/minecraft/network/protocol/Packet", { isInterface: true });
+		ctx.regClass("net/minecraft/network/protocol/game/ClientboundUpdateRecipesPacket", {});
+		ctx.regClass("net/minecraft/network/protocol/game/ClientboundRecipeBookAddPacket", {
+			methods: {
+				entries: function () { return makeJavaList(ctx, []); },
+				"entries()Ljava/util/List;": function () { return makeJavaList(ctx, []); }
+			}
+		});
+		ctx.regClass("net/minecraft/network/protocol/game/ClientboundRecipeBookRemovePacket", {
+			methods: {
+				recipes: function () { return makeJavaList(ctx, []); },
+				"recipes()Ljava/util/List;": function () { return makeJavaList(ctx, []); }
+			}
+		});
+		ctx.regClass("net/minecraft/network/protocol/game/ClientboundLoginPacket", {});
+		ctx.regClass("net/minecraft/network/protocol/game/ClientboundRespawnPacket", {});
+		ctx.regClass("net/minecraft/network/protocol/common/ClientboundUpdateTagsPacket", {});
+		ctx.regClass("net/minecraft/tags/TagLoader", { fields: { directory: "tags" } });
+		ctx.regClass("net/minecraft/tags/TagEntry$Lookup", { isInterface: true });
+		ctx.regClass("net/minecraft/server/MinecraftServer", {
+			methods: {
+				overworld: function () { return resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel"); },
+				getAllLevels: function () { return makeJavaList(ctx, [this.overworld()]); }
+			}
+		});
+		ctx.regClass("net/minecraft/client/server/IntegratedServer", { superName: "net/minecraft/server/MinecraftServer" });
+		ctx.regClass("net/minecraft/server/dedicated/DedicatedServer", { superName: "net/minecraft/server/MinecraftServer" });
+		ctx.regClass("net/minecraft/server/level/ServerLevel", { superName: "net/minecraft/world/level/Level", fields: { isClientSide: 0 }, methods: levelMethods });
+		ctx.regClass("net/minecraft/server/level/ServerPlayer", {
+			superName: "net/minecraft/world/entity/player/Player",
+			methods: {
+				level: function () { return resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel"); },
+				"level()Lnet/minecraft/world/level/Level;": function () { return this.level(); },
+				"level()Lnet/minecraft/server/level/ServerLevel;": function () { return this.level(); },
+				serverLevel: function () { return resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel"); },
+				"serverLevel()Lnet/minecraft/server/level/ServerLevel;": function () { return this.serverLevel(); }
+			}
+		});
+		ctx.regClass("net/minecraft/server/level/ServerPlayerGameMode", {});
+		ctx.regClass("net/minecraft/server/level/ChunkMap", {});
+		ctx.regClass("net/minecraft/server/players/PlayerList", {});
+		ctx.regClass("net/minecraft/server/PlayerAdvancements", {});
+		ctx.regClass("net/minecraft/commands/Commands", {});
+		ctx.regClass("net/minecraft/world/entity/Mob", { superName: "net/minecraft/world/entity/LivingEntity" });
+		ctx.regClass("net/minecraft/world/entity/item/ItemEntity", {
+			superName: "net/minecraft/world/entity/Entity",
+			methods: { getItem: function () { return this._stack || ctx.emptyItemStack; } }
+		});
+		ctx.regClass("net/minecraft/world/entity/item/FallingBlockEntity", { superName: "net/minecraft/world/entity/Entity" });
+		ctx.regClass("net/minecraft/world/entity/LightningBolt", { superName: "net/minecraft/world/entity/Entity" });
+		ctx.regClass("net/minecraft/world/entity/TamableAnimal", { superName: "net/minecraft/world/entity/Mob" });
+		ctx.regClass("net/minecraft/world/entity/animal/feline/Ocelot", { superName: "net/minecraft/world/entity/Mob" });
+		ctx.regClass("net/minecraft/world/entity/animal/equine/AbstractHorse", { superName: "net/minecraft/world/entity/Mob" });
+		ctx.regClass("net/minecraft/world/entity/ai/goal/RunAroundLikeCrazyGoal", {});
+		ctx.regClass("net/minecraft/world/level/ServerExplosion", {});
+		ctx.regClass("net/minecraft/world/level/BaseSpawner", {});
+		ctx.regClass("net/minecraft/world/level/NaturalSpawner", {});
+		ctx.regClass("net/minecraft/world/entity/npc/CatSpawner", {});
+		ctx.regClass("net/minecraft/world/level/levelgen/PatrolSpawner", {});
+		ctx.regClass("net/minecraft/world/level/levelgen/PhantomSpawner", {});
+		ctx.regClass("net/minecraft/world/level/entity/PersistentEntitySectionManager", {});
+		ctx.regClass("net/minecraft/world/level/chunk/storage/SerializableChunkData", {});
+		ctx.regClass("net/minecraft/world/level/chunk/ChunkAccess", {});
 
 		// ---- Minecraft ----
 		ctx.regClass("net/minecraft/client/Minecraft", {
@@ -7459,7 +7795,7 @@
 				player: { get: function () { return getPlayerInstance(ctx); } },
 				level: { get: function () { return getLevelInstance(ctx); } },
 				options: { get: function () { return getOptionsInstance(ctx); } },
-				screen: { get: function () { var s = ctx.getGameState(false); return makeScreenObj(ctx, s.screen, s.screenTitle); } },
+				screen: { get: function () { var s = ctx.getGameState(false); return (s && s.screen ? makeScreenObj(ctx, s.screen, s.screenTitle) : null) || ctx._cachedScreenObj || null; } },
 				gui: { get: function () { return getGuiInstance(ctx); } },
 				font: { get: function () { return getFontInstance(ctx); } },
 				window: { get: function () { return getWindowInstance(ctx); } }
@@ -7469,6 +7805,10 @@
 				"getFps()I": function () { return ctx.getGameState(false).fps | 0; },
 				getWindow: function () { return getWindowInstance(ctx); },
 				"getWindow()Lcom/mojang/blaze3d/platform/Window;": function () { return getWindowInstance(ctx); },
+				getConnection: function () { return resolveTargetLiveObject(ctx, "net/minecraft/client/multiplayer/ClientPacketListener"); },
+				"getConnection()Lnet/minecraft/client/multiplayer/ClientPacketListener;": function () { return this.getConnection(); },
+				getSingleplayerServer: function () { return resolveTargetLiveObject(ctx, "net/minecraft/client/server/IntegratedServer"); },
+				hasSingleplayerServer: function () { return !!(ctx.getGameState(false) && ctx.getGameState(false).inWorld); },
 				setScreen: function (scr) {
 					var em = ctx.eagler();
 					if (scr && scr._screenName === "ModsScreen" && em && typeof em.openModsScreen === "function") {
@@ -7919,12 +8259,41 @@
 		var m = stripMethodSpec(methodName);
 		var tail = atPos === "TAIL" || atPos === "RETURN";
 
+		// ---- Minecraft Client Core ----
 		if (t === "net/minecraft/client/Minecraft") {
 			if (m === "tick" || m === "method_1574") { return tail ? "tickEnd" : "tickStart"; }
+			if (m === "disconnect" || m === "clearClientLevel" || m === "method_18096") { return "worldLeave"; }
+			if (m === "startUseItem" || m === "method_1583") { return "clientRightClick"; }
+			if (m === "startAttack" || m === "method_1536") { return "clientLeftClick"; }
+			if (m === "setScreen" || m === "method_1507") { return "screenChange"; }
 		}
+		// ---- Gui, Screens, Containers, Tooltips & Toasts ----
 		if (t === "net/minecraft/client/gui/Gui" || t === "net/minecraft/client/gui/Hud") {
 			if (m === "render" || m === "method_1753" || m === "renderHotbar" || m === "renderMainHud") { return "hudRender"; }
+			if (m === "setScreen") { return "screenChange"; }
 		}
+		if (t === "net/minecraft/client/gui/GuiGraphics" || t === "net/minecraft/client/gui/GuiGraphicsExtractor") {
+			if (m === "setTooltipForNextFrame" || m === "tooltip" || m === "renderTooltip" || m === "renderComponentTooltip") {
+				return "tooltipRender";
+			}
+		}
+		if (t === "net/minecraft/client/gui/screens/Screen" ||
+			t === "net/minecraft/client/gui/screens/TitleScreen" ||
+			t === "net/minecraft/client/gui/screens/PauseScreen") {
+			if (m === "init" || m === "rebuildWidgets" || m === "method_25426" || m === "method_41843") { return "screenInit"; }
+			if (m === "render" || m === "extractRenderState" || m === "method_25394") { return "hudRender"; }
+			if (m === "tick" || m === "method_25393") { return "tickEnd"; }
+		}
+		if (t === "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen") {
+			if (m === "extractContents" || m === "render" || m === "renderBg" || m === "renderLabels" || m === "method_25394") {
+				return "containerRender";
+			}
+			if (m === "init" || m === "rebuildWidgets") { return "screenInit"; }
+		}
+		if (t === "net/minecraft/client/gui/components/toasts/RecipeToast") {
+			if (m === "addOrUpdate" || m === "add") { return "recipeToast"; }
+		}
+		// ---- Renderer, Options & Camera ----
 		if (t === "net/minecraft/client/renderer/GameRenderer") {
 			if (m === "getFov" || m === "calculateFov" || m === "method_3196") { return "fovModifier"; }
 		}
@@ -7936,19 +8305,7 @@
 			}
 			if (m === "fov" || m === "getFov" || m === "method_41808") { return "fovModifier"; }
 		}
-		if (t === "net/minecraft/client/player/LocalPlayer" || t === "net/minecraft/world/entity/player/Player" ||
-			t === "net/minecraft/world/entity/LivingEntity" || t === "net/minecraft/world/entity/Entity") {
-			if (m === "tick" || m === "aiStep" || m === "method_5773" || m === "method_6007") { return "playerTick"; }
-			if (m === "sendChat" || m === "sendCommand" || m === "method_44096") { return "chatSend"; }
-		}
-		if (t === "net/minecraft/client/gui/components/ChatComponent") {
-			if (m === "addMessage" || m === "addClientSystemMessage" || m === "method_1812") { return "chatReceive"; }
-		}
-		if (t === "net/minecraft/client/multiplayer/ClientPacketListener" || t === "net/minecraft/class_634" ||
-			t === "net/minecraft/client/gui/screens/ChatScreen") {
-			if (m === "sendChat" || m === "sendCommand" || m === "handleChatInput" ||
-				m === "method_45729" || m === "method_44096") { return "chatSend"; }
-		}
+		// ---- Input (Keyboard, Mouse, InputConstants) ----
 		if (t === "net/minecraft/client/KeyboardHandler") {
 			if (m === "keyPress" || m === "onKey" || m === "method_1466") { return "key"; }
 		}
@@ -7956,12 +8313,104 @@
 			if (m === "onButton" || m === "onPress" || m === "onMouseButton" || m === "method_1601") { return "mouse"; }
 			if (m === "onScroll" || m === "onMouseScroll" || m === "method_1598") { return "scroll"; }
 		}
-		if (t === "net/minecraft/client/gui/screens/Screen" ||
-			t === "net/minecraft/client/gui/screens/TitleScreen" ||
-			t === "net/minecraft/client/gui/screens/PauseScreen") {
-			if (m === "init" || m === "method_25426") { return "screenInit"; }
-			if (m === "render" || m === "method_25394") { return "hudRender"; }
-			if (m === "tick" || m === "method_25393") { return "tickEnd"; }
+		if (t === "com/mojang/blaze3d/platform/InputConstants") {
+			if (m === "isKeyDown" || m === "method_15987") { return "isKeyDown"; }
+		}
+		if (t === "com/mojang/blaze3d/platform/InputConstants$Key") {
+			if (m === "getDisplayName" || m === "method_27445") { return "keyDisplayName"; }
+		}
+		// ---- Chat, Packets, ClientLevel, Recipes & Tags ----
+		if (t === "net/minecraft/client/gui/components/ChatComponent" ||
+			t === "net/minecraft/client/multiplayer/chat/ChatListener") {
+			if (m === "addMessage" || m === "addClientSystemMessage" || m === "method_1812" ||
+				m === "handlePlayerChatMessage" || m === "handleSystemMessage") { return "chatReceive"; }
+		}
+		if (t === "net/minecraft/client/multiplayer/ClientPacketListener" || t === "net/minecraft/class_634" ||
+			t === "net/minecraft/client/gui/screens/ChatScreen") {
+			if (m === "sendChat" || m === "sendCommand" || m === "handleChatInput" ||
+				m === "method_45729" || m === "method_44096") { return "chatSend"; }
+			if (m === "handleLogin" || m === "method_11120") { return "worldJoin"; }
+			if (m === "handleRespawn" || m === "method_11117") { return "playerRespawn"; }
+			if (m === "handleUpdateRecipes" || m === "handleRecipeBookAdd" || m === "handleRecipeBookRemove") { return "recipesUpdated"; }
+			if (m === "handleUpdateTags") { return "tagsUpdated"; }
+		}
+		if (t === "net/minecraft/client/multiplayer/ClientLevel") {
+			if (m === "<init>") { return "worldJoin"; }
+			if (m === "addEntity") { return "entityJoin"; }
+		}
+		if (t === "net/minecraft/client/multiplayer/MultiPlayerGameMode") {
+			if (m === "interact" || m === "interactAt") { return "entityInteract"; }
+		}
+		if (t === "net/minecraft/network/PacketEncoder") {
+			if (m === "encode") { return "packetEncode"; }
+		}
+		if (t === "net/minecraft/tags/TagLoader") {
+			if (m === "loadPendingTags" || m === "build" || m === "tryBuildTag") { return "tagsBuild"; }
+		}
+		// ---- Entities & Players ----
+		if (t === "net/minecraft/world/entity/Entity") {
+			if (m === "setLevelCallback") { return "entityJoin"; }
+		}
+		if (t === "net/minecraft/client/player/LocalPlayer" || t === "net/minecraft/world/entity/player/Player" ||
+			t === "net/minecraft/world/entity/LivingEntity" || t === "net/minecraft/world/entity/Entity" ||
+			t === "net/minecraft/server/level/ServerPlayer") {
+			if (m === "tick" || m === "aiStep" || m === "method_5773" || m === "method_6007") { return "playerTick"; }
+			if (m === "sendChat" || m === "sendCommand" || m === "method_44096") { return "chatSend"; }
+			if (m === "die") { return "entityDeath"; }
+			if (m === "hurtClient" || m === "hurtServer" || m === "hurt") { return "entityHurt"; }
+			if (m === "startRiding") { return "entityMount"; }
+			if (m === "removeVehicle") { return "entityDismount"; }
+			if (m === "interactOn") { return "entityInteract"; }
+			if (m === "getDestroySpeed") { return "blockBreakSpeed"; }
+			if (m === "restoreFrom") { return "playerClone"; }
+			if (m === "openMenu" || m === "openHorseInventory") { return "containerOpen"; }
+			if (m === "doCloseContainer") { return "containerClose"; }
+			if (m === "triggerDimensionChangeTriggers") { return "playerChangeDimension"; }
+			if (m === "drop") { return "itemDrop"; }
+		}
+		if (t === "net/minecraft/world/entity/item/ItemEntity") {
+			if (m === "playerTouch") { return "itemPickup"; }
+		}
+		if (t === "net/minecraft/world/entity/item/FallingBlockEntity") {
+			if (m === "tick") { return "fallingBlockTick"; }
+		}
+		if (t === "net/minecraft/world/entity/LightningBolt") {
+			if (m === "tick") { return "lightningStrike"; }
+		}
+		if (t === "net/minecraft/world/entity/TamableAnimal" && m === "tame") { return "entityTame"; }
+		if (t === "net/minecraft/world/entity/animal/feline/Ocelot" && m === "mobInteract") { return "entityTame"; }
+		if (t === "net/minecraft/world/entity/ai/goal/RunAroundLikeCrazyGoal" && m === "tick") { return "entityTame"; }
+		// ---- Items, Blocks, Crafting, Smelting ----
+		if (t === "net/minecraft/world/item/Item" && m === "<init>") { return "itemConstruct"; }
+		if (t === "net/minecraft/world/item/BlockItem" && m === "place") { return "blockPlace"; }
+		if (t === "net/minecraft/world/item/BucketItem" && m === "use") { return "itemUse"; }
+		if (t === "net/minecraft/world/inventory/ResultSlot" && m === "checkTakeAchievements") { return "itemCraft"; }
+		if (t === "net/minecraft/world/inventory/FurnaceResultSlot" && m === "checkTakeAchievements") { return "itemSmelt"; }
+		if (t === "net/minecraft/world/level/block/FarmlandBlock" && (m === "fallOn" || m === "turnToBaseBlock")) { return "farmlandTrample"; }
+		if (t === "net/minecraft/world/level/block/piston/PistonBaseBlock" && m === "triggerEvent") { return "pistonMove"; }
+		// ---- Server, World, Chunks, Spawners, Explosions & Commands ----
+		if (t === "net/minecraft/client/server/IntegratedServer" || t === "net/minecraft/server/dedicated/DedicatedServer") {
+			if (m === "initServer") { return "serverStart"; }
+		}
+		if (t === "net/minecraft/server/level/ServerLevel") {
+			if (m === "save") { return "levelSave"; }
+			if (m === "addEntity") { return "entityJoin"; }
+			if (m === "explode") { return "explosion"; }
+		}
+		if (t === "net/minecraft/world/level/ServerExplosion" && m === "hurtEntities") { return "explosion"; }
+		if (t === "net/minecraft/server/level/ChunkMap" && m === "save") { return "chunkSave"; }
+		if (t === "net/minecraft/world/level/chunk/storage/SerializableChunkData" && m === "read") { return "chunkLoad"; }
+		if (t === "net/minecraft/server/level/ServerPlayerGameMode" && m === "destroyBlock") { return "blockBreak"; }
+		if (t === "net/minecraft/server/players/PlayerList" && m === "respawn") { return "playerRespawn"; }
+		if (t === "net/minecraft/server/PlayerAdvancements" && m === "award") { return "playerAdvancement"; }
+		if (t === "net/minecraft/commands/Commands" && m === "finishParsing") { return "commandExecute"; }
+		if (t === "net/minecraft/world/level/entity/PersistentEntitySectionManager" && m === "addEntity") { return "entityJoin"; }
+		if ((t === "net/minecraft/world/level/BaseSpawner" && m === "serverTick") ||
+			(t === "net/minecraft/world/level/NaturalSpawner" && (m === "spawnCategoryForPosition" || m === "spawnMobsForChunkGeneration")) ||
+			(t === "net/minecraft/world/entity/npc/CatSpawner" && m === "spawnCat") ||
+			(t === "net/minecraft/world/level/levelgen/PatrolSpawner" && m === "spawnPatrolMember") ||
+			(t === "net/minecraft/world/level/levelgen/PhantomSpawner" && m === "tick")) {
+			return "entitySpawn";
 		}
 		return null;
 	}
@@ -7971,12 +8420,25 @@
 		if (canonicalTarget === "net/minecraft/client/player/LocalPlayer" ||
 			canonicalTarget === "net/minecraft/world/entity/player/Player" ||
 			canonicalTarget === "net/minecraft/world/entity/LivingEntity" ||
-			canonicalTarget === "net/minecraft/world/entity/Entity") { return getPlayerInstance(ctx); }
+			canonicalTarget === "net/minecraft/world/entity/Entity" ||
+			canonicalTarget === "net/minecraft/server/level/ServerPlayer") {
+			var pl = getPlayerInstance(ctx);
+			if (pl && typeof pl.level !== "function") {
+				pl.level = function () { return getLevelInstance(ctx); };
+			}
+			return pl;
+		}
 		if (canonicalTarget === "net/minecraft/client/multiplayer/ClientLevel" ||
 			canonicalTarget === "net/minecraft/world/level/Level") { return getLevelInstance(ctx); }
+		if (canonicalTarget === "net/minecraft/server/level/ServerLevel") {
+			if (!ctx._serverLevelObj) { ctx._serverLevelObj = ctx.makeObj("net/minecraft/server/level/ServerLevel", { isClientSide: 0 }); }
+			return ctx._serverLevelObj;
+		}
 		if (canonicalTarget === "net/minecraft/client/Options") { return getOptionsInstance(ctx); }
 		if (canonicalTarget === "net/minecraft/client/gui/Gui" ||
 			canonicalTarget === "net/minecraft/client/gui/Hud") { return getGuiInstance(ctx); }
+		if (canonicalTarget === "net/minecraft/client/gui/GuiGraphics" ||
+			canonicalTarget === "net/minecraft/client/gui/GuiGraphicsExtractor") { return getGuiGraphicsInstance(ctx); }
 		if (canonicalTarget === "net/minecraft/client/gui/components/ChatComponent") { return getGuiInstance(ctx).getChat(); }
 		if (canonicalTarget === "com/mojang/blaze3d/platform/Window") { return getWindowInstance(ctx); }
 		if (canonicalTarget === "net/minecraft/client/KeyboardHandler") {
@@ -7993,10 +8455,56 @@
 			}
 			return ctx._mouseHandlerObj;
 		}
+		if (canonicalTarget === "net/minecraft/client/multiplayer/ClientPacketListener") {
+			if (!ctx._packetListenerObj) {
+				ctx._packetListenerObj = ctx.makeObj("net/minecraft/client/multiplayer/ClientPacketListener", { level: getLevelInstance(ctx) });
+			}
+			return ctx._packetListenerObj;
+		}
+		if (canonicalTarget === "net/minecraft/client/server/IntegratedServer" ||
+			canonicalTarget === "net/minecraft/server/dedicated/DedicatedServer" ||
+			canonicalTarget === "net/minecraft/server/MinecraftServer") {
+			if (!ctx._integratedServerObj) {
+				ctx._integratedServerObj = ctx.makeObj("net/minecraft/client/server/IntegratedServer", {});
+			}
+			return ctx._integratedServerObj;
+		}
 		if (canonicalTarget === "net/minecraft/client/gui/screens/Screen" ||
 			canonicalTarget === "net/minecraft/client/gui/screens/TitleScreen" ||
-			canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen") {
-			return ctx._cachedScreenObj || makeScreenObj(ctx, "Screen", "Screen");
+			canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen" ||
+			canonicalTarget === "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen") {
+			return ctx._cachedScreenObj || makeScreenObj(ctx, canonicalTarget === "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen" ? "InventoryScreen" : "Screen", "Screen");
+		}
+		if (canonicalTarget === "net/minecraft/tags/TagLoader") {
+			if (!ctx._tagLoaderObj) { ctx._tagLoaderObj = ctx.makeObj("net/minecraft/tags/TagLoader", { directory: "tags" }); }
+			return ctx._tagLoaderObj;
+		}
+		if (canonicalTarget === "net/minecraft/server/level/ServerPlayerGameMode") {
+			if (!ctx._spgmObj) {
+				ctx._spgmObj = ctx.makeObj("net/minecraft/server/level/ServerPlayerGameMode", {
+					level: resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel"),
+					player: getPlayerInstance(ctx)
+				});
+			}
+			return ctx._spgmObj;
+		}
+		if (canonicalTarget === "net/minecraft/server/level/ChunkMap") {
+			if (!ctx._chunkMapObj) {
+				ctx._chunkMapObj = ctx.makeObj("net/minecraft/server/level/ChunkMap", {
+					level: resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel")
+				});
+			}
+			return ctx._chunkMapObj;
+		}
+		if (canonicalTarget === "net/minecraft/server/PlayerAdvancements") {
+			if (!ctx._playerAdvObj) {
+				ctx._playerAdvObj = ctx.makeObj("net/minecraft/server/PlayerAdvancements", { player: getPlayerInstance(ctx) });
+			}
+			return ctx._playerAdvObj;
+		}
+		if (canonicalTarget === "net/minecraft/world/inventory/ResultSlot" ||
+			canonicalTarget === "net/minecraft/world/inventory/FurnaceResultSlot") {
+			return ctx.makeObj(canonicalTarget, { player: getPlayerInstance(ctx) });
 		}
 		return null;
 	}
@@ -8015,16 +8523,75 @@
 			inst.__cls = mixinClassName;
 			inst.__class = mixinClassName;
 			inst.$class = mixinClassName;
+			// Run 0-arg mixin constructor so field initializers (e.g. ThreadLocal) are populated
+			if (rt && typeof rt.invokeSpecial === "function") {
+				try { rt.invokeSpecial(inst, mixinClassName, "<init>", "()V", []); } catch (eInit) {}
+			}
+		}
+		// Wire common target live-object properties onto the mixin receiver
+		if (canonicalTarget === "net/minecraft/client/multiplayer/ClientPacketListener") {
+			inst.minecraft = getMinecraftInstance(ctx);
+			inst.level = getLevelInstance(ctx);
+			inst.recipes = function () { return resolveTargetLiveObject(ctx, canonicalTarget).recipes(); };
+			inst.registryAccess = function () { return resolveTargetLiveObject(ctx, canonicalTarget).registryAccess(); };
+		} else if (canonicalTarget === "net/minecraft/server/level/ServerPlayer" ||
+			canonicalTarget === "net/minecraft/world/entity/player/Player" ||
+			canonicalTarget === "net/minecraft/client/player/LocalPlayer") {
+			inst.level = function () {
+				return canonicalTarget === "net/minecraft/server/level/ServerPlayer"
+					? resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel")
+					: getLevelInstance(ctx);
+			};
+			inst.serverLevel = function () { return resolveTargetLiveObject(ctx, "net/minecraft/server/level/ServerLevel"); };
 		}
 		// Mixin classes are woven into their target class on a real JVM, so (Target)(Object)this must pass checkcast.
 		if (canonicalTarget) {
 			var ifaces = inst.__interfaces ? inst.__interfaces.slice() : [];
 			if (ifaces.indexOf(canonicalTarget) < 0) { ifaces.push(canonicalTarget); }
-			if ((canonicalTarget === "net/minecraft/client/gui/screens/Screen" ||
+			var isScreenTgt = (canonicalTarget === "net/minecraft/client/gui/screens/Screen" ||
 				canonicalTarget === "net/minecraft/client/gui/screens/TitleScreen" ||
-				canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen") &&
-				ifaces.indexOf("net/fabricmc/fabric/impl/client/screen/ScreenExtensions") < 0) {
-				ifaces.push("net/fabricmc/fabric/impl/client/screen/ScreenExtensions");
+				canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen" ||
+				canonicalTarget === "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen");
+			if (isScreenTgt) {
+				if (ifaces.indexOf("net/minecraft/client/gui/screens/Screen") < 0) {
+					ifaces.push("net/minecraft/client/gui/screens/Screen");
+				}
+				if (ifaces.indexOf("net/fabricmc/fabric/impl/client/screen/ScreenExtensions") < 0) {
+					ifaces.push("net/fabricmc/fabric/impl/client/screen/ScreenExtensions");
+				}
+				// Expose Screen & ScreenExtensions helpers directly on the receiver so MixinScreen works as (Screen)(Object)this
+				var noopScrEvt = ctx._noopScreenEvt || null;
+				inst.minecraft = getMinecraftInstance(ctx);
+				inst.getTitle = function () { return (ctx._cachedScreenObj && ctx._cachedScreenObj.getTitle()) || makeComponentLiteral(ctx, ""); };
+				inst.children = function () { return (ctx._cachedScreenObj && ctx._cachedScreenObj.children()) || makeJavaList(ctx, []); };
+				inst.toString = function () { return (ctx._cachedScreenObj && ctx._cachedScreenObj._screenName) || canonicalTarget; };
+				inst.fabric_getRemoveEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeRenderEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterRenderEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeTickEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterTickEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowMouseClickEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeMouseClickEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterMouseClickEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowMouseReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeMouseReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterMouseReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowMouseScrollEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeMouseScrollEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterMouseScrollEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowMouseDragEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeMouseDragEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterMouseDragEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowKeyPressEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeKeyPressEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterKeyPressEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowKeyReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeKeyReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterKeyReleaseEvent = function () { return noopScrEvt; };
+				inst.fabric_getAllowCharTypeEvent = function () { return noopScrEvt; };
+				inst.fabric_getBeforeCharTypeEvent = function () { return noopScrEvt; };
+				inst.fabric_getAfterCharTypeEvent = function () { return noopScrEvt; };
+				inst.fabric_getButtons = function () { return makeJavaList(ctx, []); };
 			}
 			inst.__interfaces = ifaces;
 		}
@@ -8124,7 +8691,12 @@
 		MP_KEY_0 = 13, MP_KEY_1 = 14, MP_KEY_2 = 15, MP_KEY_3 = 16,
 		MP_MOUSE_0 = 17, MP_MOUSE_1 = 18, MP_MOUSE_2 = 19,
 		MP_SCROLL_0 = 20, MP_SCROLL_1 = 21, MP_HUD_DELTA = 22,
-		MP_FOV_NUM = 23, MP_GAMMA_NUM = 24, MP_ONE = 25, MP_ZERO = 26, MP_NULL = 27;
+		MP_FOV_NUM = 23, MP_GAMMA_NUM = 24, MP_ONE = 25, MP_ZERO = 26, MP_NULL = 27,
+		MP_KEY_EVENT = 28, MP_MOUSE_INFO = 29, MP_HAND = 30, MP_ITEMSTACK = 31,
+		MP_PLAYER = 32, MP_LEVEL = 33, MP_FONT = 34, MP_LIST = 35, MP_MAP = 36,
+		MP_BLOCKPOS = 37, MP_DAMAGE = 38, MP_TOAST_MGR = 39, MP_SCR_W = 40, MP_SCR_H = 41,
+		MP_IS_KEY = 42, MP_PACKET_RECIPES = 43, MP_PACKET_TAGS = 44, MP_PACKET_LOGIN = 45,
+		MP_PACKET_RESPAWN = 46, MP_CONN = 47, MP_PACKET_RB_ADD = 48, MP_PACKET_RB_REM = 49;
 
 	function compileMixinParamPlan(desc, hookName, kind) {
 		var params = parseJvmParamTypes(desc);
@@ -8154,8 +8726,56 @@
 				codes[i] = MP_CAM;
 			} else if (p === "Lnet/minecraft/client/Minecraft;" || p === "Lnet/minecraft/class_310;") {
 				codes[i] = MP_MC;
-			} else if (p === "Lnet/minecraft/client/gui/screens/Screen;" || p === "Lnet/minecraft/class_437;") {
+			} else if (p === "Lnet/minecraft/client/gui/screens/Screen;" || p === "Lnet/minecraft/class_437;" ||
+				p === "Lnet/minecraft/client/gui/screens/inventory/AbstractContainerScreen;") {
 				codes[i] = MP_SCR;
+			} else if (p === "Lnet/minecraft/client/input/KeyEvent;") {
+				codes[i] = MP_KEY_EVENT;
+			} else if (p === "Lnet/minecraft/client/input/MouseButtonInfo;") {
+				codes[i] = MP_MOUSE_INFO;
+			} else if (p === "Lnet/minecraft/world/InteractionHand;") {
+				codes[i] = MP_HAND;
+			} else if (p === "Lnet/minecraft/world/item/ItemStack;") {
+				codes[i] = MP_ITEMSTACK;
+			} else if (p === "Lnet/minecraft/world/entity/player/Player;" || p === "Lnet/minecraft/client/player/LocalPlayer;" ||
+				p === "Lnet/minecraft/server/level/ServerPlayer;" || p === "Lnet/minecraft/world/entity/LivingEntity;" ||
+				p === "Lnet/minecraft/world/entity/Entity;") {
+				codes[i] = MP_PLAYER;
+			} else if (p === "Lnet/minecraft/world/level/Level;" || p === "Lnet/minecraft/client/multiplayer/ClientLevel;" ||
+				p === "Lnet/minecraft/server/level/ServerLevel;" || p === "Lnet/minecraft/world/level/LevelAccessor;" ||
+				p === "Lnet/minecraft/world/level/LevelReader;") {
+				codes[i] = MP_LEVEL;
+			} else if (p === "Lnet/minecraft/client/gui/Font;") {
+				codes[i] = MP_FONT;
+			} else if (p === "Ljava/util/List;") {
+				codes[i] = MP_LIST;
+			} else if (p === "Ljava/util/Map;") {
+				codes[i] = MP_MAP;
+			} else if (p === "Lnet/minecraft/core/BlockPos;") {
+				codes[i] = MP_BLOCKPOS;
+			} else if (p === "Lnet/minecraft/world/damagesource/DamageSource;") {
+				codes[i] = MP_DAMAGE;
+			} else if (p === "Lnet/minecraft/client/gui/components/toasts/ToastManager;") {
+				codes[i] = MP_TOAST_MGR;
+			} else if (p === "Lnet/minecraft/network/protocol/game/ClientboundUpdateRecipesPacket;") {
+				codes[i] = MP_PACKET_RECIPES;
+			} else if (p === "Lnet/minecraft/network/protocol/game/ClientboundRecipeBookAddPacket;") {
+				codes[i] = MP_PACKET_RB_ADD;
+			} else if (p === "Lnet/minecraft/network/protocol/game/ClientboundRecipeBookRemovePacket;") {
+				codes[i] = MP_PACKET_RB_REM;
+			} else if (p === "Lnet/minecraft/network/protocol/common/ClientboundUpdateTagsPacket;") {
+				codes[i] = MP_PACKET_TAGS;
+			} else if (p === "Lnet/minecraft/network/protocol/game/ClientboundLoginPacket;") {
+				codes[i] = MP_PACKET_LOGIN;
+			} else if (p === "Lnet/minecraft/network/protocol/game/ClientboundRespawnPacket;") {
+				codes[i] = MP_PACKET_RESPAWN;
+			} else if (p === "Lnet/minecraft/client/multiplayer/ClientPacketListener;") {
+				codes[i] = MP_CONN;
+			} else if (hookName === "isKeyDown" && p === "I") {
+				codes[i] = MP_IS_KEY;
+			} else if (hookName === "screenInit" && p === "I") {
+				var sis = numSeen++;
+				codes[i] = sis === 0 ? MP_SCR_W : (sis === 1 ? MP_SCR_H : MP_ZERO);
 			} else if (hookName === "key" && (p === "I" || p === "J")) {
 				if (p === "J") { codes[i] = MP_LONG1; }
 				else {
@@ -8174,7 +8794,7 @@
 					var ss = numSeen++;
 					codes[i] = ss === 0 ? MP_SCROLL_0 : (ss === 1 ? MP_SCROLL_1 : MP_ZERO);
 				}
-			} else if (hookName === "hudRender" && p === "F") {
+			} else if ((hookName === "hudRender" || hookName === "containerRender") && p === "F") {
 				codes[i] = MP_HUD_DELTA;
 			} else if (hookName === "fovModifier" && (p === "F" || p === "D")) {
 				codes[i] = MP_FOV_NUM;
@@ -8221,6 +8841,57 @@
 					val = getMinecraftInstance(ctx); break;
 				case MP_SCR:
 					val = (ev && ev.screenObj) || makeScreenObj(ctx, ev && ev.screen, ev && ev.title); break;
+				case MP_KEY_EVENT:
+					val = ctx.makeObj("net/minecraft/client/input/KeyEvent", {
+						key: ev ? (ev.key | 0) : 0, scancode: ev ? (ev.scancode | 0) : 0, modifiers: ev ? (ev.modifiers | 0) : 0
+					});
+					break;
+				case MP_MOUSE_INFO:
+					val = ctx.makeObj("net/minecraft/client/input/MouseButtonInfo", {
+						button: ev ? (ev.button | 0) : 0, modifiers: ev ? (ev.modifiers | 0) : 0
+					});
+					break;
+				case MP_HAND:
+					val = (ctx.nativeDefs["net/minecraft/world/InteractionHand"] && ctx.nativeDefs["net/minecraft/world/InteractionHand"].statics.MAIN_HAND) || null;
+					break;
+				case MP_ITEMSTACK:
+					val = (ev && ev.itemStack) || ctx.emptyItemStack; break;
+				case MP_PLAYER:
+					val = (ev && ev.player) || getPlayerInstance(ctx); break;
+				case MP_LEVEL:
+					val = (ev && ev.level) || getLevelInstance(ctx); break;
+				case MP_FONT:
+					val = getFontInstance(ctx); break;
+				case MP_LIST:
+					val = (ev && ev.list) || makeJavaList(ctx, []); break;
+				case MP_MAP:
+					val = (ev && ev.map) || makeJavaMap(ctx); break;
+				case MP_BLOCKPOS:
+					val = (ev && ev.pos) || makeBlockPos(0, 64, 0); break;
+				case MP_DAMAGE:
+					val = (ev && ev.damageSource) || ctx.makeObj("net/minecraft/world/damagesource/DamageSource", { _msgId: "generic" }); break;
+				case MP_TOAST_MGR:
+					val = (ev && ev.toastManager) || ctx.makeObj("net/minecraft/client/gui/components/toasts/ToastManager", {}); break;
+				case MP_SCR_W:
+					val = getWindowInstance(ctx).getGuiScaledWidth() | 0; break;
+				case MP_SCR_H:
+					val = getWindowInstance(ctx).getGuiScaledHeight() | 0; break;
+				case MP_IS_KEY:
+					val = ev ? (ev.key | 0) : 0; break;
+				case MP_PACKET_RECIPES:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/game/ClientboundUpdateRecipesPacket", {}); break;
+				case MP_PACKET_RB_ADD:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/game/ClientboundRecipeBookAddPacket", {}); break;
+				case MP_PACKET_RB_REM:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/game/ClientboundRecipeBookRemovePacket", {}); break;
+				case MP_PACKET_TAGS:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/common/ClientboundUpdateTagsPacket", {}); break;
+				case MP_PACKET_LOGIN:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/game/ClientboundLoginPacket", {}); break;
+				case MP_PACKET_RESPAWN:
+					val = (ev && ev.packet) || ctx.makeObj("net/minecraft/network/protocol/game/ClientboundRespawnPacket", {}); break;
+				case MP_CONN:
+					val = resolveTargetLiveObject(ctx, "net/minecraft/client/multiplayer/ClientPacketListener"); break;
 				case MP_LONG1:
 					val = makeLong(ctx, 1); break;
 				case MP_LONG0:
@@ -8367,7 +9038,7 @@
 				continue;
 			}
 
-			// Collect @Shadow fields
+			// Collect @Shadow fields & wire @Shadow abstract methods to the live target object
 			var shadows = [];
 			var fields = clsInfo.fields || [];
 			for (var fi = 0; fi < fields.length; fi++) {
@@ -8377,6 +9048,54 @@
 			}
 
 			var methods = clsInfo.methods || [];
+			if (rt && typeof rt.loadClass === "function") {
+				try {
+					var shadowClsObj = rt.loadClass(mixinName);
+					if (shadowClsObj && shadowClsObj.methods) {
+						var primaryTarget = targets[0];
+						if (primaryTarget && ctx.nativeDefs[primaryTarget] && (!shadowClsObj.superName || shadowClsObj.superName === "java/lang/Object")) {
+							shadowClsObj.superName = primaryTarget;
+						}
+						if (primaryTarget === "net/minecraft/client/gui/screens/Screen" ||
+							primaryTarget === "net/minecraft/client/gui/screens/TitleScreen" ||
+							primaryTarget === "net/minecraft/client/gui/screens/PauseScreen" ||
+							primaryTarget === "net/minecraft/client/gui/screens/inventory/AbstractContainerScreen") {
+							if (!shadowClsObj.interfaces) { shadowClsObj.interfaces = []; }
+							if (shadowClsObj.interfaces.indexOf("net/fabricmc/fabric/impl/client/screen/ScreenExtensions") < 0) {
+								shadowClsObj.interfaces.push("net/fabricmc/fabric/impl/client/screen/ScreenExtensions");
+							}
+						}
+						for (var smi = 0; smi < methods.length; smi++) {
+							var sm = methods[smi];
+							if (!sm) { continue; }
+							var smAcc = sm.accessFlags || sm.access || 0;
+							if ((smAcc & 0x0400) && findAnnotation(sm, "org/spongepowered/asm/mixin/Shadow")) {
+								(function (tCls, sName, sDesc) {
+									var mapped = (rt && typeof rt.resolveMemberAlias === "function")
+										? rt.resolveMemberAlias(tCls, sName) : sName;
+									var fwd = function () {
+										var live = resolveTargetLiveObject(ctx, tCls);
+										if (!live) { return null; }
+										if (typeof live[sName + sDesc] === "function") { return live[sName + sDesc].apply(live, arguments); }
+										if (typeof live[mapped] === "function") { return live[mapped].apply(live, arguments); }
+										if (typeof live[sName] === "function") { return live[sName].apply(live, arguments); }
+										var tDef = ctx.nativeDefs[tCls];
+										if (tDef && tDef.methods) {
+											var mf = tDef.methods[sName + sDesc] || tDef.methods[mapped] || tDef.methods[sName];
+											if (typeof mf === "function") { return mf.apply(live, arguments); }
+										}
+										return null;
+									};
+									shadowClsObj.methods[sName + sDesc] = fwd;
+									shadowClsObj.methods[sName] = fwd;
+								})(primaryTarget, sm.name || "", sm.descriptor || sm.desc || "()V");
+							}
+						}
+					}
+				} catch (eSh) {}
+			}
+
+			var sharedMixinReceiver = null;
 			for (var mi = 0; mi < methods.length; mi++) {
 				var meth = methods[mi];
 				if (!meth) { continue; }
@@ -8434,15 +9153,16 @@
 					continue;
 				}
 
-				// Check @Inject / @ModifyReturnValue / @Redirect / @Overwrite
+				// Check @Inject / @ModifyReturnValue / @ModifyVariable / @Redirect / @Overwrite
 				var injAnn = findAnnotation(meth, "org/spongepowered/asm/mixin/injection/Inject");
 				var mrvAnn = findAnnotation(meth, ["com/llamalad7/mixinextras/injector/ModifyReturnValue", "ModifyReturnValue"]);
+				var mvarAnn = findAnnotation(meth, "org/spongepowered/asm/mixin/injection/ModifyVariable");
 				var redAnn = findAnnotation(meth, "org/spongepowered/asm/mixin/injection/Redirect");
 				var ovwAnn = findAnnotation(meth, "org/spongepowered/asm/mixin/Overwrite");
-				var activeAnn = injAnn || mrvAnn || redAnn || ovwAnn;
+				var activeAnn = injAnn || mrvAnn || mvarAnn || redAnn || ovwAnn;
 				if (!activeAnn) { continue; }
 
-				var annKind = injAnn ? "Inject" : (mrvAnn ? "ModifyReturnValue" : (redAnn ? "Redirect" : "Overwrite"));
+				var annKind = injAnn ? "Inject" : (mrvAnn ? "ModifyReturnValue" : (mvarAnn ? "ModifyVariable" : (redAnn ? "Redirect" : "Overwrite")));
 				var atPos = extractAtValue(activeAnn);
 				var targetMethodSpecs = ovwAnn ? [mName] : unwrapAnnoStrings(annoVal(activeAnn, "method"));
 				if (!targetMethodSpecs.length) { targetMethodSpecs = [mName]; }
@@ -8472,7 +9192,10 @@
 								if (resolvedOnce) { return; }
 								resolvedOnce = true;
 								if (!mxStatic && !receiver) {
-									try { receiver = createMixinReceiver(ctx, mxCls, cTarget, shList); } catch (e0) { receiver = null; }
+									if (!sharedMixinReceiver) {
+										try { sharedMixinReceiver = createMixinReceiver(ctx, mxCls, cTarget, shList); } catch (e0) { sharedMixinReceiver = null; }
+									}
+									receiver = sharedMixinReceiver;
 								}
 								if (rt && typeof rt.loadClass === "function" && typeof rt._lookupMethodHierarchy === "function") {
 									try {
@@ -8504,10 +9227,15 @@
 									receiver = createMixinReceiver(ctx, mxCls, cTarget, shList);
 									reusableCompiledArgs[0] = receiver;
 								}
+								var thisObj = receiver;
+								if (!mxStatic && hkName === "keyDisplayName" && ev && ev.keyObj) {
+									thisObj = ev.keyObj;
+								}
 								var ciObj = null;
 								var acquiredKind = 0; // 1 = CI, 2 = CIR
 								if (plan.needsCir) {
-									ciObj = acquireCir(ctx, mxMethod, ev && ev.value !== undefined ? ev.value : null);
+									var initCir = (ev && ev.value !== undefined) ? ev.value : (hkName === "containerOpen" ? ctx._optIntOne : null);
+									ciObj = acquireCir(ctx, mxMethod, initCir);
 									acquiredKind = 2;
 								} else if (plan.needsCi) {
 									ciObj = acquireCi(ctx, mxMethod);
@@ -8519,24 +9247,24 @@
 								try {
 									if (compiledFn) {
 										var cArgs = useReuse ? reusableCompiledArgs : new Array(compiledOffset + plan.length);
-										if (!mxStatic) { cArgs[0] = receiver; }
+										if (!mxStatic) { cArgs[0] = thisObj; }
 										fillMixinArgs(ctx, plan, cArgs, compiledOffset, ev, ciObj);
 										retVal = compiledFn(rt, cArgs);
 									} else if (nativeFn) {
 										var nArgs = useReuse ? reusablePlainArgs : new Array(plan.length);
 										fillMixinArgs(ctx, plan, nArgs, 0, ev, ciObj);
-										retVal = nativeFn.apply(mxStatic ? nativeOwner : receiver, nArgs);
+										retVal = nativeFn.apply(mxStatic ? nativeOwner : thisObj, nArgs);
 									} else if (rt) {
 										var pArgs = useReuse ? reusablePlainArgs : new Array(plan.length);
 										fillMixinArgs(ctx, plan, pArgs, 0, ev, ciObj);
 										if (mxStatic && typeof rt.invokeStatic === "function") {
 											retVal = rt.invokeStatic(mxCls, mxMethod, mxDesc, pArgs);
 										} else if (!mxStatic && typeof rt.invokeVirtual === "function") {
-											retVal = rt.invokeVirtual(receiver, mxMethod, mxDesc, pArgs, mxCls);
+											retVal = rt.invokeVirtual(thisObj, mxMethod, mxDesc, pArgs, mxCls);
 										} else if (!mxStatic && typeof rt.invokeSpecial === "function") {
-											retVal = rt.invokeSpecial(receiver, mxCls, mxMethod, mxDesc, pArgs);
+											retVal = rt.invokeSpecial(thisObj, mxCls, mxMethod, mxDesc, pArgs);
 										} else if (typeof rt.invoke === "function") {
-											retVal = rt.invoke(mxStatic ? null : receiver, mxCls, mxMethod, mxDesc, pArgs);
+											retVal = rt.invoke(mxStatic ? null : thisObj, mxCls, mxMethod, mxDesc, pArgs);
 										}
 									}
 									if (ev && typeof ev === "object") {
@@ -8608,9 +9336,10 @@
 		var hudFns = ctx._hudRenderFns;
 		var hasFabricHud = hudFns.length > 0;
 		var hasHookHud = hasRegisteredHooks(ctx, "hudRender");
+		var hasContainerRender = !!(renderCtx && renderCtx.containerScreen && hasRegisteredHooks(ctx, "containerRender"));
 		var hasCustomCb = !!(renderCtx && typeof renderCtx.callback === "function");
 
-		if (!hasFabricHud && !hasHookHud && !hasCustomCb) {
+		if (!hasFabricHud && !hasHookHud && !hasContainerRender && !hasCustomCb) {
 			clearHudOverlayForCtx(ctx);
 			return;
 		}
@@ -8691,6 +9420,12 @@
 					for (var hi = 0, hn = hudFns.length; hi < hn; hi++) {
 						try { hudFns[hi](gg, dt); } catch (e1) { console.error("[jvm-bridge] HUD listener error:", e1); }
 					}
+				}
+				if (hasContainerRender) {
+					var cev = ctx._hudEv;
+					cev.guiGraphics = gg; cev.deltaTracker = dt; cev.tickDelta = tickDelta;
+					cev.guiWidth = m.guiWidth; cev.guiHeight = m.guiHeight; cev.guiScale = m.guiScale; cev.state = st;
+					fireHooks(ctx, "containerRender", cev);
 				}
 			} catch (e) {
 				console.error("[jvm-bridge] HUD render error:", e);

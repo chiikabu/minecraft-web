@@ -1271,8 +1271,14 @@ def main():
     parser.add_argument("--verify-archive", action="store_true",
                         help="with --reuse-archive-from, fully decompress and verify the reused XZ archive before writing")
     parser.add_argument("--shaderpacks", metavar="DIR",
-                        help="bundle the shader packs listed in DIR/packs.json; added to the game on first start")
+                        help="bundle the shader packs listed in DIR/packs.json; defaults to build/shaderpacks if present")
+    parser.add_argument("--no-shaderpacks", action="store_true",
+                        help="do not bundle any default shader packs even if build/shaderpacks/packs.json exists")
     args = parser.parse_args()
+    if not args.shaderpacks and not args.no_shaderpacks:
+        default_sp = os.path.join(REPO, "build", "shaderpacks")
+        if os.path.isfile(os.path.join(default_sp, "packs.json")):
+            args.shaderpacks = default_sp
     if args.web:
         SRC = os.path.abspath(args.web)
     parts = page_parts()

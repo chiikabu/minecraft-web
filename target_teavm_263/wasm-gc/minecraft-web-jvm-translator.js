@@ -4288,6 +4288,13 @@
 				return -1;
 			},
 			"clear()V": function () { this._items = []; },
+			"getFirst()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a[0] : null; },
+			"getLast()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a[a.length - 1] : null; },
+			"addFirst(Ljava/lang/Object;)V": function (v) { if (!this._items) this._items = []; this._items.unshift(v); },
+			"addLast(Ljava/lang/Object;)V": function (v) { if (!this._items) this._items = []; this._items.push(v); },
+			"removeFirst()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a.shift() : null; },
+			"removeLast()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a.pop() : null; },
+			"reversed()Ljava/util/List;": function () { return makeListObj((this._items || []).slice().reverse()); },
 			"iterator()Ljava/util/Iterator;": function () { const a = this._items || []; return makeIterator(a.slice(), a); },
 			"forEach(Ljava/util/function/Consumer;)V": function (fn) {
 				const arr = this._items || [];
@@ -4355,6 +4362,13 @@
 			"addAll(Ljava/util/Collection;)Z": listMethods["addAll(Ljava/util/Collection;)Z"],
 			"remove(Ljava/lang/Object;)Z": listMethods["remove(Ljava/lang/Object;)Z"],
 			"clear()V": function () { this._items = []; },
+			"getFirst()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a[0] : null; },
+			"getLast()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a[a.length - 1] : null; },
+			"addFirst(Ljava/lang/Object;)V": function (v) { if (!this._items) this._items = []; this._items.unshift(v); },
+			"addLast(Ljava/lang/Object;)V": function (v) { if (!this._items) this._items = []; this._items.push(v); },
+			"removeFirst()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a.shift() : null; },
+			"removeLast()Ljava/lang/Object;": function () { const a = this._items || []; return a.length ? a.pop() : null; },
+			"reversed()Ljava/util/List;": function () { return makeListObj((this._items || []).slice().reverse()); },
 			"iterator()Ljava/util/Iterator;": function () { const a = this._items || []; return makeIterator(a.slice(), a); },
 			"forEach(Ljava/util/function/Consumer;)V": listMethods["forEach(Ljava/util/function/Consumer;)V"],
 			"toArray()[Ljava/lang/Object;": listMethods["toArray()[Ljava/lang/Object;"],
