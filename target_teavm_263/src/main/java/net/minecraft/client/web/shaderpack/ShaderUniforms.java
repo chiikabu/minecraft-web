@@ -24,12 +24,17 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.material.FogType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Vector3fc;
@@ -499,7 +504,23 @@ public final class ShaderUniforms {
 	}
 
 	private static float heldBlockLight(final ItemStack stack) {
-		if (stack != null && !stack.isEmpty() && stack.getItem() instanceof BlockItem blockItem) {
+		if (stack == null || stack.isEmpty()) {
+			return 0.0F;
+		}
+		Item item = stack.getItem();
+		if (item == Items.LAVA_BUCKET) {
+			return 15.0F;
+		}
+		if (item == Items.GLOW_BERRIES) {
+			return 14.0F;
+		}
+		if (item == Items.BLAZE_ROD) {
+			return 10.0F;
+		}
+		if (item == Items.GLOW_INK_SAC || item == Items.SPECTRAL_ARROW) {
+			return 8.0F;
+		}
+		if (item instanceof BlockItem blockItem) {
 			return (float) blockItem.getBlock().defaultBlockState().getLightEmission();
 		}
 		return 0.0F;
@@ -816,14 +837,34 @@ public final class ShaderUniforms {
 		put1("dhFarPlane", far);
 		put1("dhRenderDistance", far);
 
-		// centerDepthSmooth from crosshair hit (no GPU readback)
+		// centerDepthSmooth from crosshair hit or extended camera raycast up to actual far plane (no GPU readback)
+		float depthFar = camera.depthFar > near ? camera.depthFar
+			: Math.max(far * 4.0F, mc.options.cloudRange().get() * 16.0F);
 		float target = 1.0F;
 		HitResult hit = mc.hitResult;
-		if (hit != null && hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult) {
+		if ((hit == null || hit.getType() == HitResult.Type.MISS) && level != null && camera.pos != null) {
+			// Beyond ~4.5-block interaction reach: cast a ray along the screen-center view axis up to loaded render distance
+			this.scratchVec4A.set(0.0F, 0.0F, -1.0F, 0.0F);
+			this.scratchModelViewInv.transform(this.scratchVec4A);
+			float rx = this.scratchVec4A.x;
+			float ry = this.scratchVec4A.y;
+			float rz = this.scratchVec4A.z;
+			float rlenSq = rx * rx + ry * ry + rz * rz;
+			if (rlenSq > 1.0E-8F) {
+				float invLen = (float) (1.0 / Math.sqrt(rlenSq));
+				double rayDist = Math.min(depthFar, Math.max(far, 128.0F));
+				Vec3 end = camera.pos.add(rx * invLen * rayDist, ry * invLen * rayDist, rz * invLen * rayDist);
+				ClipContext clip = player != null
+					? new ClipContext(camera.pos, end, ClipContext.Block.VISUAL, ClipContext.Fluid.ANY, player)
+					: new ClipContext(camera.pos, end, ClipContext.Block.VISUAL, ClipContext.Fluid.ANY, CollisionContext.empty());
+				hit = level.clip(clip);
+			}
+		}
+		if (hit != null && hit.getType() != HitResult.Type.MISS) {
 			double dx = hit.getLocation().x - camX;
 			double dy = hit.getLocation().y - camY;
 			double dz = hit.getLocation().z - camZ;
-			float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+			float dist = Math.min((float) Math.sqrt(dx * dx + dy * dy + dz * dz), depthFar);
 			this.scratchVec4A.set(0.0F, 0.0F, -Math.max(dist, near), 1.0F);
 			this.scratchProj.transform(this.scratchVec4A);
 			target = Math.max(0.0F, Math.min(1.0F, this.scratchVec4A.z / this.scratchVec4A.w * 0.5F + 0.5F));

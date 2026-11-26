@@ -3,9 +3,14 @@
 package net.minecraft.client.web;
 
 import net.minecraft.client.renderer.chunk.Web263MeshOffload;
+import net.minecraft.client.web.shaderpack.ShaderBlockIds;
 import org.teavm.jso.JSBody;
+import org.teavm.jso.typedarrays.Int8Array;
 
 public final class WebMeshWorker implements Web263MeshOffload.Bridge {
+	private boolean sentTagOn;
+	private float[] sentTagTable;
+
 	private WebMeshWorker() {
 	}
 
@@ -25,10 +30,26 @@ public final class WebMeshWorker implements Web263MeshOffload.Bridge {
 	@JSBody(script = "return !!(globalThis.__twitMesh && globalThis.__teavmMemory);")
 	private static native boolean present();
 
+	private void syncTags(final boolean on, final float[] table) {
+		byte[] blob = ShaderBlockIds.workerBlob(on);
+		jsSetTags(Int8Array.copyFromJavaArray(blob));
+		this.sentTagOn = on;
+		this.sentTagTable = table;
+	}
+
 	@Override
 	public int caps() {
-		if (net.minecraft.client.web.shaderpack.ShaderBlockIds.active) {
-			return 0;
+		boolean active = ShaderBlockIds.active;
+		if (active) {
+			if (!jsCanTag()) {
+				return 0;
+			}
+			float[] table = ShaderBlockIds.table;
+			if (!this.sentTagOn || this.sentTagTable != table) {
+				this.syncTags(true, table);
+			}
+		} else if (this.sentTagOn) {
+			this.syncTags(false, null);
 		}
 		return jsCaps();
 	}
@@ -65,6 +86,12 @@ public final class WebMeshWorker implements Web263MeshOffload.Bridge {
 
 	@JSBody(script = "return globalThis.__twitMesh.caps() | 0;")
 	private static native int jsCaps();
+
+	@JSBody(script = "return !!(globalThis.__twitMesh && globalThis.__twitMesh.canTag && globalThis.__twitMesh.setTags && globalThis.__twitMesh.canTag());")
+	private static native boolean jsCanTag();
+
+	@JSBody(params = {"bytes"}, script = "if (globalThis.__twitMesh && globalThis.__twitMesh.setTags) { globalThis.__twitMesh.setTags(bytes); }")
+	private static native void jsSetTags(Int8Array bytes);
 
 	@JSBody(script = "return globalThis.__twitMesh.capacity() | 0;")
 	private static native int jsCapacity();

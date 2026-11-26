@@ -168,10 +168,37 @@ public final class WebSaves {
 		List<String> changed = new ArrayList<>();
 		List<String> gone = new ArrayList<>();
 		diff(snapshot, current, changed, gone);
-		beginTx();
+		if (changed.isEmpty() && gone.isEmpty()) {
+			return;
+		}
+		final List<String> batchChanged = new ArrayList<>(changed);
+		final List<String> batchGone = new ArrayList<>(gone);
+		final Map<String, long[]> prevGoneSnapshot = new HashMap<>();
+		final Map<String, Integer> prevGonePieces = new HashMap<>();
+		for (String path : gone) {
+			long[] prevMeta = snapshot.get(path);
+			if (prevMeta != null) {
+				prevGoneSnapshot.put(path, prevMeta);
+			}
+			int[] was = pieceHashes.get(path);
+			Integer restored = restoredPieces.get(path);
+			int count = Math.max(was == null ? 0 : was.length / 2, restored == null ? 0 : restored);
+			if (count > 0) {
+				prevGonePieces.put(path, count);
+			}
+		}
+		if (!beginTx(() -> onTxFailed(batchChanged, batchGone, prevGoneSnapshot, prevGonePieces))) {
+			return;
+		}
+		List<String> unread = null;
 		try {
 			for (String path : changed) {
-				mirror(path);
+				if (!mirror(path)) {
+					if (unread == null) {
+						unread = new ArrayList<>();
+					}
+					unread.add(path);
+				}
 			}
 			for (String path : gone) {
 				forget(path);
@@ -179,23 +206,53 @@ public final class WebSaves {
 		} finally {
 			endTx();
 		}
+		if (unread != null) {
+			for (String path : unread) {
+				current.remove(path);
+				pieceHashes.remove(path);
+			}
+		}
 		snapshot.clear();
 		snapshot.putAll(current);
 	}
 
+	private static void onTxFailed(
+			final List<String> batchChanged,
+			final List<String> batchGone,
+			final Map<String, long[]> prevGoneSnapshot,
+			final Map<String, Integer> prevGonePieces) {
+		for (String path : batchChanged) {
+			snapshot.remove(path);
+			pieceHashes.remove(path);
+		}
+		for (String path : batchGone) {
+			if (!snapshot.containsKey(path)) {
+				long[] prevMeta = prevGoneSnapshot.get(path);
+				snapshot.put(path, prevMeta != null ? prevMeta : new long[]{-1L, -1L});
+			}
+			Integer count = prevGonePieces.get(path);
+			if (count != null && count > 0) {
+				Integer existing = restoredPieces.get(path);
+				if (existing == null || existing < count) {
+					restoredPieces.put(path, count);
+				}
+			}
+		}
+	}
+
 	private static final byte[] pieceBuffer = new byte[PIECE];
 
-	private static void mirror(final String path) {
+	private static boolean mirror(final String path) {
 		VirtualFileAccessor accessor = fs().getFile(path).createAccessor(true, false, false);
 		if (accessor == null) {
-			return;
+			return false;
 		}
 		try {
 			int size;
 			try {
 				size = accessor.size();
 			} catch (IOException e) {
-				return;
+				return false;
 			}
 			int pieces = pieceCount(size);
 			int[] was = pieceHashes.get(path);
@@ -206,7 +263,7 @@ public final class WebSaves {
 			for (int i = 0; i < pieces; i++) {
 				int len = Math.min(PIECE, Math.max(0, size - i * PIECE));
 				if (!readInto(accessor, i * PIECE, len)) {
-					return;
+					return false;
 				}
 				hashPiece(pieceBuffer, len, now, i);
 				if (pieceChanged(was, now, i)) {
@@ -220,6 +277,7 @@ public final class WebSaves {
 				remove(pieceKey(path, i));
 			}
 			pieceHashes.put(path, now);
+			return true;
 		} finally {
 			close(accessor);
 		}
@@ -473,10 +531,15 @@ public final class WebSaves {
 		void done(boolean ok);
 	}
 
+	@JSFunctor
+	private interface FailHandler extends JSObject {
+		void failed();
+	}
+
 	@JSBody(params = {"name", "schema", "wipe", "onEntry", "onDone"}, script = ""
-		+ "var settled = 0;"
-		+ "var finish = function(ok) { var lvl = ok ? 2 : 1; if (settled >= lvl) { return; }"
-		+ " settled = lvl; try { onDone(ok); } catch (e) {} };"
+		+ "var settled = false;"
+		+ "var finish = function(ok) { if (settled) { return; }"
+		+ " settled = true; try { onDone(ok); } catch (e) {} };"
 		+ "var fail = function() { finish(false); };"
 		+ "var rq = null;"
 		+ "var deadline = function() {"
@@ -499,11 +562,13 @@ public final class WebSaves {
 		+ "  };"
 		+ "  rq.onsuccess = function() {"
 		+ "    var db = rq.result;"
+		+ "    if (settled) { try { db.close(); } catch (e) {} return; }"
 		+ "    globalThis.__minecraftDb = db;"
 		+ "    try {"
 		+ "      var cur = db.transaction('files', 'readonly').objectStore('files').openCursor();"
 		+ "      cur.onerror = function() { finish(true); };"
 		+ "      cur.onsuccess = function() {"
+		+ "        if (settled) { return; }"
 		+ "        var c = cur.result;"
 		+ "        if (!c) { finish(true); return; }"
 		+ "        try { onEntry(c.key, new Int8Array(c.value)); } catch (e) { console.error(e); }"
@@ -514,20 +579,28 @@ public final class WebSaves {
 		+ "} catch (e) { fail(); }")
 	private static native void openAndRestore(String name, int schema, boolean wipe, EntryHandler onEntry, DoneHandler onDone);
 
-	@JSBody(params = {}, script = ""
+	@JSBody(params = {"onFail"}, script = ""
 		+ "try {"
-		+ "  var db = globalThis.__minecraftDb; if (!db) { return; }"
+		+ "  var db = globalThis.__minecraftDb; if (!db) { globalThis.__minecraftTx = null; return false; }"
 		+ "  var tx = db.transaction('files', 'readwrite');"
-		+ "  tx.onerror = function(e) {"
+		+ "  var failed = false;"
+		+ "  var handleFail = function(e) {"
 		+ "    if (e && e.preventDefault) { e.preventDefault(); }"
+		+ "    if (failed) { return; }"
+		+ "    failed = true;"
+		+ "    if (globalThis.__minecraftTx === tx) { globalThis.__minecraftTx = null; }"
 		+ "    if (!globalThis.__minecraftStoreWarned) {"
 		+ "      globalThis.__minecraftStoreWarned = 1;"
-		+ "      console.info('[26.3-web] IndexedDB write failed (quota?); saves stay in RAM for this session');"
+		+ "      console.info('[26.3-web] IndexedDB write failed (quota/abort?); will retry on next flush');"
 		+ "    }"
+		+ "    try { if (onFail) { onFail(); } } catch (err) {}"
 		+ "  };"
+		+ "  tx.onerror = handleFail;"
+		+ "  tx.onabort = handleFail;"
 		+ "  globalThis.__minecraftTx = tx;"
-		+ "} catch (e) { globalThis.__minecraftTx = null; }")
-	private static native void beginTx();
+		+ "  return true;"
+		+ "} catch (e) { globalThis.__minecraftTx = null; return false; }")
+	private static native boolean beginTx(FailHandler onFail);
 
 	@JSBody(params = {}, script = "globalThis.__minecraftTx = null;")
 	private static native void endTx();

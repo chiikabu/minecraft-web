@@ -1,1 +1,266 @@
-[{"start":121,"delete":0,"insert":[{"copy":121,"length":35},"LongIterator;\n"]},{"start":217,"delete":0,"insert":"import java.util.ArrayList;\n"},{"start":649,"delete":0,"insert":"import net.minecraft.server.Web263Lan;\n"},{"start":1204,"delete":1,"insert":"16"},{"start":1418,"delete":1,"insert":"16"},{"start":1533,"delete":0,"insert":"4;\n   private int debugBatchesSent;\n   private int debugChunksSent;\n   private int debugBatchesAcknowledged;\n   private long debugLastStallMillis;\n\n   private static final int WEB263_UNKNOWN = 0;\n   private static final int WEB263_LOCAL = "},{"start":1535,"delete":0,"insert":"\n   private static final int WEB263_REMOTE = 2;\n   private static final int WEB263_TRACKED_BATCHES = 32;\n   private int web263Transport = WEB263_UNKNOWN;\n   private int web263Window;\n   private int web263InFlight;\n   private final long[] web263SentNanos = new long[WEB263_TRACKED_BATCHES];\n   private final int[] web263SentChunks = new int[WEB263_TRACKED_BATCHES];\n   private int web263Head;\n   private int web263Batches;"},{"start":1647,"delete":0,"insert":["   }\n\n   public boolean web263Remote(final ServerGamePacketListenerImpl listener) {\n      if (this.web263Transport == WEB263_UNKNOWN) {\n         this.web263Transport = listener.connection.isLocalTransport() ? WEB263_LOCAL : WEB263_REMOTE;\n         this.web263Window = Web263Lan.chunkWindowStart;\n      }\n      return this.web263Transport == WEB263_REMOTE;\n   }\n\n   public static boolean web263Held",{"copy":2042,"length":36},"int mode = Web263Lan.holdMode;\n      if (mode == 0) {\n         return false;\n      }\n      ServerGamePacketListenerImpl listener = player.connection;\n      if (listener == null) {\n         return false;\n      }\n      return listener.chunkSender.web263Remote(listener) || mode >= 2 && Web263Lan.remoteGuests > 0;\n"]},{"start":2016,"delete":0,"insert":["public static long web263SectionHash(final",{"copy":868,"length":33},"ChunkAccess chunk) {\n      net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());\n      for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {\n         section.write(buf);\n      }\n      java.util.zip.CRC32 crc = new java.util.zip.CRC32();\n      crc.update(buf.array(), buf.arrayOffset(), buf.writerIndex());\n      buf.release();\n      return crc.getValue();\n   }\n\n   "]},{"start":2071,"delete":0,"insert":"\n      if (this.web263Remote(player.connection)) {\n         this.web263SendNextChunksRemote(player);\n         return;\n      }"},{"start":2611,"delete":0,"insert":", Mth"},{"start":2612,"delete":13,"insert":"floor"},{"start":2626,"delete":0,"insert":"this.batchQuota"},{"start":2803,"delete":0,"insert":"                  if (chunkTransportDebug()) {\n                     this.debugBatchesSent++;\n                     this.debugChunksSent += chunksToSend.size();\n                     System.out.println(\"[DEBUG-chunk-batch][server] send batch=\" + this.debugBatchesSent\n                        + \" chunks=\" + chunksToSend.size() + \" sent=\" + this.debugChunksSent\n                        + \" pending=\" + this.pendingChunks.size() + \" outstanding=\" + this.unacknowledgedBatches\n                        + \"/\" + this.maxUnacknowledgedBatches + \" desired=\" + this.desiredChunksPerTick);\n                  }\n"},{"start":3233,"delete":0,"insert":"      } else if (chunkTransportDebug() && !this.pendingChunks.isEmpty()\n         && System.currentTimeMillis() - this.debugLastStallMillis >= 1000L) {\n         this.debugLastStallMillis = System.currentTimeMillis();\n         System.out.println(\"[DEBUG-chunk-batch][server] STALLED pending=\" + this.pendingChunks.size()\n            + \" outstanding=\" + this.unacknowledgedBatches + \"/\" + this.maxUnacknowledgedBatches\n            + \" acks=\" + this.debugBatchesAcknowledged);\n"},{"start":3250,"delete":0,"insert":["private void web263SendNextChunksRemote",{"copy":2042,"length":45},"pendingChunks.isEmpty() || this.web263Batches == WEB263_TRACKED_BATCHES) {\n         return;\n      }\n      ",{"copy":2153,"length":63},"\n      ",{"copy":2226,"length":86},"\n      int limit = Math.min(Mth.floor(this.batchQuota), Math.min(this.web263Window - this.web263InFlight, Web263Lan.chunksPerGuestPerTick()));\n      if (limit < 1) {\n         return;\n      }\n      ",{"copy":2419,"length":35},"\n      ",{"copy":2538,"length":37},"web263CollectRemote(level.getChunkSource().chunkMap, player, limit);\n      if (chunksToSend.isEmpty()) {\n         return;\n      }\n      ",{"copy":2694,"length":60},"\n      this.unacknowledgedBatches++;\n      ",{"copy":2821,"length":59},"\n\n      ",{"copy":2900,"length":39},"\n         ",{"copy":2961,"length":36},"\n      }\n\n      ",{"copy":3037,"length":78},"\n      ",{"copy":3134,"length":56},"\n      int slot = (this.web263Head + this.web263Batches) % WEB263_TRACKED_BATCHES;\n      this.web263SentNanos[slot] = System.nanoTime();\n      this.web263SentChunks[slot] = chunksToSend.size();\n      this.web263Batches++;\n      this.web263InFlight += chunksToSend.size();\n      Web263Lan.chunksSent += chunksToSend.size();\n   }\n\n   "]},{"start":3377,"delete":0,"insert":"\n      net.minecraft.server.Web263ServerTickProbe.chunkSent();"},{"start":3724,"delete":0,"insert":["private static int frustumWeightedDistance(final ChunkPos playerPos, final float lookX, final float lookZ, final long packedPos) {\n      int dx = ChunkPos.getX(packedPos) - playerPos.x();\n      int dz = ChunkPos.getZ(packedPos) - playerPos.z();\n      int distSqr = dx * dx + dz * dz;\n      if (distSqr <= 4) {\n         return distSqr;\n      }\n      float dot = dx * lookX + dz * lookZ;\n      if (dot > 0.0F) {\n         return distSqr;\n      }\n      return (dot * dot > 0.25F * distSqr) ? distSqr * 4 : distSqr * 2",{"copy":3713,"length":36},"web263CollectRemote",{"copy":3768,"length":32},"ServerPlayer player, final int limit) {\n      ChunkPos playerPos = player.chunkPosition();\n      float yawRad = player.getYRot() * ((float)Math.PI / 180.0F);\n      float lookX = -Mth.sin(yawRad);\n      float lookZ = Mth.cos(yawRad);\n      List<LevelChunk> ready = new ArrayList<>();\n      LongIterator pending = this.pendingChunks.iterator();\n\n      while (pending.hasNext()) {\n         LevelChunk chunk = chunkMap.getChunkToSend(pending.nextLong());\n         if (chunk != null) {\n            ready.add(chunk);\n         }\n      }\n\n      if (ready.size() > 1) {\n         ready.sort(Comparator.comparingInt(chunk -> frustumWeightedDistance(playerPos, lookX, lookZ, chunk.getPos().pack())));\n      }\n\n      if (ready.size() > limit) {\n         ready = new ArrayList<>(ready.subList(0, limit)",{"copy":4606,"length":42},"ready",{"copy":4654,"length":85},"ready;\n   }\n\n   "]},{"start":3800,"delete":8,"insert":"ServerPlayer"},{"start":3809,"delete":9,"insert":"player, final int maxBatchSize"},{"start":3828,"delete":3,"insert":"ChunkPos"},{"start":3832,"delete":12,"insert":"playerPos = player.chunkPosition();\n      float yawRad = player.getYRot() * ((float)Math.PI / 180.0F);\n      float lookX = -Mth.sin(yawRad);\n      float lookZ"},{"start":3851,"delete":5,"insert":"cos"},{"start":3857,"delete":15,"insert":"yawRad"},{"start":4122,"delete":0,"insert":"packed -> frustumWeightedDistance("},{"start":4131,"delete":17,"insert":", lookX, lookZ, packed)"},{"start":4541,"delete":0,"insert":"frustumWeightedDistance("},{"start":4550,"delete":17,"insert":", lookX, lookZ, "},{"start":4580,"delete":0,"insert":"().pack"},{"start":4833,"delete":0,"insert":"      if (chunkTransportDebug()) {\n         this.debugBatchesAcknowledged++;\n         System.out.println(\"[DEBUG-chunk-batch][server] ack=\" + this.debugBatchesAcknowledged\n            + \" outstanding-before=\" + this.unacknowledgedBatches + \" desired=\" + desiredChunksPerTick\n            + \" pending=\" + this.pendingChunks.size());\n      }\n"},{"start":5218,"delete":0,"insert":"      if (this.web263Batches > 0) {\n         int millis = (int)Math.min(60_000L, (System.nanoTime() - this.web263SentNanos[this.web263Head]) / 1_000_000L);\n         this.web263InFlight -= this.web263SentChunks[this.web263Head];\n         this.web263Head = (this.web263Head + 1) % WEB263_TRACKED_BATCHES;\n         this.web263Batches--;\n         if (millis < Web263Lan.chunkFastAckMs) {\n            this.web263Window = Math.min(Web263Lan.chunkWindowMax, this.web263Window + 1);\n         } else if (millis > Web263Lan.chunkSlowAckMs) {\n            this.web263Window = Math.max(Web263Lan.chunkWindowMin, this.web263Window / 2);\n         }\n         Web263Lan.acks++;\n         Web263Lan.ackMillis += millis;\n      }\n   }\n\n   public int web263Window() {\n      return this.web263Transport == WEB263_REMOTE ? this.web263Window : 0;\n   }\n\n   public int web263InFlight() {\n      return this.web263InFlight;\n"},{"start":5322,"delete":0,"insert":"\n   public static boolean chunkTransportDebug() {\n      return Boolean.getBoolean(\"web263.chunkTransportDebug\");\n   "},{"start":5324,"delete":0,"insert":"}\n"}]
+[
+  {
+    "start": 121,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 121,
+        "length": 35
+      },
+      "LongIterator;\n"
+    ]
+  },
+  {
+    "start": 217,
+    "delete": 0,
+    "insert": "import java.util.ArrayList;\n"
+  },
+  {
+    "start": 649,
+    "delete": 0,
+    "insert": "import net.minecraft.server.Web263Lan;\n"
+  },
+  {
+    "start": 1204,
+    "delete": 1,
+    "insert": "32"
+  },
+  {
+    "start": 1418,
+    "delete": 1,
+    "insert": "32"
+  },
+  {
+    "start": 1533,
+    "delete": 0,
+    "insert": "8;\n   private int debugBatchesSent;\n   private int debugChunksSent;\n   private int debugBatchesAcknowledged;\n   private long debugLastStallMillis;\n\n   private static final int WEB263_UNKNOWN = 0;\n   private static final int WEB263_LOCAL = "
+  },
+  {
+    "start": 1535,
+    "delete": 0,
+    "insert": "\n   private static final int WEB263_REMOTE = 2;\n   private static final int WEB263_TRACKED_BATCHES = 32;\n   private int web263Transport = WEB263_UNKNOWN;\n   private int web263Window;\n   private int web263InFlight;\n   private final long[] web263SentNanos = new long[WEB263_TRACKED_BATCHES];\n   private final int[] web263SentChunks = new int[WEB263_TRACKED_BATCHES];\n   private int web263Head;\n   private int web263Batches;"
+  },
+  {
+    "start": 1647,
+    "delete": 0,
+    "insert": [
+      "   }\n\n   public boolean web263Remote(final ServerGamePacketListenerImpl listener) {\n      if (this.web263Transport == WEB263_UNKNOWN) {\n         this.web263Transport = listener.connection.isLocalTransport() ? WEB263_LOCAL : WEB263_REMOTE;\n         this.web263Window = Web263Lan.chunkWindowStart;\n      }\n      return this.web263Transport == WEB263_REMOTE;\n   }\n\n   public static boolean web263Held",
+      {
+        "copy": 2042,
+        "length": 36
+      },
+      "int mode = Web263Lan.holdMode;\n      if (mode == 0) {\n         return false;\n      }\n      ServerGamePacketListenerImpl listener = player.connection;\n      if (listener == null) {\n         return false;\n      }\n      return listener.chunkSender.web263Remote(listener) || mode >= 2 && Web263Lan.remoteGuests > 0;\n"
+    ]
+  },
+  {
+    "start": 2016,
+    "delete": 0,
+    "insert": [
+      "public static long web263SectionHash(final",
+      {
+        "copy": 868,
+        "length": 33
+      },
+      "ChunkAccess chunk) {\n      net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());\n      for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {\n         section.write(buf);\n      }\n      java.util.zip.CRC32 crc = new java.util.zip.CRC32();\n      crc.update(buf.array(), buf.arrayOffset(), buf.writerIndex());\n      buf.release();\n      return crc.getValue();\n   }\n\n   "
+    ]
+  },
+  {
+    "start": 2071,
+    "delete": 0,
+    "insert": "\n      if (this.web263Remote(player.connection)) {\n         this.web263SendNextChunksRemote(player);\n         return;\n      }"
+  },
+  {
+    "start": 2611,
+    "delete": 0,
+    "insert": ", Mth"
+  },
+  {
+    "start": 2612,
+    "delete": 13,
+    "insert": "floor"
+  },
+  {
+    "start": 2626,
+    "delete": 0,
+    "insert": "this.batchQuota"
+  },
+  {
+    "start": 2803,
+    "delete": 0,
+    "insert": "                  if (chunkTransportDebug()) {\n                     this.debugBatchesSent++;\n                     this.debugChunksSent += chunksToSend.size();\n                     System.out.println(\"[DEBUG-chunk-batch][server] send batch=\" + this.debugBatchesSent\n                        + \" chunks=\" + chunksToSend.size() + \" sent=\" + this.debugChunksSent\n                        + \" pending=\" + this.pendingChunks.size() + \" outstanding=\" + this.unacknowledgedBatches\n                        + \"/\" + this.maxUnacknowledgedBatches + \" desired=\" + this.desiredChunksPerTick);\n                  }\n"
+  },
+  {
+    "start": 3233,
+    "delete": 0,
+    "insert": "      } else if (chunkTransportDebug() && !this.pendingChunks.isEmpty()\n         && System.currentTimeMillis() - this.debugLastStallMillis >= 1000L) {\n         this.debugLastStallMillis = System.currentTimeMillis();\n         System.out.println(\"[DEBUG-chunk-batch][server] STALLED pending=\" + this.pendingChunks.size()\n            + \" outstanding=\" + this.unacknowledgedBatches + \"/\" + this.maxUnacknowledgedBatches\n            + \" acks=\" + this.debugBatchesAcknowledged);\n"
+  },
+  {
+    "start": 3250,
+    "delete": 0,
+    "insert": [
+      "private void web263SendNextChunksRemote",
+      {
+        "copy": 2042,
+        "length": 45
+      },
+      "pendingChunks.isEmpty() || this.web263Batches == WEB263_TRACKED_BATCHES) {\n         return;\n      }\n      ",
+      {
+        "copy": 2153,
+        "length": 63
+      },
+      "\n      ",
+      {
+        "copy": 2226,
+        "length": 86
+      },
+      "\n      int limit = Math.min(Mth.floor(this.batchQuota), Math.min(this.web263Window - this.web263InFlight, Web263Lan.chunksPerGuestPerTick()));\n      if (limit < 1) {\n         return;\n      }\n      ",
+      {
+        "copy": 2419,
+        "length": 35
+      },
+      "\n      ",
+      {
+        "copy": 2538,
+        "length": 37
+      },
+      "web263CollectRemote(level.getChunkSource().chunkMap, player, limit);\n      if (chunksToSend.isEmpty()) {\n         return;\n      }\n      ",
+      {
+        "copy": 2694,
+        "length": 60
+      },
+      "\n      this.unacknowledgedBatches++;\n      ",
+      {
+        "copy": 2821,
+        "length": 59
+      },
+      "\n\n      ",
+      {
+        "copy": 2900,
+        "length": 39
+      },
+      "\n         ",
+      {
+        "copy": 2961,
+        "length": 36
+      },
+      "\n      }\n\n      ",
+      {
+        "copy": 3037,
+        "length": 78
+      },
+      "\n      ",
+      {
+        "copy": 3134,
+        "length": 56
+      },
+      "\n      int slot = (this.web263Head + this.web263Batches) % WEB263_TRACKED_BATCHES;\n      this.web263SentNanos[slot] = System.nanoTime();\n      this.web263SentChunks[slot] = chunksToSend.size();\n      this.web263Batches++;\n      this.web263InFlight += chunksToSend.size();\n      Web263Lan.chunksSent += chunksToSend.size();\n   }\n\n   "
+    ]
+  },
+  {
+    "start": 3377,
+    "delete": 0,
+    "insert": "\n      net.minecraft.server.Web263ServerTickProbe.chunkSent();"
+  },
+  {
+    "start": 3724,
+    "delete": 0,
+    "insert": [
+      "private static int frustumWeightedDistance(final ChunkPos playerPos, final float lookX, final float lookZ, final long packedPos) {\n      int dx = ChunkPos.getX(packedPos) - playerPos.x();\n      int dz = ChunkPos.getZ(packedPos) - playerPos.z();\n      int distSqr = dx * dx + dz * dz;\n      if (distSqr <= 4) {\n         return distSqr;\n      }\n      float dot = dx * lookX + dz * lookZ;\n      if (dot > 0.0F) {\n         return distSqr;\n      }\n      return (dot * dot > 0.25F * distSqr) ? distSqr * 4 : distSqr * 2",
+      {
+        "copy": 3713,
+        "length": 36
+      },
+      "web263CollectRemote",
+      {
+        "copy": 3768,
+        "length": 32
+      },
+      "ServerPlayer player, final int limit) {\n      ChunkPos playerPos = player.chunkPosition();\n      float yawRad = player.getYRot() * ((float)Math.PI / 180.0F);\n      float lookX = -Mth.sin(yawRad);\n      float lookZ = Mth.cos(yawRad);\n      List<LevelChunk> ready = new ArrayList<>();\n      LongIterator pending = this.pendingChunks.iterator();\n\n      while (pending.hasNext()) {\n         LevelChunk chunk = chunkMap.getChunkToSend(pending.nextLong());\n         if (chunk != null) {\n            ready.add(chunk);\n         }\n      }\n\n      if (ready.size() > 1) {\n         ready.sort(Comparator.comparingInt(chunk -> frustumWeightedDistance(playerPos, lookX, lookZ, chunk.getPos().pack())));\n      }\n\n      if (ready.size() > limit) {\n         ready = new ArrayList<>(ready.subList(0, limit)",
+      {
+        "copy": 4606,
+        "length": 42
+      },
+      "ready",
+      {
+        "copy": 4654,
+        "length": 85
+      },
+      "ready;\n   }\n\n   "
+    ]
+  },
+  {
+    "start": 3800,
+    "delete": 8,
+    "insert": "ServerPlayer"
+  },
+  {
+    "start": 3809,
+    "delete": 9,
+    "insert": "player, final int maxBatchSize"
+  },
+  {
+    "start": 3828,
+    "delete": 3,
+    "insert": "ChunkPos"
+  },
+  {
+    "start": 3832,
+    "delete": 12,
+    "insert": "playerPos = player.chunkPosition();\n      float yawRad = player.getYRot() * ((float)Math.PI / 180.0F);\n      float lookX = -Mth.sin(yawRad);\n      float lookZ"
+  },
+  {
+    "start": 3851,
+    "delete": 5,
+    "insert": "cos"
+  },
+  {
+    "start": 3857,
+    "delete": 15,
+    "insert": "yawRad"
+  },
+  {
+    "start": 4122,
+    "delete": 0,
+    "insert": "packed -> frustumWeightedDistance("
+  },
+  {
+    "start": 4131,
+    "delete": 17,
+    "insert": ", lookX, lookZ, packed)"
+  },
+  {
+    "start": 4541,
+    "delete": 0,
+    "insert": "frustumWeightedDistance("
+  },
+  {
+    "start": 4550,
+    "delete": 17,
+    "insert": ", lookX, lookZ, "
+  },
+  {
+    "start": 4580,
+    "delete": 0,
+    "insert": "().pack"
+  },
+  {
+    "start": 4833,
+    "delete": 0,
+    "insert": "      if (chunkTransportDebug()) {\n         this.debugBatchesAcknowledged++;\n         System.out.println(\"[DEBUG-chunk-batch][server] ack=\" + this.debugBatchesAcknowledged\n            + \" outstanding-before=\" + this.unacknowledgedBatches + \" desired=\" + desiredChunksPerTick\n            + \" pending=\" + this.pendingChunks.size());\n      }\n"
+  },
+  {
+    "start": 5218,
+    "delete": 0,
+    "insert": "      if (this.web263Batches > 0) {\n         int millis = (int)Math.min(60_000L, (System.nanoTime() - this.web263SentNanos[this.web263Head]) / 1_000_000L);\n         this.web263InFlight -= this.web263SentChunks[this.web263Head];\n         this.web263Head = (this.web263Head + 1) % WEB263_TRACKED_BATCHES;\n         this.web263Batches--;\n         if (millis < Web263Lan.chunkFastAckMs) {\n            this.web263Window = Math.min(Web263Lan.chunkWindowMax, this.web263Window + 1);\n         } else if (millis > Web263Lan.chunkSlowAckMs) {\n            this.web263Window = Math.max(Web263Lan.chunkWindowMin, this.web263Window / 2);\n         }\n         Web263Lan.acks++;\n         Web263Lan.ackMillis += millis;\n      }\n   }\n\n   public int web263Window() {\n      return this.web263Transport == WEB263_REMOTE ? this.web263Window : 0;\n   }\n\n   public int web263InFlight() {\n      return this.web263InFlight;\n"
+  },
+  {
+    "start": 5322,
+    "delete": 0,
+    "insert": "\n   public static boolean chunkTransportDebug() {\n      return Boolean.getBoolean(\"web263.chunkTransportDebug\");\n   "
+  },
+  {
+    "start": 5324,
+    "delete": 0,
+    "insert": "}\n"
+  }
+]

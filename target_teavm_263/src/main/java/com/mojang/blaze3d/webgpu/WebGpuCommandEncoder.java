@@ -66,14 +66,16 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 		drawsThisFrame++;
 	}
 
+	void countDraws(int count) {
+		drawsThisFrame += count;
+	}
+
 	void stagedWrite(WebGpuBuffer buf, int offset, byte[] bytes, int off, int len) {
 		WebGpuTransientMemory.Region r = transientMemory.region(len, 4);
 		if (r.block().cpu != 0) {
 			MemoryUtil.copyIn(bytes, off, r.block().cpu + r.offset(), len);
-			WebGpuNatives.writeBufferMem(r.block().handle, r.offset(), (int) (r.block().cpu + r.offset()), len);
 		} else {
 			System.arraycopy(bytes, off, r.block().shadow, r.offset(), len);
-			WebGpuNatives.writeBuffer(r.block().handle, r.offset(), WebGpuDevice.toJs(r.block().shadow, r.offset(), len));
 		}
 		WebGpuNatives.copyBuffer(r.block().handle, r.offset(), buf.handle, offset, len);
 	}
@@ -82,12 +84,39 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 		WebGpuTransientMemory.Region r = transientMemory.region(len, 4);
 		long dst = r.block().cpu + r.offset();
 		MemoryUtil.memCopy(addr, dst, len);
-		WebGpuNatives.writeBufferMem(r.block().handle, r.offset(), (int) dst, len);
 		WebGpuNatives.copyBuffer(r.block().handle, r.offset(), buf.handle, offset, len);
+	}
+
+	WebGpuTransientMemory.Region stageUniformSlice(WebGpuBuffer src, int off, int len, int alignment) {
+		int padded = Math.max(16, (len + 15) & ~15);
+		WebGpuTransientMemory.Region r = transientMemory.region(padded, alignment);
+		WebGpuBuffer dst = r.block();
+		int dstOff = r.offset();
+		if (dst.cpu != 0) {
+			if (src.cpu != 0) {
+				MemoryUtil.memCopy(src.cpu + off, dst.cpu + dstOff, len);
+			} else {
+				MemoryUtil.copyIn(src.shadow, off, dst.cpu + dstOff, len);
+			}
+			if (padded > len) {
+				MemoryUtil.memSet(dst.cpu + dstOff + len, 0, padded - len);
+			}
+		} else {
+			if (src.cpu != 0) {
+				MemoryUtil.copyOut(src.cpu + off, dst.shadow, dstOff, len);
+			} else {
+				System.arraycopy(src.shadow, off, dst.shadow, dstOff, len);
+			}
+			if (padded > len) {
+				java.util.Arrays.fill(dst.shadow, dstOff + len, dstOff + padded, (byte) 0);
+			}
+		}
+		return r;
 	}
 
 	@Override
 	public void submit() {
+		transientMemory.flushPending();
 		WebGpuNatives.submit();
 		transientMemory.rotate();
 		drawsThisFrame = 0;
@@ -148,6 +177,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 			WebGpuNatives.passDepth(view.attachmentHandle(), clear.isPresent(), clear.isPresent() ? (float) clear.getAsDouble() : 0f);
 		}
 		String label = descriptor.label() == null ? "pass" : descriptor.label().get();
+		transientMemory.flushPending();
 		JSObject passHandle = WebGpuNatives.passStart(label);
 		reusablePass.reset(passHandle, depthFormat, formats, colorCount, width, height);
 		current = reusablePass;
@@ -233,6 +263,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 			if (passOpen || (so & 3) != 0 || (to & 3) != 0 || (len & 3) != 0) {
 				WebGpuDevice.uploadLinear(dst, to, src.cpu + so, len);
 			} else {
+				transientMemory.flushPending();
 				WebGpuNatives.copyBuffer(src.handle, so, dst.handle, to, len);
 			}
 			return;
@@ -245,6 +276,7 @@ final class WebGpuCommandEncoder implements CommandEncoderBackend {
 			WebGpuDevice.warnOnce("copyToBuffer from a buffer without a mirror leaves the destination mirror stale");
 		}
 		if ((so & 3) == 0 && (to & 3) == 0 && (len & 3) == 0) {
+			transientMemory.flushPending();
 			WebGpuNatives.copyBuffer(src.handle, so, dst.handle, to, len);
 		} else {
 			WebGpuDevice.warnOnce("unaligned copyToBuffer skipped (offset " + so + "/" + to + ", len " + len + ")");
@@ -393,33 +425,63 @@ final class CommandStream {
 
 final class WebGpuTransientMemory implements TransientMemory {
 	private static final int BLOCK = 4 << 20;
-	private final WebGpuDevice device;
-	private final List<WebGpuBuffer> blocks = new ArrayList<>();
-	private int[] offsets = new int[8];
-	private int[] lastUsed = new int[8];
-	private int frame;
+	private static final int RING_SLOTS = 3;
 	private static final int IDLE_FRAMES = 600;
 
-	record Region(WebGpuBuffer block, int offset, int size) {
+	private static final class Slot {
+		final List<WebGpuBuffer> blocks = new ArrayList<>();
+		private int[] offsets = new int[8];
+		private int[] flushedOffsets = new int[8];
+		private int[] lastUsed = new int[8];
+	}
+
+	private final WebGpuDevice device;
+	private final Slot[] slots = new Slot[] { new Slot(), new Slot(), new Slot() };
+	private int frameSlot;
+	private int frame;
+
+	record Region(WebGpuBuffer block, int offset, int size, int slotIndex, int blockIndex) {
 	}
 
 	WebGpuTransientMemory(WebGpuDevice device) {
 		this.device = device;
 	}
 
+	void flushPending() {
+		Slot s = slots[frameSlot];
+		int count = s.blocks.size();
+		for (int i = 0; i < count; i++) {
+			int off = s.offsets[i];
+			int flushed = s.flushedOffsets[i];
+			if (off > flushed) {
+				int start = flushed & ~3;
+				int end = (off + 3) & ~3;
+				int len = end - start;
+				if (len > 0) {
+					flushRange(s.blocks.get(i), start, len);
+				}
+				s.flushedOffsets[i] = end;
+			}
+		}
+	}
+
 	void rotate() {
 		frame++;
-		int count = blocks.size();
+		frameSlot = (frameSlot + 1) % RING_SLOTS;
+		Slot s = slots[frameSlot];
+		int count = s.blocks.size();
 		for (int i = 0; i < count; i++) {
-			offsets[i] = 0;
+			s.offsets[i] = 0;
+			s.flushedOffsets[i] = 0;
 		}
 		for (int i = count - 1; i > 0; i--) {
-			if (frame - lastUsed[i] > IDLE_FRAMES) {
-				WebGpuBuffer b = blocks.remove(i);
-				int tail = blocks.size() - i;
+			if (frame - s.lastUsed[i] > IDLE_FRAMES) {
+				WebGpuBuffer b = s.blocks.remove(i);
+				int tail = s.blocks.size() - i;
 				if (tail > 0) {
-					System.arraycopy(offsets, i + 1, offsets, i, tail);
-					System.arraycopy(lastUsed, i + 1, lastUsed, i, tail);
+					System.arraycopy(s.offsets, i + 1, s.offsets, i, tail);
+					System.arraycopy(s.flushedOffsets, i + 1, s.flushedOffsets, i, tail);
+					System.arraycopy(s.lastUsed, i + 1, s.lastUsed, i, tail);
 				}
 				b.close();
 				b.shadow = null;
@@ -428,7 +490,7 @@ final class WebGpuTransientMemory implements TransientMemory {
 					b.cpu = 0;
 				}
 				WebGpuNatives.destroy(b.handle);
-				System.out.println("[26.3-web] transient block released: " + (b.size() >> 20) + " MB, " + blocks.size() + " left");
+				System.out.println("[26.3-web] transient block released: " + (b.size() >> 20) + " MB, " + s.blocks.size() + " left in slot " + frameSlot);
 			}
 		}
 	}
@@ -440,49 +502,60 @@ final class WebGpuTransientMemory implements TransientMemory {
 
 	Region region(long size, long alignment) {
 		int need = align((int) Math.max(1, size), 4);
-		int count = blocks.size();
+		Slot s = slots[frameSlot];
+		int count = s.blocks.size();
 		for (int i = 0; i < count; i++) {
-			WebGpuBuffer b = blocks.get(i);
-			int start = align(offsets[i], alignment);
+			WebGpuBuffer b = s.blocks.get(i);
+			int start = align(s.offsets[i], alignment);
 			if (start + need <= b.size()) {
-				offsets[i] = start + need;
-				lastUsed[i] = frame;
-				return new Region(b, start, need);
+				s.offsets[i] = start + need;
+				s.lastUsed[i] = frame;
+				return new Region(b, start, need, frameSlot, i);
 			}
 		}
 		int cap = Math.max(BLOCK, align(need, 256));
 		JSObject handle = WebGpuNatives.createBuffer(
 			cap,
-			WebGpuNatives.BUF_COPY_DST | WebGpuNatives.BUF_COPY_SRC | WebGpuNatives.BUF_VERTEX | WebGpuNatives.BUF_INDEX | WebGpuNatives.BUF_UNIFORM | WebGpuNatives.BUF_STORAGE,
-			"transient block " + count
+			WebGpuNatives.BUF_COPY_DST | WebGpuNatives.BUF_COPY_SRC | WebGpuNatives.BUF_VERTEX | WebGpuNatives.BUF_INDEX | WebGpuNatives.BUF_UNIFORM | WebGpuNatives.BUF_STORAGE | WebGpuNatives.BUF_INDIRECT,
+			"transient s" + frameSlot + "b" + count
 		);
 		int usage = GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_VERTEX | GpuBuffer.USAGE_INDEX | GpuBuffer.USAGE_UNIFORM
-			| GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER | GpuBuffer.USAGE_MAP_WRITE;
+			| GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER | GpuBuffer.USAGE_INDIRECT_PARAMETERS | GpuBuffer.USAGE_MAP_WRITE;
 		WebGpuBuffer block = new WebGpuBuffer(usage, cap, handle, false, MemoryUtil.LINEAR ? null : new byte[cap]);
 		if (MemoryUtil.LINEAR) {
 			block.cpu = MemoryUtil.nmemAlloc(cap);
 		}
-		if (count == offsets.length) {
-			int nextLen = offsets.length * 2;
-			offsets = java.util.Arrays.copyOf(offsets, nextLen);
-			lastUsed = java.util.Arrays.copyOf(lastUsed, nextLen);
+		if (count == s.offsets.length) {
+			int nextLen = s.offsets.length * 2;
+			s.offsets = java.util.Arrays.copyOf(s.offsets, nextLen);
+			s.flushedOffsets = java.util.Arrays.copyOf(s.flushedOffsets, nextLen);
+			s.lastUsed = java.util.Arrays.copyOf(s.lastUsed, nextLen);
 		}
-		blocks.add(block);
-		offsets[count] = need;
-		lastUsed[count] = frame;
-		return new Region(block, 0, need);
+		s.blocks.add(block);
+		s.offsets[count] = need;
+		s.flushedOffsets[count] = 0;
+		s.lastUsed[count] = frame;
+		return new Region(block, 0, need, frameSlot, count);
 	}
 
 	private static GpuBufferSlice slice(Region r, long size) {
 		return new GpuBufferSlice(r.block(), r.offset(), size);
 	}
 
-	private static void flush(Region r, int len) {
-		if (r.block().cpu != 0) {
-			WebGpuNatives.writeBufferMem(r.block().handle, r.offset(), (int) (r.block().cpu + r.offset()), align(len, 4));
+	private static void flushRange(WebGpuBuffer block, int offset, int len) {
+		if (block.cpu != 0) {
+			WebGpuNatives.writeBufferMem(block.handle, offset, (int) (block.cpu + offset), len);
 			return;
 		}
-		WebGpuNatives.writeBuffer(r.block().handle, r.offset(), WebGpuDevice.toJs(r.block().shadow, r.offset(), align(len, 4)));
+		WebGpuNatives.writeBuffer(block.handle, offset, WebGpuDevice.toJs(block.shadow, offset, len));
+	}
+
+	private void onMappedClose(Region r, int len) {
+		Slot s = slots[r.slotIndex()];
+		int bi = r.blockIndex();
+		if (bi < s.blocks.size() && s.blocks.get(bi) == r.block() && r.offset() < s.flushedOffsets[bi]) {
+			flushRange(r.block(), r.offset(), align(len, 4));
+		}
 	}
 
 	private static ByteBuffer cpuView(Region r, int off, int size) {
@@ -501,7 +574,7 @@ final class WebGpuTransientMemory implements TransientMemory {
 	public GpuBufferSlice.MappedView allocateStaging(long size, long alignment, int usage, long minimumAllocation, long elementSize) {
 		Region r = region(size, alignment);
 		ByteBuffer view = cpuView(r, 0, (int) size);
-		return new GpuBufferSlice.MappedView(slice(r, size), view, () -> flush(r, (int) size));
+		return new GpuBufferSlice.MappedView(slice(r, size), view, () -> onMappedClose(r, (int) size));
 	}
 
 	@Override
@@ -532,7 +605,6 @@ final class WebGpuTransientMemory implements TransientMemory {
 			MemoryUtil.memCopy(b.duplicate(), cpuView(r, off, n));
 			off = align(off + n, alignment);
 		}
-		flush(r, total);
 		return slice(r, total);
 	}
 
@@ -628,6 +700,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 	private int lastBoundDyn = -1;
 	private final int[] lastBoundOffsets = new int[64];
 	private final int[] keyParts = new int[256];
+	private WebGpuBuffer[] stagedUniformBufs = new WebGpuBuffer[32];
 	private int texturesVersion;
 	private int maskVersion = -1;
 	private WebGpuPipeline maskPipeline;
@@ -671,6 +744,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 			this.uniformLen = 0;
 		}
 		java.util.Arrays.fill(this.vertexBuffers, null);
+		java.util.Arrays.fill(this.stagedUniformBufs, null);
 		this.vertexBuffersDirty = true;
 		this.indexBuffer = null;
 		this.indexType = IndexType.SHORT;
@@ -695,6 +769,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 			this.uniformLen = 0;
 		}
 		java.util.Arrays.fill(this.vertexBuffers, null);
+		java.util.Arrays.fill(this.stagedUniformBufs, null);
 	}
 
 	void setDefaultScissor(int x, int y, int w, int h) {
@@ -817,9 +892,46 @@ final class WebGpuRenderPass implements RenderPassBackend {
 		throw new UnsupportedOperationException("WebGPU backend does not support the multiDrawDirectSeparate device feature");
 	}
 
+	private static int readIntLE(byte[] s, int p) {
+		return (s[p] & 0xFF) | ((s[p + 1] & 0xFF) << 8) | ((s[p + 2] & 0xFF) << 16) | ((s[p + 3] & 0xFF) << 24);
+	}
+
 	@Override
 	public void drawIndexedIndirect(GpuBufferSlice commands, int drawCount) {
-		throw new UnsupportedOperationException("WebGPU backend does not support the drawIndirect device feature");
+		if (drawCount <= 0 || !(commands.buffer() instanceof WebGpuBuffer buf) || buf.isClosed()) {
+			return;
+		}
+		if (!prepare(indexType)) {
+			return;
+		}
+		int off = (int) commands.offset();
+		if (device.useNativeIndirect) {
+			CommandStream c = encoder.cmds;
+			c.reserve(pass, 4);
+			c.put(WebGpuNatives.CMD_MULTI_DRAW_INDEXED_INDIRECT);
+			c.put(buf.jsId);
+			c.put(off);
+			c.put(drawCount);
+			encoder.countDraws(drawCount);
+			return;
+		}
+		if (buf.cpu != 0) {
+			CommandStream c = encoder.cmds;
+			c.reserve(pass, 3);
+			c.put(WebGpuNatives.CMD_MULTI_DRAW_INDEXED_MEM);
+			c.put((int) (buf.cpu + off));
+			c.put(drawCount);
+			encoder.countDraws(drawCount);
+			return;
+		}
+		if (buf.shadow != null) {
+			byte[] s = buf.shadow;
+			for (int i = 0; i < drawCount; i++) {
+				int p = off + i * 20;
+				cmdDrawIndexed(readIntLE(s, p), readIntLE(s, p + 4), readIntLE(s, p + 8), readIntLE(s, p + 12), readIntLE(s, p + 16));
+			}
+			encoder.countDraws(drawCount);
+		}
 	}
 
 	@Override
@@ -858,7 +970,40 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	@Override
 	public void drawIndirect(GpuBufferSlice commands, int drawCount) {
-		throw new UnsupportedOperationException("WebGPU backend does not support the drawIndirect device feature");
+		if (drawCount <= 0 || !(commands.buffer() instanceof WebGpuBuffer buf) || buf.isClosed()) {
+			return;
+		}
+		if (!prepare(null)) {
+			return;
+		}
+		int off = (int) commands.offset();
+		if (device.useNativeIndirect) {
+			CommandStream c = encoder.cmds;
+			c.reserve(pass, 4);
+			c.put(WebGpuNatives.CMD_MULTI_DRAW_INDIRECT);
+			c.put(buf.jsId);
+			c.put(off);
+			c.put(drawCount);
+			encoder.countDraws(drawCount);
+			return;
+		}
+		if (buf.cpu != 0) {
+			CommandStream c = encoder.cmds;
+			c.reserve(pass, 3);
+			c.put(WebGpuNatives.CMD_MULTI_DRAW_MEM);
+			c.put((int) (buf.cpu + off));
+			c.put(drawCount);
+			encoder.countDraws(drawCount);
+			return;
+		}
+		if (buf.shadow != null) {
+			byte[] s = buf.shadow;
+			for (int i = 0; i < drawCount; i++) {
+				int p = off + i * 16;
+				cmd4(WebGpuNatives.CMD_DRAW, readIntLE(s, p), readIntLE(s, p + 4), readIntLE(s, p + 8), readIntLE(s, p + 12));
+			}
+			encoder.countDraws(drawCount);
+		}
 	}
 
 	@Override
@@ -959,7 +1104,7 @@ final class WebGpuRenderPass implements RenderPassBackend {
 			h = height;
 		} else {
 			x = Math.max(0, Math.min(sx, width));
-			w = Math.max(0, Math.min(sw, width - x));
+			w = Math.max(0, Math.min(sw + Math.min(0, sx), width - x));
 			y = Math.max(0, Math.min(sy, height));
 			h = Math.max(0, Math.min(sh + Math.min(0, sy), height - y));
 		}
@@ -976,21 +1121,33 @@ final class WebGpuRenderPass implements RenderPassBackend {
 
 	private void bindGroup(WebGpuPipeline.Variant v) {
 		int[] parts = keyParts;
+		if (stagedUniformBufs.length < v.bindings.length) {
+			stagedUniformBufs = new WebGpuBuffer[v.bindings.length];
+		}
 		int n = 0;
 		int dyn = 0;
 		for (int i = 0; i < v.bindings.length; i++) {
 			int ui = v.uniformIndex[i];
+			stagedUniformBufs[i] = null;
 			switch (v.kindOf[i]) {
 				case WebGpuPipeline.KIND_UNIFORM -> {
 					GpuBufferSlice s = bufferSlice(ui);
 					if (s != null) {
 						WebGpuBuffer b = (WebGpuBuffer) s.buffer();
 						int off = (int) s.offset();
+						int len = (int) s.length();
 						boolean aligned = isUniformAligned(off);
+						if (!aligned && (b.cpu != 0 || b.shadow != null)) {
+							WebGpuTransientMemory.Region r = encoder.stageUniformSlice(b, off, len, uniformAlignment);
+							b = r.block();
+							off = r.offset();
+							aligned = true;
+							stagedUniformBufs[i] = b;
+						}
 						offsets[dyn++] = aligned ? off : 0;
 						parts[n++] = b.id;
 						parts[n++] = aligned ? -1 : off;
-						parts[n++] = (int) s.length();
+						parts[n++] = len;
 					} else {
 						offsets[dyn++] = 0;
 						parts[n++] = 0;
@@ -1031,14 +1188,14 @@ final class WebGpuRenderPass implements RenderPassBackend {
 		}
 		group = v.groups.get(h);
 		if (group == null || !group.alive() || group.partsLen != n || !sameParts(parts, group.parts, n)) {
-			if (group != null) {
-				WebGpuNatives.dropLater(group.id);
-			}
+			BindGroup replaced = group;
 			group = buildGroup(v);
 			group.parts = java.util.Arrays.copyOf(parts, n);
 			group.partsLen = n;
 			if (v.groups.size() > 2048) {
 				v.clearGroups();
+			} else if (replaced != null) {
+				WebGpuNatives.dropLater(replaced.id);
 			}
 			v.groups.put(h, group);
 		}
@@ -1128,13 +1285,16 @@ final class WebGpuRenderPass implements RenderPassBackend {
 				case WebGpuPipeline.KIND_UNIFORM -> {
 					GpuBufferSlice s = bufferSlice(ui);
 					if (s != null) {
-						WebGpuBuffer b = (WebGpuBuffer) s.buffer();
-						int off = (int) s.offset();
-						boolean dynamic = isUniformAligned(off);
+						WebGpuBuffer staged = i < stagedUniformBufs.length ? stagedUniformBufs[i] : null;
+						WebGpuBuffer b = staged != null ? staged : (WebGpuBuffer) s.buffer();
+						int off = staged != null ? 0 : (int) s.offset();
+						boolean dynamic = staged != null || isUniformAligned(off);
 						WebGpuNatives.bindGroupBuffer(binding, b.handle, dynamic ? 0 : off, (int) s.length());
+						b.boundInGroup = true;
 						buffers.add(b);
 					} else {
 						WebGpuDevice.warnOnce("uniform '" + nameOf(ui, binding) + "' never set for " + pipeline.info.name() + "; bound zeros");
+						device.dummyUniform.boundInGroup = true;
 						WebGpuNatives.bindGroupBuffer(binding, device.dummyUniform.handle, 0, 65536);
 					}
 				}
@@ -1143,15 +1303,19 @@ final class WebGpuRenderPass implements RenderPassBackend {
 					if (s != null) {
 						WebGpuBuffer b = (WebGpuBuffer) s.buffer();
 						WebGpuNatives.bindGroupBuffer(binding, b.handle, (int) s.offset(), ((int) s.length() + 3) & ~3);
+						b.boundInGroup = true;
 						buffers.add(b);
 					} else {
+						device.dummyUniform.boundInGroup = true;
 						WebGpuNatives.bindGroupBuffer(binding, device.dummyUniform.handle, 0, 65536);
 					}
 				}
 				case WebGpuPipeline.KIND_SAMPLER -> {
 					TextureViewAndSampler t = texture(ui);
 					boolean useDummy = t == null || (v.depthTexture[i] && ((WebGpuSampler) t.sampler()).filtering);
-					WebGpuNatives.bindGroupSampler(binding, useDummy ? device.dummySampler.handle : ((WebGpuSampler) t.sampler()).handle);
+					WebGpuSampler sampler = useDummy ? device.dummySampler : (WebGpuSampler) t.sampler();
+					sampler.boundInGroup = true;
+					WebGpuNatives.bindGroupSampler(binding, sampler.handle);
 				}
 				case WebGpuPipeline.KIND_TEXTURE_CUBE -> {
 					TextureViewAndSampler t = texture(ui);
@@ -1159,7 +1323,12 @@ final class WebGpuRenderPass implements RenderPassBackend {
 					boolean ok = view != null && !view.isClosed() && view.tex.isCube();
 					WebGpuNatives.bindGroupTexture(binding, ok ? view.handle : device.dummyCubeView.handle);
 					if (ok) {
+						view.boundInGroup = true;
+						view.tex.boundInGroup = true;
 						views.add(view);
+					} else {
+						device.dummyCubeView.boundInGroup = true;
+						device.dummyCubeView.tex.boundInGroup = true;
 					}
 				}
 				default -> {
@@ -1171,7 +1340,12 @@ final class WebGpuRenderPass implements RenderPassBackend {
 					}
 					WebGpuNatives.bindGroupTexture(binding, ok ? view.handle : device.dummyView.handle);
 					if (ok) {
+						view.boundInGroup = true;
+						view.tex.boundInGroup = true;
 						views.add(view);
+					} else {
+						device.dummyView.boundInGroup = true;
+						device.dummyView.tex.boundInGroup = true;
 					}
 				}
 			}

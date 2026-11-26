@@ -7,10 +7,13 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.NativeImage;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,12 +39,36 @@ import org.teavm.jso.typedarrays.Int8Array;
  */
 public final class ModrinthClient {
 	public static final int THUMB_SIZE = 64;
+	private static final int MAX_THUMB_TEXTURES = 160;
+	private static final String LS_INSTALLED_MAP = "minecraft_web:modrinth.installed";
+	private static final String RESOURCEPACKS_DIR = "/resourcepacks";
 
-	private static final Map<String, Identifier> THUMB_TEXTURES = new HashMap<>();
+	private static final Map<String, Identifier> THUMB_TEXTURES = new LinkedHashMap<>(64, 0.75F, true) {
+		@Override
+		protected boolean removeEldestEntry(final Map.Entry<String, Identifier> eldest) {
+			if (this.size() > MAX_THUMB_TEXTURES) {
+				Identifier evicted = eldest.getValue();
+				if (evicted != null) {
+					Minecraft mc = Minecraft.getInstance();
+					if (mc != null && mc.getTextureManager() != null) {
+						try {
+							mc.getTextureManager().release(evicted);
+						} catch (Throwable ignored) {
+						}
+					}
+				}
+				return true;
+			}
+			return false;
+		}
+	};
 	private static final Set<String> THUMB_INFLIGHT = new HashSet<>();
 	private static final Set<String> THUMB_FAILED = new HashSet<>();
 	private static final Set<String> SESSION_INSTALLED_IDS = new HashSet<>();
 	private static final Set<String> SESSION_INSTALLED_SLUGS = new HashSet<>();
+	private static final Map<String, String> SESSION_FILE_TO_SLUG = new HashMap<>();
+	private static final Map<String, String> INSTALLED_PROJECT_FILES = new HashMap<>();
+	private static boolean installedMapLoaded;
 
 	private static int searchGeneration;
 
@@ -55,17 +82,33 @@ public final class ModrinthClient {
 		public final int relayCount;
 		public final String relayLabel;
 		public final String transport;
+		public final String routeMode;
 
-		RelayInfo(final boolean ready, final int relayCount, final String relayLabel, final String transport) {
+		RelayInfo(final boolean ready, final int relayCount, final String relayLabel, final String transport, final String routeMode) {
 			this.ready = ready;
 			this.relayCount = relayCount;
 			this.relayLabel = relayLabel;
 			this.transport = transport;
+			this.routeMode = routeMode;
+		}
+
+		public boolean isDirect() {
+			return "direct".equals(this.transport) || "direct".equals(this.routeMode);
+		}
+
+		public boolean needsRelaySetup() {
+			return "relay".equals(this.routeMode) && this.relayCount <= 0;
 		}
 
 		public String badgeText() {
-			if (this.relayCount <= 0) {
+			if ("direct".equals(this.routeMode)) {
+				return "Direct";
+			}
+			if (this.needsRelaySetup()) {
 				return "No Relay";
+			}
+			if ("direct".equals(this.transport) || this.relayCount <= 0) {
+				return "Direct";
 			}
 			String name = this.relayLabel.isEmpty() ? "Relay" : this.relayLabel;
 			if ("webrtc".equals(this.transport)) {
@@ -75,6 +118,18 @@ public final class ModrinthClient {
 				return name + " (WS)";
 			}
 			return name;
+		}
+
+		public String routeButtonLabel() {
+			if ("direct".equals(this.routeMode)) {
+				return "Net: Direct";
+			}
+			if ("relay".equals(this.routeMode)) {
+				return this.relayCount <= 0 ? "Add Relay..." : ("Net: " + badgeText());
+			}
+			return "direct".equals(this.transport) || this.relayCount <= 0
+				? "Net: Direct"
+				: ("Net: " + (this.relayLabel.isEmpty() ? "Relay" : this.relayLabel));
 		}
 	}
 
@@ -271,12 +326,14 @@ public final class ModrinthClient {
 		public final long fileSize;
 		public final String sha1;
 		public final int requiredDepCount;
+		public final List<String> requiredDepIds;
 
 		ProjectVersion(
 				final String id, final String name, final String versionNumber, final String versionType,
 				final String datePublished, final long downloads, final List<String> gameVersions,
 				final List<String> loaders, final String fileUrl, final String filename,
-				final long fileSize, final String sha1, final int requiredDepCount) {
+				final long fileSize, final String sha1, final int requiredDepCount,
+				final List<String> requiredDepIds) {
 			this.id = id;
 			this.name = name;
 			this.versionNumber = versionNumber;
@@ -290,6 +347,7 @@ public final class ModrinthClient {
 			this.fileSize = fileSize;
 			this.sha1 = sha1;
 			this.requiredDepCount = requiredDepCount;
+			this.requiredDepIds = requiredDepIds;
 		}
 
 		public String formattedSize() {
@@ -342,34 +400,246 @@ public final class ModrinthClient {
 
 	public static RelayInfo relayInfo() {
 		if (!jsAvailable()) {
-			return new RelayInfo(false, 0, "", "");
+			return new RelayInfo(false, 0, "", "", "auto");
 		}
 		try {
 			String raw = jsRelayStatusJson();
 			JsonObject obj = JsonParser.parseString(raw).getAsJsonObject();
+			String route = strOf(obj, "routeMode");
 			return new RelayInfo(
 				boolOf(obj, "ready"),
 				intOf(obj, "relayCount"),
 				strOf(obj, "relayLabel"),
-				strOf(obj, "transport"));
+				strOf(obj, "transport"),
+				route.isEmpty() ? "auto" : route);
 		} catch (Throwable e) {
-			return new RelayInfo(false, 0, "", "");
+			return new RelayInfo(false, 0, "", "", "auto");
 		}
+	}
+
+	public static String cycleRouteMode() {
+		THUMB_FAILED.clear();
+		return jsAvailable() ? jsCycleRouteMode() : "auto";
+	}
+
+	public static void clearFailedThumbnails() {
+		THUMB_FAILED.clear();
+	}
+
+	private static void ensureInstalledMapLoaded() {
+		if (installedMapLoaded) {
+			return;
+		}
+		installedMapLoaded = true;
+		String raw = jsLsGet(LS_INSTALLED_MAP);
+		if (raw == null || raw.isEmpty()) {
+			return;
+		}
+		try {
+			JsonElement el = JsonParser.parseString(raw);
+			if (el != null && el.isJsonObject()) {
+				for (Map.Entry<String, JsonElement> entry : el.getAsJsonObject().entrySet()) {
+					if (entry.getValue() != null && !entry.getValue().isJsonNull()) {
+						String pid = entry.getKey();
+						String fn = entry.getValue().getAsString();
+						if (pid != null && !pid.isEmpty() && fn != null && !fn.isEmpty()) {
+							INSTALLED_PROJECT_FILES.put(pid, fn);
+						}
+					}
+				}
+			}
+		} catch (Throwable ignored) {
+		}
+	}
+
+	private static void saveInstalledMap() {
+		try {
+			JsonObject obj = new JsonObject();
+			for (Map.Entry<String, String> entry : INSTALLED_PROJECT_FILES.entrySet()) {
+				obj.addProperty(entry.getKey(), entry.getValue());
+			}
+			jsLsSet(LS_INSTALLED_MAP, obj.size() == 0 ? "" : obj.toString());
+		} catch (Throwable ignored) {
+		}
+	}
+
+	private static String normalizeToken(final String s) {
+		return s == null ? "" : s.toLowerCase(Locale.ROOT).replace("-", "").replace("_", "");
+	}
+
+	private static String stripShaderSuffix(final String slugFlat) {
+		if (slugFlat == null || slugFlat.isEmpty()) {
+			return "";
+		}
+		if (slugFlat.endsWith("shaders") && slugFlat.length() > "shaders".length()) {
+			return slugFlat.substring(0, slugFlat.length() - "shaders".length());
+		}
+		if (slugFlat.endsWith("shader") && slugFlat.length() > "shader".length()) {
+			return slugFlat.substring(0, slugFlat.length() - "shader".length());
+		}
+		return slugFlat;
+	}
+
+	private static List<String> listResourcePackFiles() {
+		File dir = new File(RESOURCEPACKS_DIR);
+		String[] names = dir.list();
+		if (names == null || names.length == 0) {
+			return Collections.emptyList();
+		}
+		List<String> out = new ArrayList<>(names.length);
+		for (String n : names) {
+			if (n != null && !n.isEmpty()) {
+				out.add(n);
+			}
+		}
+		return out;
+	}
+
+	private static boolean trackedFileExists(final String filename) {
+		if (filename == null || filename.isEmpty()) {
+			return false;
+		}
+		String targetLow = filename.toLowerCase(Locale.ROOT);
+		String targetFlat = normalizeToken(filename);
+		for (WebMods.InstalledMod mod : WebMods.listMods()) {
+			if (mod.file.equalsIgnoreCase(filename) || normalizeToken(mod.file).equals(targetFlat)) {
+				return true;
+			}
+		}
+		for (String sp : ShaderPacks.list()) {
+			if (sp.equalsIgnoreCase(filename) || normalizeToken(sp).equals(targetFlat)
+					|| (!targetLow.endsWith(".zip") && sp.equalsIgnoreCase(filename + ".zip"))) {
+				return true;
+			}
+		}
+		for (String rp : listResourcePackFiles()) {
+			if (rp.equalsIgnoreCase(filename) || normalizeToken(rp).equals(targetFlat)
+					|| (!targetLow.endsWith(".zip") && rp.equalsIgnoreCase(filename + ".zip"))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Forget cached/persisted Modrinth install state when a mod/pack is removed from disk. */
+	public static void forgetInstalled(final String modId, final String filename) {
+		ensureInstalledMapLoaded();
+		String idLow = modId == null ? "" : modId.toLowerCase(Locale.ROOT);
+		String idFlat = normalizeToken(modId);
+		String fileLow = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+		String fileFlat = normalizeToken(filename);
+
+		if (!idLow.isEmpty()) {
+			SESSION_INSTALLED_IDS.remove(modId);
+			SESSION_INSTALLED_SLUGS.remove(idLow);
+		}
+		if (!fileLow.isEmpty()) {
+			String mappedSlug = SESSION_FILE_TO_SLUG.remove(fileLow);
+			if (mappedSlug != null) {
+				SESSION_INSTALLED_SLUGS.remove(mappedSlug);
+			}
+		}
+		boolean mapChanged = false;
+		Iterator<Map.Entry<String, String>> it = INSTALLED_PROJECT_FILES.entrySet().iterator();
+		while (it.hasNext()) {
+			Map.Entry<String, String> e = it.next();
+			String pid = e.getKey();
+			String fn = e.getValue();
+			boolean matchFile = !fileLow.isEmpty() && (fn.equalsIgnoreCase(filename) || normalizeToken(fn).equals(fileFlat));
+			boolean matchId = !idLow.isEmpty() && (pid.equalsIgnoreCase(modId) || normalizeToken(pid).equals(idFlat));
+			if (matchFile || matchId) {
+				SESSION_INSTALLED_IDS.remove(pid);
+				it.remove();
+				mapChanged = true;
+			}
+		}
+		if (!idFlat.isEmpty() || !fileFlat.isEmpty()) {
+			Iterator<String> slugIt = SESSION_INSTALLED_SLUGS.iterator();
+			while (slugIt.hasNext()) {
+				String s = slugIt.next();
+				String sf = normalizeToken(s);
+				if ((!idFlat.isEmpty() && sf.equals(idFlat))
+						|| (!fileFlat.isEmpty() && sf.length() >= 3 && fileFlat.contains(sf))) {
+					slugIt.remove();
+				}
+			}
+		}
+		if (mapChanged) {
+			saveInstalledMap();
+		}
+	}
+
+	public static void fetchProjectNames(final List<String> ids, final Consumer<List<String>> onDone) {
+		if (!jsAvailable() || ids == null || ids.isEmpty()) {
+			onDone.accept(Collections.emptyList());
+			return;
+		}
+		JsonArray arr = new JsonArray();
+		for (String id : ids) {
+			if (id != null && !id.isEmpty()) {
+				arr.add(id);
+			}
+		}
+		if (arr.isEmpty()) {
+			onDone.accept(Collections.emptyList());
+			return;
+		}
+		jsGetProjectNames(arr.toString(), (ok, payload) -> {
+			if (!ok || payload == null || payload.isEmpty()) {
+				onDone.accept(Collections.emptyList());
+				return;
+			}
+			try {
+				JsonArray outArr = JsonParser.parseString(payload).getAsJsonArray();
+				List<String> names = new ArrayList<>(outArr.size());
+				for (JsonElement el : outArr) {
+					if (el != null && !el.isJsonNull()) {
+						names.add(el.getAsString());
+					}
+				}
+				onDone.accept(names);
+			} catch (Throwable e) {
+				onDone.accept(Collections.emptyList());
+			}
+		});
 	}
 
 	public static boolean isInstalled(final ProjectHit hit) {
 		if (hit == null) {
 			return false;
 		}
+		ensureInstalledMapLoaded();
+		if (hit.id != null && !hit.id.isEmpty()) {
+			String mappedFile = INSTALLED_PROJECT_FILES.get(hit.id);
+			if (mappedFile != null) {
+				if (trackedFileExists(mappedFile)) {
+					return true;
+				}
+				INSTALLED_PROJECT_FILES.remove(hit.id);
+				SESSION_INSTALLED_IDS.remove(hit.id);
+				saveInstalledMap();
+			}
+		}
 		if (SESSION_INSTALLED_IDS.contains(hit.id) || SESSION_INSTALLED_SLUGS.contains(hit.slug.toLowerCase(Locale.ROOT))) {
 			return true;
 		}
 		String slugLow = hit.slug.toLowerCase(Locale.ROOT);
-		String slugFlat = slugLow.replace("-", "").replace("_", "");
+		String slugFlat = normalizeToken(slugLow);
 		if ("shader".equals(hit.projectType)) {
+			String slugBase = stripShaderSuffix(slugFlat);
 			for (String s : ShaderPacks.list()) {
-				String sl = s.toLowerCase(Locale.ROOT).replace("-", "").replace("_", "");
-				if (!slugFlat.isEmpty() && sl.contains(slugFlat)) {
+				String sl = normalizeToken(s);
+				if ((!slugFlat.isEmpty() && sl.contains(slugFlat))
+						|| (slugBase.length() >= 3 && sl.contains(slugBase))) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if ("resourcepack".equals(hit.projectType)) {
+			for (String rp : listResourcePackFiles()) {
+				String rpl = normalizeToken(rp);
+				if (!slugFlat.isEmpty() && rpl.contains(slugFlat)) {
 					return true;
 				}
 			}
@@ -379,7 +649,7 @@ public final class ModrinthClient {
 			String idLow = mod.info.id.toLowerCase(Locale.ROOT);
 			String fileLow = mod.file.toLowerCase(Locale.ROOT);
 			if (idLow.equals(slugLow) || idLow.replace("_", "").equals(slugFlat)
-					|| (!slugFlat.isEmpty() && fileLow.replace("-", "").replace("_", "").contains(slugFlat))) {
+					|| (!slugFlat.isEmpty() && normalizeToken(fileLow).contains(slugFlat))) {
 				return true;
 			}
 		}
@@ -534,11 +804,13 @@ public final class ModrinthClient {
 		final String filename;
 		final String fileUrl;
 		final long fileSize;
+		final String sha1;
+		final String sha512;
 		final boolean isDependency;
 
 		PlanItem(final String projectId, final String slug, final String title, final String projectType,
 				final String versionNumber, final String filename, final String fileUrl,
-				final long fileSize, final boolean isDependency) {
+				final long fileSize, final String sha1, final String sha512, final boolean isDependency) {
 			this.projectId = projectId;
 			this.slug = slug;
 			this.title = title;
@@ -547,17 +819,26 @@ public final class ModrinthClient {
 			this.filename = filename;
 			this.fileUrl = fileUrl;
 			this.fileSize = fileSize;
+			this.sha1 = sha1;
+			this.sha512 = sha512;
 			this.isDependency = isDependency;
 		}
 	}
 
 	private static String buildInstalledTokensJson() {
+		ensureInstalledMapLoaded();
 		JsonArray arr = new JsonArray();
 		for (String id : SESSION_INSTALLED_IDS) {
 			arr.add(id);
 		}
 		for (String slug : SESSION_INSTALLED_SLUGS) {
 			arr.add(slug);
+		}
+		for (Map.Entry<String, String> entry : INSTALLED_PROJECT_FILES.entrySet()) {
+			if (trackedFileExists(entry.getValue())) {
+				arr.add(entry.getKey());
+				arr.add(entry.getValue());
+			}
 		}
 		for (WebMods.InstalledMod mod : WebMods.listMods()) {
 			if (!mod.info.id.isEmpty()) {
@@ -570,7 +851,16 @@ public final class ModrinthClient {
 		for (String sp : ShaderPacks.list()) {
 			if (sp != null && !sp.isEmpty()) {
 				arr.add(sp);
+				String stem = sp.toLowerCase(Locale.ROOT).endsWith(".zip") ? sp.substring(0, sp.length() - 4) : sp;
+				String flat = normalizeToken(stem);
+				String stripped = stripShaderSuffix(flat);
+				if (stripped.length() >= 3 && !stripped.equals(flat)) {
+					arr.add(stripped);
+				}
 			}
+		}
+		for (String rp : listResourcePackFiles()) {
+			arr.add(rp);
 		}
 		return arr.toString();
 	}
@@ -637,6 +927,8 @@ public final class ModrinthClient {
 							strOf(o, "filename"),
 							strOf(o, "fileUrl"),
 							longOf(o, "fileSize"),
+							strOf(o, "sha1"),
+							strOf(o, "sha512"),
 							boolOf(o, "isDependency")));
 					}
 					if (items.isEmpty()) {
@@ -645,10 +937,135 @@ public final class ModrinthClient {
 					}
 					List<String> installedDepNames = new ArrayList<>();
 					List<String> depFailures = new ArrayList<>();
-					executeInstallPlan(items, 0, installedDepNames, depFailures, onProgress, onDone);
+					if (items.size() > 1) {
+						executeInstallPlanParallel(items, title, installedDepNames, depFailures, onProgress, onDone);
+					} else {
+						executeInstallPlan(items, 0, installedDepNames, depFailures, onProgress, onDone);
+					}
 				} catch (Throwable e) {
 					onDone.accept(false, "Dependency resolution parse error: " + e.getMessage());
 				}
+			});
+	}
+
+	private static void executeInstallPlanParallel(
+			final List<PlanItem> items,
+			final String rootTitle,
+			final List<String> installedDepNames,
+			final List<String> depFailures,
+			final InstallProgressListener onProgress,
+			final BiConsumer<Boolean, String> onDone) {
+		JsonArray reqArr = new JsonArray();
+		long totalEst = 0L;
+		for (PlanItem item : items) {
+			JsonObject o = new JsonObject();
+			o.addProperty("fileUrl", item.fileUrl);
+			o.addProperty("filename", item.filename);
+			o.addProperty("title", item.title);
+			o.addProperty("fileSize", item.fileSize);
+			o.addProperty("sha1", item.sha1);
+			o.addProperty("sha512", item.sha512);
+			reqArr.add(o);
+			if (item.fileSize > 0L) {
+				totalEst += item.fileSize;
+			}
+		}
+		final int totalSteps = items.size();
+		final int estCap = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, totalEst));
+		if (onProgress != null) {
+			onProgress.onProgress(rootTitle + " + " + (totalSteps - 1) + " dep(s)", 1, totalSteps, 0, estCap);
+		}
+		jsDownloadFilesBatch(
+			reqArr.toString(),
+			(doneCount, totalCount, loaded, total) -> {
+				if (onProgress != null) {
+					int stepShown = Math.min(totalSteps, Math.max(1, doneCount + 1));
+					int tot = total > 0 ? total : estCap;
+					onProgress.onProgress(rootTitle + " (" + doneCount + "/" + totalCount + " files)", stepShown, totalSteps, loaded, tot);
+				}
+			},
+			batchId -> {
+				String fatalErr = null;
+				PlanItem rootItem = items.get(items.size() - 1);
+				WebMods.beginBatch();
+				try {
+					ensureInstalledMapLoaded();
+					boolean mapDirty = false;
+					for (int i = 0; i < items.size(); i++) {
+						PlanItem item = items.get(i);
+						boolean ok = jsBatchResultOk(batchId, i);
+						Int8Array data = ok ? jsBatchResultBytes(batchId, i) : null;
+						String dlErr = ok ? "" : jsBatchResultErr(batchId, i);
+						String err = null;
+						if (!ok || data == null || data.getLength() == 0) {
+							err = (dlErr != null && !dlErr.isEmpty())
+								? friendlyError(dlErr)
+								: ("Download failed for " + item.filename);
+						} else {
+							try {
+								byte[] raw = data.copyToJavaArray();
+								if ("shader".equals(item.projectType)) {
+									err = ShaderPacks.accept(item.filename, raw);
+								} else if ("resourcepack".equals(item.projectType)) {
+									err = WebPacks.installResourcePack(item.filename, raw);
+								} else {
+									err = WebMods.accept(item.filename, raw);
+								}
+							} catch (Throwable e) {
+								err = "Install error: " + e.getMessage();
+							}
+						}
+						if (err != null && !err.isEmpty()) {
+							if (item.isDependency && i + 1 < totalSteps) {
+								depFailures.add(item.title);
+								continue;
+							}
+							fatalErr = err;
+							break;
+						}
+						if (!item.projectId.isEmpty()) {
+							SESSION_INSTALLED_IDS.add(item.projectId);
+							if (!item.filename.isEmpty()) {
+								INSTALLED_PROJECT_FILES.put(item.projectId, item.filename);
+								mapDirty = true;
+							}
+						}
+						if (!item.slug.isEmpty()) {
+							String slugLow = item.slug.toLowerCase(Locale.ROOT);
+							SESSION_INSTALLED_SLUGS.add(slugLow);
+							if (!item.filename.isEmpty()) {
+								SESSION_FILE_TO_SLUG.put(item.filename.toLowerCase(Locale.ROOT), slugLow);
+							}
+						}
+						if (item.isDependency) {
+							installedDepNames.add(item.title);
+						}
+					}
+					if (mapDirty) {
+						saveInstalledMap();
+					}
+				} finally {
+					jsClearBatch(batchId);
+					WebMods.endBatch();
+				}
+				if (fatalErr != null) {
+					onDone.accept(false, fatalErr);
+					return;
+				}
+				String baseMsg = "shader".equals(rootItem.projectType)
+					? "Added shader pack " + rootItem.title + " (enable in Video Settings > Shader Packs)"
+					: ("resourcepack".equals(rootItem.projectType)
+						? "Installed & enabled resource pack " + rootItem.title
+						: "Installed " + rootItem.title + (rootItem.versionNumber.isEmpty() ? "" : (" (" + rootItem.versionNumber + ")")));
+				if (!installedDepNames.isEmpty()) {
+					baseMsg += " + " + installedDepNames.size()
+						+ (installedDepNames.size() == 1 ? " dep (" : " deps (")
+						+ joinShort(installedDepNames, 2) + ")";
+				}
+				if (!depFailures.isEmpty()) {
+					baseMsg += " [failed dep: " + joinShort(depFailures, 2) + "]";
+				}
+				onDone.accept(true, baseMsg);
 			});
 	}
 
@@ -668,16 +1085,20 @@ public final class ModrinthClient {
 		}
 		jsDownloadFile(
 			item.fileUrl,
+			item.sha1,
+			item.sha512,
 			(loaded, total) -> {
 				if (onProgress != null) {
 					int tot = total > 0 ? total : (int) Math.min(Integer.MAX_VALUE, Math.max(0L, item.fileSize));
 					onProgress.onProgress(labelPrefix, stepNum, totalSteps, loaded, tot);
 				}
 			},
-			(ok, data) -> {
+			(ok, data, dlErr) -> {
 				String err = null;
 				if (!ok || data == null || data.getLength() == 0) {
-					err = "Download failed for " + item.filename;
+					err = (dlErr != null && !dlErr.isEmpty())
+						? friendlyError(dlErr)
+						: ("Download failed for " + item.filename);
 				} else {
 					try {
 						byte[] raw = data.copyToJavaArray();
@@ -701,11 +1122,20 @@ public final class ModrinthClient {
 					onDone.accept(false, err);
 					return;
 				}
+				ensureInstalledMapLoaded();
 				if (!item.projectId.isEmpty()) {
 					SESSION_INSTALLED_IDS.add(item.projectId);
+					if (!item.filename.isEmpty()) {
+						INSTALLED_PROJECT_FILES.put(item.projectId, item.filename);
+						saveInstalledMap();
+					}
 				}
 				if (!item.slug.isEmpty()) {
-					SESSION_INSTALLED_SLUGS.add(item.slug.toLowerCase(Locale.ROOT));
+					String slugLow = item.slug.toLowerCase(Locale.ROOT);
+					SESSION_INSTALLED_SLUGS.add(slugLow);
+					if (!item.filename.isEmpty()) {
+						SESSION_FILE_TO_SLUG.put(item.filename.toLowerCase(Locale.ROOT), slugLow);
+					}
 				}
 				if (item.isDependency) {
 					installedDepNames.add(item.title);
@@ -846,6 +1276,20 @@ public final class ModrinthClient {
 				continue;
 			}
 			JsonObject o = el.getAsJsonObject();
+			List<String> reqDepIds = new ArrayList<>();
+			if (o.has("dependencies") && o.get("dependencies").isJsonArray()) {
+				for (JsonElement de : o.getAsJsonArray("dependencies")) {
+					if (de != null && de.isJsonObject()) {
+						JsonObject dObj = de.getAsJsonObject();
+						if ("required".equals(strOf(dObj, "dependencyType"))) {
+							String pid = strOf(dObj, "projectId");
+							if (!pid.isEmpty() && !reqDepIds.contains(pid)) {
+								reqDepIds.add(pid);
+							}
+						}
+					}
+				}
+			}
 			out.add(new ProjectVersion(
 				strOf(o, "id"),
 				strOf(o, "name"),
@@ -859,7 +1303,8 @@ public final class ModrinthClient {
 				strOf(o, "filename"),
 				longOf(o, "fileSize"),
 				strOf(o, "sha1"),
-				intOf(o, "requiredDepCount")));
+				intOf(o, "requiredDepCount"),
+				reqDepIds));
 		}
 		return out;
 	}
@@ -912,15 +1357,46 @@ public final class ModrinthClient {
 	}
 
 	@JSFunctor
+	private interface DownloadCallback extends JSObject {
+		void done(boolean ok, Int8Array data, String err);
+	}
+
+	@JSFunctor
 	private interface ProgressCallback extends JSObject {
 		void progress(int loaded, int total);
 	}
+
+	@JSFunctor
+	private interface BatchProgressCallback extends JSObject {
+		void progress(int completed, int totalItems, int loaded, int total);
+	}
+
+	@JSFunctor
+	private interface BatchDoneCallback extends JSObject {
+		void done(int batchId);
+	}
+
+	@JSBody(params = {"k"}, script = "try { return window.localStorage.getItem(k) || ''; } catch (e) { return ''; }")
+	private static native String jsLsGet(String k);
+
+	@JSBody(params = {"k", "v"}, script = "try { if (!v) { window.localStorage.removeItem(k); } else { window.localStorage.setItem(k, v); } } catch (e) {}")
+	private static native void jsLsSet(String k, String v);
 
 	@JSBody(script = "return !!(window.MinecraftWebModrinth && typeof window.MinecraftWebModrinth.search === 'function');")
 	private static native boolean jsAvailable();
 
 	@JSBody(script = "try { return JSON.stringify(window.MinecraftWebModrinth.getRelayStatus()); } catch (e) { return '{}'; }")
 	private static native String jsRelayStatusJson();
+
+	@JSBody(script = "try { return String(window.MinecraftWebModrinth.cycleRouteMode()); } catch (e) { return 'auto'; }")
+	private static native String jsCycleRouteMode();
+
+	@JSBody(params = {"idsJson", "cb"}, script = ""
+		+ "var m = window.MinecraftWebModrinth;"
+		+ "if (!m || typeof m.getProjectNames !== 'function') { cb(false, '[]'); return; }"
+		+ "var ids = []; try { ids = JSON.parse(idsJson || '[]'); } catch (e) {}"
+		+ "m.getProjectNames(ids).then(function(res) { cb(true, JSON.stringify(res || [])); }, function() { cb(false, '[]'); });")
+	private static native void jsGetProjectNames(String idsJson, TextCallback cb);
 
 	@JSBody(params = {"query", "projectType", "mcVersion", "sort", "offset", "limit", "cb"}, script = ""
 		+ "var m = window.MinecraftWebModrinth;"
@@ -960,15 +1436,50 @@ public final class ModrinthClient {
 		+ ".then(function(rgba) { cb(true, rgba); }, function() { cb(false, null); });")
 	private static native void jsFetchThumb(String url, int size, BytesCallback cb);
 
-	@JSBody(params = {"url", "onProg", "cb"}, script = ""
+	@JSBody(params = {"url", "sha1", "sha512", "onProg", "cb"}, script = ""
 		+ "var m = window.MinecraftWebModrinth;"
-		+ "if (!m) { cb(false, null); return; }"
+		+ "if (!m) { cb(false, null, 'Modrinth wrapper unavailable'); return; }"
 		+ "var lastAt = 0;"
 		+ "m.downloadFile(url, function(loaded, total) {"
 		+ "  var now = Date.now();"
 		+ "  if (now - lastAt >= 80 || (total > 0 && loaded >= total)) {"
 		+ "    lastAt = now; onProg(loaded | 0, total | 0);"
 		+ "  }"
-		+ "}).then(function(bytes) { cb(true, bytes); }, function() { cb(false, null); });")
-	private static native void jsDownloadFile(String url, ProgressCallback onProg, BytesCallback cb);
+		+ "}, sha1 || '', sha512 || '').then(function(bytes) { cb(true, bytes, ''); }, function(err) { cb(false, null, String(err && err.message ? err.message : err)); });")
+	private static native void jsDownloadFile(String url, String sha1, String sha512, ProgressCallback onProg, DownloadCallback cb);
+
+	@JSBody(params = {"itemsJson", "onProg", "cb"}, script = ""
+		+ "var store = window.__mcModrinthDlBatches || (window.__mcModrinthDlBatches = {});"
+		+ "var seq = (window.__mcModrinthDlSeq || 0) + 1;"
+		+ "window.__mcModrinthDlSeq = seq;"
+		+ "var m = window.MinecraftWebModrinth;"
+		+ "var items = []; try { items = JSON.parse(itemsJson || '[]'); } catch (e) {}"
+		+ "if (!m || typeof m.downloadFiles !== 'function') {"
+		+ "  store[seq] = []; cb(seq); return;"
+		+ "}"
+		+ "m.downloadFiles(items, function(doneCount, totalCount, loaded, total) {"
+		+ "  onProg(doneCount | 0, totalCount | 0, loaded | 0, total | 0);"
+		+ "}).then(function(results) {"
+		+ "  store[seq] = results || [];"
+		+ "  cb(seq);"
+		+ "}, function(err) {"
+		+ "  var msg = String(err && err.message ? err.message : err);"
+		+ "  var failArr = [];"
+		+ "  for (var i = 0; i < items.length; i++) { failArr.push({ ok: false, bytes: null, error: msg }); }"
+		+ "  store[seq] = failArr;"
+		+ "  cb(seq);"
+		+ "});")
+	private static native void jsDownloadFilesBatch(String itemsJson, BatchProgressCallback onProg, BatchDoneCallback cb);
+
+	@JSBody(params = {"batchId", "index"}, script = "var b = window.__mcModrinthDlBatches && window.__mcModrinthDlBatches[batchId]; return !!(b && b[index] && b[index].ok);")
+	private static native boolean jsBatchResultOk(int batchId, int index);
+
+	@JSBody(params = {"batchId", "index"}, script = "var b = window.__mcModrinthDlBatches && window.__mcModrinthDlBatches[batchId]; return (b && b[index] && b[index].bytes) ? b[index].bytes : null;")
+	private static native Int8Array jsBatchResultBytes(int batchId, int index);
+
+	@JSBody(params = {"batchId", "index"}, script = "var b = window.__mcModrinthDlBatches && window.__mcModrinthDlBatches[batchId]; return (b && b[index] && b[index].error) ? String(b[index].error) : '';")
+	private static native String jsBatchResultErr(int batchId, int index);
+
+	@JSBody(params = {"batchId"}, script = "if (window.__mcModrinthDlBatches) { delete window.__mcModrinthDlBatches[batchId]; }")
+	private static native void jsClearBatch(int batchId);
 }

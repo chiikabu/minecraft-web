@@ -1,1 +1,1405 @@
-[{"start":5612,"delete":0,"insert":"import net.minecraft.util.Mth;\n"},{"start":6374,"delete":19,"insert":"8"},{"start":8482,"delete":5,"insert":"@Nullable"},{"start":8821,"delete":0,"insert":["   private final Vector4f mainClearColorScratch = new Vector4f();\n   private final Matrix4f terrainMatrixScratch = new Matrix4f();\n   private final TranslucencyPointOfView web263ResortPov",{"copy":60497,"length":33},"\n"]},{"start":8980,"delete":0,"insert":"   private boolean web263OcclusionUpdatedInExtract;\n"},{"start":9077,"delete":0,"insert":" boolean hasTemporaryGizmos;\n   private final"},{"start":9108,"delete":9,"insert":"empty"},{"start":9222,"delete":0,"insert":[{"copy":9066,"length":60},"this.emptyGizmos;"]},{"start":10263,"delete":114,"insert":""},{"start":10928,"delete":0,"insert":["   }\n\n   private",{"copy":21341,"length":32},"() {\n      return",{"copy":21375,"length":44}," && !net.minecraft.client.web.shaderpack.ShaderPacks.isActive();\n   }\n\n   private RenderTarget getOrCreateEntityOutlineTarget",{"copy":57705,"length":44},"if (this.entityOutlineTarget == null) {\n         ",{"copy":10269,"length":114},"} else if (this.entityOutlineTarget.width != width || this.entityOutlineTarget.height != height) {\n         ",{"copy":57796,"length":47},"\n      }\n\n      return this.entityOutlineTarget;\n"]},{"start":11300,"delete":0,"insert":"try {\n         "},{"start":11354,"delete":0,"insert":["   ",{"copy":21342,"length":39},{"copy":21394,"length":33},"   "]},{"start":11404,"delete":0,"insert":"useImprovedTransparency);\n         "},{"start":11409,"delete":39,"insert":[{"copy":12008,"length":35},"false"]},{"start":11456,"delete":0,"insert":"   "},{"start":11497,"delete":0,"insert":"   "},{"start":11539,"delete":0,"insert":"   "},{"start":11610,"delete":0,"insert":"   "},{"start":11645,"delete":0,"insert":["   ",{"copy":11877,"length":53},"null;\n         try {\n            "]},{"start":11703,"delete":0,"insert":"      "},{"start":11745,"delete":0,"insert":"      "},{"start":11834,"delete":0,"insert":"      "},{"start":11877,"delete":37,"insert":"     "},{"start":12003,"delete":0,"insert":"      "},{"start":12129,"delete":0,"insert":"      "},{"start":12172,"delete":0,"insert":"      "},{"start":12229,"delete":0,"insert":"      "},{"start":12323,"delete":0,"insert":"      "},{"start":12391,"delete":0,"insert":"      "},{"start":12461,"delete":0,"insert":"      "},{"start":12550,"delete":0,"insert":"      "},{"start":12638,"delete":0,"insert":"      "},{"start":12647,"delete":0,"insert":"      "},{"start":12806,"delete":0,"insert":"      "},{"start":12810,"delete":18,"insert":""},{"start":12851,"delete":2,"insert":""},{"start":12866,"delete":0,"insert":"      "},{"start":12959,"delete":0,"insert":"      "},{"start":13073,"delete":0,"insert":"      "},{"start":13085,"delete":0,"insert":"      "},{"start":13188,"delete":0,"insert":"      "},{"start":13287,"delete":0,"insert":"      "},{"start":13381,"delete":0,"insert":"      "},{"start":13393,"delete":0,"insert":"      "},{"start":13515,"delete":0,"insert":"      "},{"start":13610,"delete":0,"insert":"      "},{"start":13716,"delete":0,"insert":"      "},{"start":13729,"delete":0,"insert":"      "},{"start":13800,"delete":0,"insert":"      "},{"start":13914,"delete":0,"insert":"      "},{"start":13926,"delete":0,"insert":"      "},{"start":14018,"delete":0,"insert":"      "},{"start":14124,"delete":0,"insert":"      "},{"start":14136,"delete":0,"insert":"      "},{"start":14235,"delete":0,"insert":"      "},{"start":14338,"delete":0,"insert":"      "},{"start":14456,"delete":0,"insert":"      "},{"start":14465,"delete":0,"insert":"      "},{"start":14541,"delete":0,"insert":"      "},{"start":14659,"delete":0,"insert":"      "},{"start":14668,"delete":0,"insert":["      ",{"copy":16147,"length":44},"\n               "]},{"start":14741,"delete":19,"insert":"getOrCreateEntityOutlineTarget(screenWidth, screenHeight)"},{"start":14769,"delete":0,"insert":"      }\n\n            "},{"start":14821,"delete":0,"insert":"      "},{"start":14892,"delete":0,"insert":"      "},{"start":14921,"delete":0,"insert":"      "},{"start":14941,"delete":0,"insert":"      "},{"start":15023,"delete":0,"insert":"      "},{"start":15063,"delete":0,"insert":"      "},{"start":15102,"delete":0,"insert":"      "},{"start":15149,"delete":0,"insert":"      "},{"start":15184,"delete":13,"insert":"\n                        this.mainClearColorScratch.set"},{"start":15240,"delete":1,"insert":"\n                        "},{"start":15276,"delete":1,"insert":"\n                        "},{"start":15296,"delete":0,"insert":"      "},{"start":15308,"delete":0,"insert":"      "},{"start":15316,"delete":0,"insert":"      "},{"start":15325,"delete":0,"insert":"      "},{"start":15357,"delete":0,"insert":"      "},{"start":15412,"delete":0,"insert":["      }\n\n            ",{"copy":17137,"length":43},"\n               ",{"copy":17190,"length":36},"\n               ",{"copy":17236,"length":38},"\n\n               ",{"copy":17285,"length":5},"\n                  ",{"copy":17303,"length":57},"\n               ",{"copy":17370,"length":11},"\n                  ",{"copy":17394,"length":38},"\n               ",{"copy":17442,"length":1},"\n\n               ",{"copy":17454,"length":15},"\n            "]},{"start":15421,"delete":0,"insert":"      "},{"start":15447,"delete":12,"insert":"this.terrainMatrixScratch.set"},{"start":15527,"delete":0,"insert":"      "},{"start":15668,"delete":0,"insert":"      "},{"start":15719,"delete":0,"insert":"      "},{"start":15773,"delete":0,"insert":"      "},{"start":15846,"delete":18,"insert":""},{"start":15887,"delete":2,"insert":""},{"start":15898,"delete":0,"insert":"      "},{"start":15916,"delete":0,"insert":"      "},{"start":15981,"delete":18,"insert":""},{"start":16022,"delete":2,"insert":""},{"start":16033,"delete":0,"insert":"      "},{"start":16042,"delete":0,"insert":"      "},{"start":16147,"delete":0,"insert":"      "},{"start":16201,"delete":0,"insert":"      "},{"start":16339,"delete":0,"insert":"      "},{"start":16385,"delete":0,"insert":"      "},{"start":16473,"delete":0,"insert":"      "},{"start":16481,"delete":0,"insert":"      "},{"start":16490,"delete":0,"insert":"      "},{"start":16535,"delete":0,"insert":"      "},{"start":16595,"delete":0,"insert":"      "},{"start":16609,"delete":0,"insert":"      "},{"start":16662,"delete":0,"insert":"      "},{"start":16674,"delete":0,"insert":"      "},{"start":16693,"delete":0,"insert":"      "},{"start":16756,"delete":0,"insert":"      "},{"start":16786,"delete":0,"insert":"      "},{"start":16798,"delete":0,"insert":"      "},{"start":16817,"delete":0,"insert":"      "},{"start":16866,"delete":0,"insert":["\n      ",{"copy":16867,"length":37},"      }\n            });\n            profiler.pop",{"copy":17357,"length":42},"targets.clear();\n      ",{"copy":16966,"length":40},"      if (featureFrame != null) {\n         ",{"copy":17000,"length":34},"      }\n         }\n",{"copy":50374,"length":38},"s\");\n   ",{"copy":17068,"length":47},"   profiler.pop();\n         if (!this.web263OcclusionUpdatedInExtract) {\n            profiler.push(\"updateSectionOcclusion\");\n   ",{"copy":59899,"length":35},".update(",{"copy":17566,"length":87},");"]},{"start":16912,"delete":620,"insert":"   "},{"start":17537,"delete":41,"insert":"web263OcclusionUpdatedInExtract"},{"start":17579,"delete":28,"insert":"="},{"start":17608,"delete":68,"insert":"false"},{"start":17684,"delete":0,"insert":"   "},{"start":17784,"delete":0,"insert":"   "},{"start":17838,"delete":0,"insert":"   "},{"start":17935,"delete":0,"insert":"   "},{"start":18056,"delete":0,"insert":"   "},{"start":18092,"delete":0,"insert":"\n            }"},{"start":18111,"delete":2,"insert":" finally {\n   "},{"start":18157,"delete":0,"insert":"\n      }"},{"start":19627,"delete":0,"insert":["   }\n\n   public void web263UpdateOcclusionInExtract(final CameraRenderState camera, final int fov",{"copy":62190,"length":35}," && ",{"copy":62323,"length":54},"repositionCamera(camera);\n         this.sectionOcclusionGraph.update(camera, fov, this.levelRenderState.chunkLoadingRenderState);\n         this.web263OcclusionUpdatedInExtract = true;\n      }\n"]},{"start":21381,"delete":13,"insert":""},{"start":23063,"delete":0,"insert":"boolean useFastTerrain = Web263RenderFlags.FAST_TERRAIN_SHADER && !com.mojang.blaze3d.webgpu.WebGpuBackend.live();\n               "},{"start":23162,"delete":0,"insert":"                     && !useFastTerrain\n"},{"start":23248,"delete":0,"insert":"               FilterMode magFilter = useFastTerrain ? FilterMode.NEAREST : FilterMode.LINEAR;\n"},{"start":23441,"delete":17,"insert":"magFilter"},{"start":23751,"delete":0,"insert":"try {\n               "},{"start":23823,"delete":0,"insert":"   "},{"start":23865,"delete":0,"insert":"   "},{"start":23905,"delete":0,"insert":"   "},{"start":23976,"delete":0,"insert":"   "},{"start":24031,"delete":0,"insert":"   "},{"start":24070,"delete":0,"insert":"   "},{"start":24125,"delete":0,"insert":"   "},{"start":24166,"delete":0,"insert":"   "},{"start":24186,"delete":0,"insert":"   "},{"start":24247,"delete":0,"insert":"   "},{"start":24330,"delete":0,"insert":"   "},{"start":24380,"delete":0,"insert":["   if (!",{"copy":27596,"length":44},") {\n                        net.minecraft.client.web.shaderpack.ShaderPacks.beforeTranslucent();\n   ",{"copy":41771,"length":35},"      "]},{"start":24461,"delete":0,"insert":"\n                  }"},{"start":24478,"delete":0,"insert":["\n   ",{"copy":17361,"length":33},"   net.minecraft.client.web.shaderpack.ShaderPacks.endWorldPass();"]},{"start":37347,"delete":0,"insert":" && this.entityOutlineTarget != null"},{"start":38503,"delete":0,"insert":["if (Web263RenderFlags.FOG_CULLING && net.minecraft.client.renderer.fog.FogRenderer.isFogEnabled()\n                  && Web263Culling.beyondFog(section.getBoundingBox(),\n                     ",{"copy":28273,"length":44},{"copy":28722,"length":41},"fogData)) {\n                  Web263Culling.fogSections++;\n                  continue;\n               }\n               "]},{"start":38554,"delete":0,"insert":"\n               if (sectionMesh instanceof CompiledSectionMesh compiled) compiled.markAnimationsActive();"},{"start":40700,"delete":0,"insert":["                     if (Web263RenderFlags.SODIUM_CHUNKS && indexBuffer == null && Web263RenderFlags.canRebaseQuads(baseVertex)) {\n                        firstIndex = Web263RenderFlags.quadFirstIndex(baseVertex);\n                        baseVertex = 0;\n                        if (firstIndex + ",{"copy":39956,"length":88},"firstIndex + ",{"copy":40044,"length":44},"\n                     }\n\n"]},{"start":42633,"delete":1533,"insert":""},{"start":44745,"delete":12,"insert":"drawGroups, respectTranslucentOrder"},{"start":51216,"delete":0,"insert":"List<EntityRenderState> entityRenderStates = levelRenderState.entityRenderStates;\n\n      "},{"start":51221,"delete":0,"insert":"int i = 0, size = entityRenderStates.size(); i < size; i++) {\n         "},{"start":51245,"delete":1,"insert":"="},{"start":51247,"delete":16,"insert":"entityRenderStates"},{"start":51264,"delete":18,"insert":"get(i"},{"start":51283,"delete":2,"insert":";"},{"start":51783,"delete":0,"insert":"List<BlockEntityRenderState> blockEntityRenderStates = levelRenderState.blockEntityRenderStates;\n\n      "},{"start":51788,"delete":0,"insert":"int i = 0, size = blockEntityRenderStates.size(); i < size; i++) {\n         "},{"start":51823,"delete":1,"insert":"="},{"start":51825,"delete":16,"insert":"blockEntityRenderStates"},{"start":51842,"delete":23,"insert":"get(i"},{"start":51866,"delete":2,"insert":";"},{"start":55769,"delete":13,"insert":""},{"start":57796,"delete":0,"insert":"if (this.entityOutlineTarget != null) {\n         "},{"start":57821,"delete":6,"insert":"destroyBuffers"},{"start":57828,"delete":13,"insert":""},{"start":57843,"delete":0,"insert":[{"copy":58428,"length":34}," = null;\n      }"]},{"start":58000,"delete":0,"insert":"if (this.entityOutlineTarget != null) {\n         "},{"start":58042,"delete":0,"insert":[{"copy":58428,"length":34}," = null;\n      }"]},{"start":58425,"delete":0,"insert":" && this.entityOutlineTarget != null"},{"start":59210,"delete":0,"insert":".forName(\"sectionCompile\")"},{"start":59211,"delete":1,"insert":"\n            "},{"start":59231,"delete":1,"insert":"\n            "},{"start":59248,"delete":1,"insert":"\n            "},{"start":60289,"delete":0,"insert":" && !this.useImprovedTransparency()"},{"start":60302,"delete":8,"insert":"int"},{"start":60314,"delete":11,"insert":"X"},{"start":60328,"delete":8,"insert":"Mth"},{"start":60337,"delete":10,"insert":"floor"},{"start":60357,"delete":0,"insert":".x);\n         int camY = Mth.floor(cameraPos.y);\n         int camZ = Mth.floor(cameraPos.z"},{"start":60395,"delete":23,"insert":""},{"start":60450,"delete":0,"insert":[" == null\n            ||",{"copy":61184,"length":33},".getX("]},{"start":60451,"delete":0,"insert":[" != camX\n            ||",{"copy":61184,"length":33},".getY() != camY\n            ||",{"copy":61184,"length":33},".getZ() != camZ"]},{"start":60500,"delete":29,"insert":"this.web263ResortPov"},{"start":61185,"delete":0,"insert":"if (blockPosChanged) {\n            "},{"start":61220,"delete":14,"insert":"new BlockPos(camX, camY, camZ)"},{"start":61235,"delete":0,"insert":"\n         }"},{"start":61491,"delete":0,"insert":["      if (this.useImprovedTransparency() || !",{"copy":61884,"length":32}," || ",{"copy":61831,"length":38},"()) {\n         return;\n      }\n\n"]},{"start":61764,"delete":1,"insert":""},{"start":61817,"delete":157,"insert":""},{"start":62552,"delete":0,"insert":["      if (this.entityOutlineTarget != null",{"copy":58425,"length":37},".destroyBuffers();",{"copy":58428,"length":34}," = null;\n      }\n"]},{"start":62707,"delete":0,"insert":["   private int visibleStamp;\n   private final java.util.function.LongPredicate hiddenEntitySection = node -> {\n      SectionRenderDispatcher.RenderSection section = this.viewArea.getRenderSection(node);\n      if (section == null) return false;\n      SectionMesh mesh = section.getSectionMesh();\n      return mesh != CompiledSectionMesh.UNCOMPILED && mesh != CompiledSectionMesh.EMPTY\n         && section.visibleStamp != this.visibleStamp;\n   };\n\n   public void markVisibleSections() {\n      int stamp = ++this.visibleStamp;\n      ",{"copy":38411,"length":75},"section.visibleStamp = stamp;\n   }\n\n   public boolean isEntityOccluded(net.minecraft.world.phys.AABB bounds) {\n      return this.viewArea != null && this.visibleStamp != 0\n         && Web263Culling.allSectionsHidden(bounds, this.hiddenEntitySection);\n   }\n   private final BlockPos.MutableBlockPos particleSectionPos = new BlockPos.MutableBlockPos();\n\n   public boolean isOccludedForParticles(final double x, final double y, final double z",{"copy":62806,"length":35}," || this.visibleStamp == 0",{"copy":62841,"length":34},"\n      ",{"copy":62892,"length":38},"section",{"copy":62943,"length":36},"this.particleSectionPos.set(Mth.floor(x), Mth.floor(y), Mth.floor(z)));\n      return section != null && section.visibleStamp != this.visibleStamp;\n   }\n\n"]},{"start":64791,"delete":0,"insert":["      if (!this.hasTemporaryGizmos && this.renderThreadGizmos.getGizmos().isEmpty()) {\n         this.finalizedGizmos = this.emptyGizmos;\n         return;\n      }\n\n      this.hasTemporaryGizmos = false;\n      List<GizmoInstance> drained =",{"copy":65039,"length":38},";\n      if (drained.isEmpty()) {\n         this.finalizedGizmos = this.emptyGizmos;\n         return;\n      }\n\n"]},{"start":65040,"delete":37,"insert":"drained"},{"start":65437,"delete":0,"insert":"if (!mainThreadGizmos.isEmpty()) {\n         this.hasTemporaryGizmos = true;\n         "},{"start":65498,"delete":0,"insert":"\n      }"},{"start":65508,"delete":7,"insert":"public"}]
+[
+  {
+    "start": 5612,
+    "delete": 0,
+    "insert": "import net.minecraft.util.Mth;\n"
+  },
+  {
+    "start": 6374,
+    "delete": 19,
+    "insert": "8"
+  },
+  {
+    "start": 8482,
+    "delete": 5,
+    "insert": "@Nullable"
+  },
+  {
+    "start": 8821,
+    "delete": 0,
+    "insert": [
+      "   private final Vector4f mainClearColorScratch = new Vector4f();\n   private final Matrix4f terrainMatrixScratch = new Matrix4f();\n   private final TranslucencyPointOfView web263ResortPov",
+      {
+        "copy": 60497,
+        "length": 33
+      },
+      "\n"
+    ]
+  },
+  {
+    "start": 8980,
+    "delete": 0,
+    "insert": "   private boolean web263OcclusionUpdatedInExtract;\n"
+  },
+  {
+    "start": 9067,
+    "delete": 0,
+    "insert": "   private float[] simdFogMinX = new float[0];\n   private float[] simdFogMinY = new float[0];\n   private float[] simdFogMinZ = new float[0];\n   private float[] simdFogMaxX = new float[0];\n   private float[] simdFogMaxY = new float[0];\n   private float[] simdFogMaxZ = new float[0];\n   private int[] simdFogMask = new int[0];\n"
+  },
+  {
+    "start": 9077,
+    "delete": 0,
+    "insert": " boolean hasTemporaryGizmos;\n   private final"
+  },
+  {
+    "start": 9108,
+    "delete": 9,
+    "insert": "empty"
+  },
+  {
+    "start": 9222,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 9066,
+        "length": 60
+      },
+      "this.emptyGizmos;"
+    ]
+  },
+  {
+    "start": 10263,
+    "delete": 114,
+    "insert": ""
+  },
+  {
+    "start": 10928,
+    "delete": 0,
+    "insert": [
+      "   }\n\n   private",
+      {
+        "copy": 21341,
+        "length": 32
+      },
+      "() {\n      return",
+      {
+        "copy": 21375,
+        "length": 44
+      },
+      " && !net.minecraft.client.web.shaderpack.ShaderPacks.isActive();\n   }\n\n   private RenderTarget getOrCreateEntityOutlineTarget",
+      {
+        "copy": 57705,
+        "length": 44
+      },
+      "if (this.entityOutlineTarget == null) {\n         ",
+      {
+        "copy": 10269,
+        "length": 114
+      },
+      "} else if (this.entityOutlineTarget.width != width || this.entityOutlineTarget.height != height) {\n         ",
+      {
+        "copy": 57796,
+        "length": 47
+      },
+      "\n      }\n\n      return this.entityOutlineTarget;\n"
+    ]
+  },
+  {
+    "start": 11300,
+    "delete": 0,
+    "insert": "try {\n         "
+  },
+  {
+    "start": 11354,
+    "delete": 0,
+    "insert": [
+      "   ",
+      {
+        "copy": 21342,
+        "length": 39
+      },
+      {
+        "copy": 21394,
+        "length": 33
+      },
+      "   "
+    ]
+  },
+  {
+    "start": 11404,
+    "delete": 0,
+    "insert": "useImprovedTransparency);\n         "
+  },
+  {
+    "start": 11409,
+    "delete": 39,
+    "insert": [
+      {
+        "copy": 12008,
+        "length": 35
+      },
+      "false"
+    ]
+  },
+  {
+    "start": 11456,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 11497,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 11539,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 11610,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 11645,
+    "delete": 0,
+    "insert": [
+      "   ",
+      {
+        "copy": 11877,
+        "length": 53
+      },
+      "null;\n         try {\n            "
+    ]
+  },
+  {
+    "start": 11703,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 11745,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 11834,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 11877,
+    "delete": 37,
+    "insert": "     "
+  },
+  {
+    "start": 12003,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12129,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12172,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12229,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12323,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12391,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12461,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12550,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12638,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12647,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12806,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12810,
+    "delete": 18,
+    "insert": ""
+  },
+  {
+    "start": 12851,
+    "delete": 2,
+    "insert": ""
+  },
+  {
+    "start": 12866,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 12959,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13073,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13085,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13188,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13287,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13381,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13393,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13515,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13610,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13716,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13729,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13800,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13914,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 13926,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14018,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14124,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14136,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14235,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14338,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14456,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14465,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14541,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14659,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14668,
+    "delete": 0,
+    "insert": [
+      "      ",
+      {
+        "copy": 16147,
+        "length": 44
+      },
+      "\n               "
+    ]
+  },
+  {
+    "start": 14741,
+    "delete": 19,
+    "insert": "getOrCreateEntityOutlineTarget(screenWidth, screenHeight)"
+  },
+  {
+    "start": 14769,
+    "delete": 0,
+    "insert": "      }\n\n            "
+  },
+  {
+    "start": 14821,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14892,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14921,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 14941,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15023,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15063,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15102,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15149,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15184,
+    "delete": 13,
+    "insert": "\n                        this.mainClearColorScratch.set"
+  },
+  {
+    "start": 15240,
+    "delete": 1,
+    "insert": "\n                        "
+  },
+  {
+    "start": 15276,
+    "delete": 1,
+    "insert": "\n                        "
+  },
+  {
+    "start": 15296,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15308,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15316,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15325,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15357,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15412,
+    "delete": 0,
+    "insert": [
+      "      }\n\n            ",
+      {
+        "copy": 17137,
+        "length": 43
+      },
+      "\n               ",
+      {
+        "copy": 17190,
+        "length": 36
+      },
+      "\n               ",
+      {
+        "copy": 17236,
+        "length": 38
+      },
+      "\n\n               ",
+      {
+        "copy": 17285,
+        "length": 5
+      },
+      "\n                  ",
+      {
+        "copy": 17303,
+        "length": 57
+      },
+      "\n               ",
+      {
+        "copy": 17370,
+        "length": 11
+      },
+      "\n                  ",
+      {
+        "copy": 17394,
+        "length": 38
+      },
+      "\n               ",
+      {
+        "copy": 17442,
+        "length": 1
+      },
+      "\n\n               ",
+      {
+        "copy": 17454,
+        "length": 15
+      },
+      "\n            "
+    ]
+  },
+  {
+    "start": 15421,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15447,
+    "delete": 12,
+    "insert": "this.terrainMatrixScratch.set"
+  },
+  {
+    "start": 15527,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15598,
+    "delete": 0,
+    "insert": "\n              "
+  },
+  {
+    "start": 15660,
+    "delete": 0,
+    "insert": "\n               && !net.minecraft.client.web.shaderpack.ShaderPacks.isActive()"
+  },
+  {
+    "start": 15668,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15719,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15773,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15846,
+    "delete": 18,
+    "insert": ""
+  },
+  {
+    "start": 15887,
+    "delete": 2,
+    "insert": ""
+  },
+  {
+    "start": 15898,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15916,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 15981,
+    "delete": 18,
+    "insert": ""
+  },
+  {
+    "start": 16022,
+    "delete": 2,
+    "insert": ""
+  },
+  {
+    "start": 16033,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16042,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16147,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16201,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16339,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16385,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16473,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16481,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16490,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16535,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16595,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16609,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16662,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16674,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16693,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16756,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16786,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16798,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16817,
+    "delete": 0,
+    "insert": "      "
+  },
+  {
+    "start": 16866,
+    "delete": 0,
+    "insert": [
+      "\n      ",
+      {
+        "copy": 16867,
+        "length": 37
+      },
+      "      }\n            });\n            profiler.pop",
+      {
+        "copy": 17357,
+        "length": 42
+      },
+      "targets.clear();\n      ",
+      {
+        "copy": 16966,
+        "length": 40
+      },
+      "      if (featureFrame != null) {\n         ",
+      {
+        "copy": 17000,
+        "length": 34
+      },
+      "      }\n         }\n",
+      {
+        "copy": 50374,
+        "length": 38
+      },
+      "s\");\n   ",
+      {
+        "copy": 17068,
+        "length": 47
+      },
+      "   profiler.pop();\n         if (!this.web263OcclusionUpdatedInExtract) {\n            profiler.push(\"updateSectionOcclusion\");\n   ",
+      {
+        "copy": 59899,
+        "length": 35
+      },
+      ".update(",
+      {
+        "copy": 17566,
+        "length": 87
+      },
+      ");"
+    ]
+  },
+  {
+    "start": 16912,
+    "delete": 620,
+    "insert": "   "
+  },
+  {
+    "start": 17537,
+    "delete": 41,
+    "insert": "web263OcclusionUpdatedInExtract"
+  },
+  {
+    "start": 17579,
+    "delete": 28,
+    "insert": "="
+  },
+  {
+    "start": 17608,
+    "delete": 68,
+    "insert": "false"
+  },
+  {
+    "start": 17684,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 17784,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 17838,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 17935,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 18056,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 18092,
+    "delete": 0,
+    "insert": "\n            }"
+  },
+  {
+    "start": 18111,
+    "delete": 2,
+    "insert": " finally {\n   "
+  },
+  {
+    "start": 18157,
+    "delete": 0,
+    "insert": "\n      }"
+  },
+  {
+    "start": 19627,
+    "delete": 0,
+    "insert": [
+      "   }\n\n   public void web263UpdateOcclusionInExtract(final CameraRenderState camera, final int fov",
+      {
+        "copy": 62190,
+        "length": 35
+      },
+      " && ",
+      {
+        "copy": 62323,
+        "length": 54
+      },
+      "repositionCamera(camera);\n         this.sectionOcclusionGraph.update(camera, fov, this.levelRenderState.chunkLoadingRenderState);\n         this.web263OcclusionUpdatedInExtract = true;\n      }\n"
+    ]
+  },
+  {
+    "start": 21381,
+    "delete": 13,
+    "insert": ""
+  },
+  {
+    "start": 23063,
+    "delete": 0,
+    "insert": "boolean useFastTerrain = Web263RenderFlags.FAST_TERRAIN_SHADER && !com.mojang.blaze3d.webgpu.WebGpuBackend.live();\n               "
+  },
+  {
+    "start": 23162,
+    "delete": 0,
+    "insert": "                     && !useFastTerrain\n"
+  },
+  {
+    "start": 23248,
+    "delete": 0,
+    "insert": "               FilterMode magFilter = useFastTerrain ? FilterMode.NEAREST : FilterMode.LINEAR;\n"
+  },
+  {
+    "start": 23441,
+    "delete": 17,
+    "insert": "magFilter"
+  },
+  {
+    "start": 23751,
+    "delete": 0,
+    "insert": "try {\n               "
+  },
+  {
+    "start": 23823,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 23865,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 23905,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 23976,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24031,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24070,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24125,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24166,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24186,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24247,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24330,
+    "delete": 0,
+    "insert": "   "
+  },
+  {
+    "start": 24380,
+    "delete": 0,
+    "insert": [
+      "   if (!",
+      {
+        "copy": 27596,
+        "length": 44
+      },
+      ") {\n                        net.minecraft.client.web.shaderpack.ShaderPacks.beforeTranslucent();\n   ",
+      {
+        "copy": 41771,
+        "length": 35
+      },
+      "      "
+    ]
+  },
+  {
+    "start": 24461,
+    "delete": 0,
+    "insert": "\n                  }"
+  },
+  {
+    "start": 24478,
+    "delete": 0,
+    "insert": [
+      "\n   ",
+      {
+        "copy": 17361,
+        "length": 33
+      },
+      "   net.minecraft.client.web.shaderpack.ShaderPacks.endWorldPass();"
+    ]
+  },
+  {
+    "start": 37347,
+    "delete": 0,
+    "insert": " && this.entityOutlineTarget != null"
+  },
+  {
+    "start": 38411,
+    "delete": 3,
+    "insert": "int"
+  },
+  {
+    "start": 38415,
+    "delete": 38,
+    "insert": "visibleCount"
+  },
+  {
+    "start": 38454,
+    "delete": 9,
+    "insert": "="
+  },
+  {
+    "start": 38484,
+    "delete": 0,
+    "insert": ".size("
+  },
+  {
+    "start": 38485,
+    "delete": 0,
+    "insert": ";\n            boolean"
+  },
+  {
+    "start": 38486,
+    "delete": 1,
+    "insert": [
+      "fogCullEnabled = Web263RenderFlags.FOG_CULLING\n               &&",
+      {
+        "copy": 3923,
+        "length": 32
+      },
+      "og.FogRenderer.isFogEnabled()\n               &&",
+      {
+        "copy": 28272,
+        "length": 41
+      },
+      "fogData != null\n               &&",
+      {
+        "copy": 28272,
+        "length": 41
+      },
+      "fogData.color.w >= 1.0F;\n            boolean usedSimdFogCull = false;\n            if (fogCullEnabled && visibleCount >= 16) {\n               Web263Culling.BatchCullHook hook = Web263Culling.simdCullHook;\n               if (hook != null) {\n                 ",
+      {
+        "copy": 3923,
+        "length": 32
+      },
+      "og.FogData fog",
+      {
+        "copy": 36936,
+        "length": 43
+      },
+      "fogData;\n                  double spherical = Math.max(fog.environmentalStart, fog.environmentalEnd);\n                  double cylindrical = Math.max(fog.renderDistanceStart, fog.renderDistanceEnd);\n                  float sphRadSq = spherical > 0.0 ? (float)(spherical * spherical) : 0.0F;\n                  float cylRadSq = cylindrical > 0.0 ? (float)(cylindrical * cylindrical) : 0.0F;\n                  if (sphRadSq > 0.0F || cylRadSq > 0.0F) {\n                     if (this.simdFogMinX.length < visible",
+      {
+        "copy": 39988,
+        "length": 33
+      },
+      "int cap = Math.max(256, Integer.highestOneBit(visibleCount - 1) << 1);\n                        this.simdFogMinX = new float[cap];\n                        this.simdFogMinY = new float[cap];\n                        this.simdFogMinZ = new float[cap];\n                        this.simdFogMaxX = new float[cap];\n                        this.simdFogMaxY = new float[cap];\n                        this.simdFogMaxZ = new float[cap];\n   ",
+      {
+        "copy": 41771,
+        "length": 35
+      },
+      "      int maskWords = (visibleCount + 31) >>> 5;\n                     if (this.simdFogMask.length < maskWords) {\n                        this.simdFogMask = new int[Math.max(16, maskWords)];\n   ",
+      {
+        "copy": 41771,
+        "length": 35
+      },
+      "      Vec3 cam",
+      {
+        "copy": 36936,
+        "length": 54
+      },
+      "               double cx = cam.x;\n                     double cy = cam.y;\n                     double cz = cam.z;\n                     for (int i = 0; i < visibleCount; i++) {\n                        net.minecraft.world.phys.AABB box = this.visibleSections.get(i).getBoundingBox();\n                        this.simdFogMinX[i] = (float)(box.minX - cx - 1.0);\n                        this.simdFogMinY[i] = (float)(box.minY - cy - 1.0);\n                        this.simdFogMinZ[i] = (float)(box.minZ - cz - 1.0);\n                        this.simdFogMaxX[i] = (float)(box.maxX - cx + 1.0);\n                        this.simdFogMaxY[i] = (float)(box.maxY - cy + 1.0);\n                        this.simdFogMaxZ[i] = (float)(box.maxZ - cz + 1.0);\n   ",
+      {
+        "copy": 41771,
+        "length": 35
+      },
+      "      usedSimdFogCull = hook.cullAabbsFrustumFog(\n                        null, 0.0F, 0.0F, 0.0F, sphRadSq, cylRadSq,\n                        this.simdFogMinX, this.simdFogMinY, this.simdFogMinZ,\n                        this.simdFogMaxX, this.simdFogMaxY, this.simdFogMaxZ,\n                        visibleCount, this.simdFogMask\n",
+      {
+        "copy": 39404,
+        "length": 42
+      },
+      "} else {\n                     fogCullEnabled = false",
+      {
+        "copy": 41769,
+        "length": 53
+      },
+      "\n            for (int si = 0; si < visibleCount; si++) {\n               ",
+      {
+        "copy": 60546,
+        "length": 46
+      },
+      "= this.visibleSections.get(si);\n               if (usedSimdFogCull) {\n                  if ((this.simdFogMask[si >>> 5] & (1 << (si & 31))) == 0) {\n                     Web263Culling.fogSections++;\n                     continue",
+      {
+        "copy": 41769,
+        "length": 38
+      },
+      " else if (fogCullEnabled\n                  && Web263Culling.beyondFog(section.getBoundingBox(),\n                     ",
+      {
+        "copy": 28273,
+        "length": 44
+      },
+      {
+        "copy": 28722,
+        "length": 41
+      },
+      "fogData)) {\n                  Web263Culling.fogSections++;\n                  continue;\n               }"
+    ]
+  },
+  {
+    "start": 38554,
+    "delete": 0,
+    "insert": "\n               if (sectionMesh instanceof CompiledSectionMesh compiled) compiled.markAnimationsActive();"
+  },
+  {
+    "start": 40700,
+    "delete": 0,
+    "insert": [
+      "                     if (Web263RenderFlags.SODIUM_CHUNKS && indexBuffer == null && Web263RenderFlags.canRebaseQuads(baseVertex)) {\n                        firstIndex = Web263RenderFlags.quadFirstIndex(baseVertex);\n                        baseVertex = 0;\n                        if (firstIndex + ",
+      {
+        "copy": 39956,
+        "length": 88
+      },
+      "firstIndex + ",
+      {
+        "copy": 40044,
+        "length": 44
+      },
+      "\n                     }\n\n"
+    ]
+  },
+  {
+    "start": 42633,
+    "delete": 1533,
+    "insert": ""
+  },
+  {
+    "start": 44745,
+    "delete": 12,
+    "insert": "drawGroups, respectTranslucentOrder"
+  },
+  {
+    "start": 51216,
+    "delete": 0,
+    "insert": "List<EntityRenderState> entityRenderStates = levelRenderState.entityRenderStates;\n\n      "
+  },
+  {
+    "start": 51221,
+    "delete": 0,
+    "insert": "int i = 0, size = entityRenderStates.size(); i < size; i++) {\n         "
+  },
+  {
+    "start": 51245,
+    "delete": 1,
+    "insert": "="
+  },
+  {
+    "start": 51247,
+    "delete": 16,
+    "insert": "entityRenderStates"
+  },
+  {
+    "start": 51264,
+    "delete": 18,
+    "insert": "get(i"
+  },
+  {
+    "start": 51283,
+    "delete": 2,
+    "insert": ";"
+  },
+  {
+    "start": 51783,
+    "delete": 0,
+    "insert": "List<BlockEntityRenderState> blockEntityRenderStates = levelRenderState.blockEntityRenderStates;\n\n      "
+  },
+  {
+    "start": 51788,
+    "delete": 0,
+    "insert": "int i = 0, size = blockEntityRenderStates.size(); i < size; i++) {\n         "
+  },
+  {
+    "start": 51823,
+    "delete": 1,
+    "insert": "="
+  },
+  {
+    "start": 51825,
+    "delete": 16,
+    "insert": "blockEntityRenderStates"
+  },
+  {
+    "start": 51842,
+    "delete": 23,
+    "insert": "get(i"
+  },
+  {
+    "start": 51866,
+    "delete": 2,
+    "insert": ";"
+  },
+  {
+    "start": 55769,
+    "delete": 13,
+    "insert": ""
+  },
+  {
+    "start": 57796,
+    "delete": 0,
+    "insert": "if (this.entityOutlineTarget != null) {\n         "
+  },
+  {
+    "start": 57821,
+    "delete": 6,
+    "insert": "destroyBuffers"
+  },
+  {
+    "start": 57828,
+    "delete": 13,
+    "insert": ""
+  },
+  {
+    "start": 57843,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 58428,
+        "length": 34
+      },
+      " = null;\n      }"
+    ]
+  },
+  {
+    "start": 58000,
+    "delete": 0,
+    "insert": "if (this.entityOutlineTarget != null) {\n         "
+  },
+  {
+    "start": 58042,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 58428,
+        "length": 34
+      },
+      " = null;\n      }"
+    ]
+  },
+  {
+    "start": 58425,
+    "delete": 0,
+    "insert": " && this.entityOutlineTarget != null"
+  },
+  {
+    "start": 59210,
+    "delete": 0,
+    "insert": ".forName(\"sectionCompile\")"
+  },
+  {
+    "start": 59211,
+    "delete": 1,
+    "insert": "\n            "
+  },
+  {
+    "start": 59231,
+    "delete": 1,
+    "insert": "\n            "
+  },
+  {
+    "start": 59248,
+    "delete": 1,
+    "insert": "\n            "
+  },
+  {
+    "start": 60289,
+    "delete": 0,
+    "insert": " && !this.useImprovedTransparency()"
+  },
+  {
+    "start": 60302,
+    "delete": 8,
+    "insert": "int"
+  },
+  {
+    "start": 60314,
+    "delete": 11,
+    "insert": "X"
+  },
+  {
+    "start": 60328,
+    "delete": 8,
+    "insert": "Mth"
+  },
+  {
+    "start": 60337,
+    "delete": 10,
+    "insert": "floor"
+  },
+  {
+    "start": 60357,
+    "delete": 0,
+    "insert": ".x);\n         int camY = Mth.floor(cameraPos.y);\n         int camZ = Mth.floor(cameraPos.z"
+  },
+  {
+    "start": 60395,
+    "delete": 23,
+    "insert": ""
+  },
+  {
+    "start": 60450,
+    "delete": 0,
+    "insert": [
+      " == null\n            ||",
+      {
+        "copy": 61184,
+        "length": 33
+      },
+      ".getX("
+    ]
+  },
+  {
+    "start": 60451,
+    "delete": 0,
+    "insert": [
+      " != camX\n            ||",
+      {
+        "copy": 61184,
+        "length": 33
+      },
+      ".getY() != camY\n            ||",
+      {
+        "copy": 61184,
+        "length": 33
+      },
+      ".getZ() != camZ"
+    ]
+  },
+  {
+    "start": 60500,
+    "delete": 29,
+    "insert": "this.web263ResortPov"
+  },
+  {
+    "start": 61185,
+    "delete": 0,
+    "insert": "if (blockPosChanged) {\n            "
+  },
+  {
+    "start": 61220,
+    "delete": 14,
+    "insert": "new BlockPos(camX, camY, camZ)"
+  },
+  {
+    "start": 61235,
+    "delete": 0,
+    "insert": "\n         }"
+  },
+  {
+    "start": 61491,
+    "delete": 0,
+    "insert": [
+      "      if (this.useImprovedTransparency() || !",
+      {
+        "copy": 61884,
+        "length": 32
+      },
+      " || ",
+      {
+        "copy": 61831,
+        "length": 38
+      },
+      "()) {\n         return;\n      }\n\n"
+    ]
+  },
+  {
+    "start": 61764,
+    "delete": 1,
+    "insert": ""
+  },
+  {
+    "start": 61817,
+    "delete": 157,
+    "insert": ""
+  },
+  {
+    "start": 62552,
+    "delete": 0,
+    "insert": [
+      "      if (this.entityOutlineTarget != null",
+      {
+        "copy": 58425,
+        "length": 37
+      },
+      ".destroyBuffers();",
+      {
+        "copy": 58428,
+        "length": 34
+      },
+      " = null;\n      }\n"
+    ]
+  },
+  {
+    "start": 62707,
+    "delete": 0,
+    "insert": [
+      "   private int visibleStamp;\n   private final java.util.function.LongPredicate hiddenEntitySection = node -> {\n      SectionRenderDispatcher.RenderSection section = this.viewArea.getRenderSection(node);\n      if (section == null) return false;\n      SectionMesh mesh = section.getSectionMesh();\n      return mesh != CompiledSectionMesh.UNCOMPILED && mesh != CompiledSectionMesh.EMPTY\n         && section.visibleStamp != this.visibleStamp;\n   };\n\n   public void markVisibleSections() {\n      int stamp = ++this.visibleStamp;\n      ",
+      {
+        "copy": 38411,
+        "length": 75
+      },
+      "section.visibleStamp = stamp;\n   }\n\n   public boolean isEntityOccluded(net.minecraft.world.phys.AABB bounds) {\n      return this.viewArea != null && this.visibleStamp != 0\n         && Web263Culling.allSectionsHidden(bounds, this.hiddenEntitySection);\n   }\n   private final BlockPos.MutableBlockPos particleSectionPos = new BlockPos.MutableBlockPos();\n\n   public boolean isOccludedForParticles(final double x, final double y, final double z",
+      {
+        "copy": 62806,
+        "length": 35
+      },
+      " || this.visibleStamp == 0",
+      {
+        "copy": 62841,
+        "length": 34
+      },
+      "\n      ",
+      {
+        "copy": 62892,
+        "length": 38
+      },
+      "section",
+      {
+        "copy": 62943,
+        "length": 36
+      },
+      "this.particleSectionPos.set(Mth.floor(x), Mth.floor(y), Mth.floor(z)));\n      return section != null && section.visibleStamp != this.visibleStamp;\n   }\n\n"
+    ]
+  },
+  {
+    "start": 64791,
+    "delete": 0,
+    "insert": [
+      "      if (!this.hasTemporaryGizmos && this.renderThreadGizmos.getGizmos().isEmpty()) {\n         this.finalizedGizmos = this.emptyGizmos;\n         return;\n      }\n\n      this.hasTemporaryGizmos = false;\n      List<GizmoInstance> drained =",
+      {
+        "copy": 65039,
+        "length": 38
+      },
+      ";\n      if (drained.isEmpty()) {\n         this.finalizedGizmos = this.emptyGizmos;\n         return;\n      }\n\n"
+    ]
+  },
+  {
+    "start": 65040,
+    "delete": 37,
+    "insert": "drained"
+  },
+  {
+    "start": 65437,
+    "delete": 0,
+    "insert": "if (!mainThreadGizmos.isEmpty()) {\n         this.hasTemporaryGizmos = true;\n         "
+  },
+  {
+    "start": 65498,
+    "delete": 0,
+    "insert": "\n      }"
+  },
+  {
+    "start": 65508,
+    "delete": 7,
+    "insert": "public"
+  }
+]

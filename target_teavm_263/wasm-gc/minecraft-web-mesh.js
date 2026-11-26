@@ -15,18 +15,20 @@
 	var capMask = -1;
 	var capsParam = param("meshcaps");
 	if (capsParam === "cube") { capMask = 0; } else if (capsParam) { capMask = parseInt(capsParam, 16) | 0; }
-	var cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
-	var mem = (typeof navigator !== "undefined" && navigator.deviceMemory) || 0;
-	var isCrOS = typeof navigator !== "undefined" && /\bCrOS\b/.test(navigator.userAgent || "");
-	var lowEnd = cores <= 4 || (mem > 0 && mem <= 4) || isCrOS;
-	var defaultMeshWorkers = lowEnd ? 1 : 2;
-	var defaultMaxInflight = lowEnd ? 6 : 10;
-	var workerCount = Math.max(1, Math.min(4, parseInt(param("meshworkers") || String(defaultMeshWorkers), 10) || defaultMeshWorkers));
+	var nav = typeof navigator !== "undefined" ? navigator : null;
+	var cores = Math.max(1, Number(nav && nav.hardwareConcurrency) || 4);
+	var memGb = Number(nav && nav.deviceMemory) || 8;
+	var isCrOS = !!(nav && /\bCrOS\b/.test(nav.userAgent || ""));
+	var lowEnd = cores <= 4 || memGb <= 4 || isCrOS;
+	var defaultMeshWorkers = lowEnd ? 1 : Math.max(2, Math.min(8, memGb <= 4 ? 3 : Math.floor((cores - 2) / 2)));
+	var workerCount = Math.max(1, Math.min(12, parseInt(param("meshworkers") || String(defaultMeshWorkers), 10) || defaultMeshWorkers));
+	var defaultMaxInflight = Math.max(10, workerCount * 4);
 	var maxInflight = Math.max(1, parseInt(param("meshinflight") || String(defaultMaxInflight), 10) || defaultMaxInflight);
 	var killAfter = parseInt(param("meshkillafter") || "0", 10) || 0;
 
 	var workers = [], results = [], jobs = new Map(), references = new Map(), names = new Map();
 	var kernelCaps = 0, kernelCapsHalo2 = 0, engineHalo = 20, ready = 0, dead = 0, kernelTags = false;
+	var lastTagBuf = null;
 	var stats = {
 		submitted: 0, jobsPosted: 0, completed: 0, fallback: 0, stale: 0, declined: 0, errors: 0, parkedPeak: 0, resets: 0,
 		snapshotMicros: 0, publishMicros: 0, kernelMicros: 0, roundTripMs: 0, resultBytes: 0, jobBytes: 0, defBytes: 0,
@@ -70,8 +72,12 @@
 			var d = e.data;
 			if (d instanceof ArrayBuffer) { onResult(slot, d); return; }
 			if (d && d.ready) {
-				slot.ready = true; ready++;
 				kernelCaps = d.caps | 0; kernelCapsHalo2 = d.capsHalo2 | 0; kernelTags = !!d.tags;
+				if (lastTagBuf !== null && d.tags) {
+					var tagCopy = lastTagBuf.slice(0);
+					slot.w.postMessage(tagCopy, [tagCopy]);
+				}
+				slot.ready = true; ready++;
 				console.log("[minecraft-web] mesh worker " + index + " ready, caps 0x" + (kernelCaps >>> 0).toString(16) + (d.wasm ? " [wasm-simd]" : "") + (verify ? " (verify mode)" : ""));
 			} else if (d && d.names) {
 				for (var i = 0; i < d.names.length; i++) { names.set(d.names[i][0], d.names[i]); }
@@ -186,6 +192,16 @@
 			return caps | CAP_ACTIVE | (verify ? CAP_VERIFY : 0);
 		},
 		canTag: function () { return ready > 0 && kernelTags; },
+		setTags: function (bytes) {
+			ensureWorkers();
+			if (!bytes || !bytes.byteLength) { lastTagBuf = null; return; }
+			var buf = bytes.slice().buffer;
+			var h = buf.byteLength >= 8 ? new Int32Array(buf, 0, 2) : null;
+			lastTagBuf = (h && h[0] === 4 && h[1] !== 0) ? buf : null;
+			for (var i = 0; i < workers.length; i++) {
+				if (!workers[i].dead) { var copy = buf.slice(0); workers[i].w.postMessage(copy, [copy]); }
+			}
+		},
 		capacity: function () {
 			ensureWorkers();
 			if (verify) { return 1 << 20; }
@@ -202,7 +218,14 @@
 			if (kind !== 2) {
 				stats.defBytes += length;
 				for (i = 0; i < workers.length; i++) {
-					if (!workers[i].dead) { var copy = i === workers.length - 1 ? bytes : bytes.slice(0); workers[i].w.postMessage(copy, [copy]); }
+					if (!workers[i].dead) {
+						var copy = i === workers.length - 1 ? bytes : bytes.slice(0);
+						workers[i].w.postMessage(copy, [copy]);
+						if (kind === 3 && lastTagBuf !== null) {
+							var tagCopy = lastTagBuf.slice(0);
+							workers[i].w.postMessage(tagCopy, [tagCopy]);
+						}
+					}
 				}
 				return;
 			}

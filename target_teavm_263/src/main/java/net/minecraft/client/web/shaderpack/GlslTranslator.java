@@ -166,7 +166,7 @@ public final class GlslTranslator {
 	private static final Pattern CORE_UNIFORM_DECL = Pattern.compile(
 		"(?m)^[ \\t]*uniform\\s+(?:(?:highp|mediump|lowp)\\s+)?(vec3|vec4|mat3|mat4)\\s+"
 		+ "(chunkOffset|modelViewMatrix|modelViewMatrixInverse|projectionMatrix|projectionMatrixInverse|"
-		+ "modelViewProjectionMatrix|normalMatrix|textureMatrix|colorModulator)\\s*;");
+		+ "modelViewProjectionMatrix|normalMatrix|textureMatrix|colorModulator|iris_ColorModulator)\\s*;");
 	private static final Pattern IMAGE_DECL = Pattern.compile("(?m)^[ \\t]*(?:layout\\s*\\([^)]*\\)\\s*)?"
 		+ "(?:(?:writeonly|readonly|coherent|restrict|volatile|highp|mediump|lowp|uniform)\\s+)+([iu]?)image(?:1D|2D|3D|Cube|2DArray|Buffer|2DRect)\\w*\\s+(\\w+)\\s*;");
 	private static final Pattern IMAGE_CALL = Pattern.compile("\\b(imageStore|imageLoad|imageAtomic\\w+|imageSize)\\s*\\(\\s*(\\w+)");
@@ -221,12 +221,19 @@ public final class GlslTranslator {
 		+ "in vec3 iris_Position;\n"
 		+ "vec3 iris_chunkOffset() { return vec3(iris_ChunkPosition - iris_CameraBlockPos) + iris_CameraOffset; }\n";
 
+	// Exact std140 field order verified from assets/minecraft/shaders/include/dynamictransforms.glsl
+	private static final String DYNAMIC_TRANSFORMS_UBO =
+		"layout(std140) uniform iris_DynamicTransforms { mat4 iris_DynModelViewMat; mat4 iris_DynTextureMat; vec4 iris_DynColorModulator; vec3 iris_DynModelOffset; };\n";
+	private static final String DYN_NORMAL_MATRIX_FN =
+		"mat3 iris_dynNormalMatrix() { mat3 m = mat3(iris_DynModelViewMat); return abs(determinant(m)) > 1e-8 ? transpose(inverse(m)) : mat3(1.0); }\n";
+
 	private static final String ENTITY_VERTEX_DECLS =
-		"in vec3 iris_Position;\nin ivec2 iris_UV2i;\nin vec3 iris_Normal;\n"
+		DYNAMIC_TRANSFORMS_UBO
+		+ "in vec3 iris_Position;\nin ivec2 iris_UV2i;\nin vec3 iris_Normal;\n"
 		+ "vec4 iris_entityTangent() { float l = dot(iris_Normal, iris_Normal);\n"
 		+ "  vec3 n = l > 1e-8 ? iris_Normal * inversesqrt(l) : vec3(0.0, 1.0, 0.0);\n"
 		+ "  vec3 t = abs(n.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : normalize(cross(vec3(0.0, 1.0, 0.0), n));\n"
-		+ "  return vec4(t, 1.0); }\n";
+		+ "  return vec4(t, n.y < -0.9 ? -1.0 : 1.0); }\n";
 
 	private static final String BLOCK_TAG_DECLS =
 		"in ivec2 iris_UV2i;\n"
@@ -239,7 +246,7 @@ public final class GlslTranslator {
 		+ "  ivec4 b = ivec4(texelFetch(iris_BlockIdTable, ivec2(i & 255, i >> 8), 0) * 255.0 + 0.5);\n"
 		+ "  return float(b.r | (b.g << 8) | (b.b << 16)); }\n"
 		+ "vec4 iris_tangent() { vec3 n = iris_faceNormal();\n"
-		+ "  return vec4(abs(n.y) > 0.5 ? vec3(1.0, 0.0, 0.0) : abs(n.x) > 0.5 ? vec3(0.0, 0.0, -n.x) : vec3(n.z, 0.0, 0.0), 1.0); }\n";
+		+ "  return vec4(abs(n.y) > 0.5 ? vec3(1.0, 0.0, 0.0) : abs(n.x) > 0.5 ? vec3(0.0, 0.0, -n.x) : vec3(n.z, 0.0, 0.0), n.y < -0.5 ? -1.0 : 1.0); }\n";
 
 	public static Output translate(final String code, final boolean vertex, final int version) {
 		return translate(code, vertex, version, false);
@@ -275,8 +282,8 @@ public final class GlslTranslator {
 		if (gbuffers) {
 			if (vertex) {
 				if (entity) {
-					decls.append(ENTITY_VERTEX_DECLS);
-					s = replaceIfPresent(s, "gl_Vertex", "vec4(iris_Position, 1.0)");
+					ensureDecl(decls, ENTITY_VERTEX_DECLS);
+					s = replaceIfPresent(s, "gl_Vertex", "vec4(iris_Position + iris_DynModelOffset, 1.0)");
 					s = replaceIfPresent(s, "gl_MultiTexCoord1", "vec4(vec2(iris_UV2i), 0.0, 1.0)");
 					s = replaceIfPresent(s, "gl_MultiTexCoord2", "vec4(vec2(iris_UV2i), 0.0, 1.0)");
 				} else {
@@ -299,46 +306,82 @@ public final class GlslTranslator {
 					wrapFragDepth = true;
 				}
 			}
-			// World matrices (with pre-multiplied iris_gbModelViewProjection for MVP and ftransform)
-			s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverseTranspose",
-				"transpose(iris_gbModelViewInverse * iris_gbProjectionInverse)", decls,
-				"uniform mat4 iris_gbModelViewInverse;\nuniform mat4 iris_gbProjectionInverse;\n");
-			s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverse",
-				"(iris_gbModelViewInverse * iris_gbProjectionInverse)", decls,
-				"uniform mat4 iris_gbModelViewInverse;\nuniform mat4 iris_gbProjectionInverse;\n");
-			s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixTranspose",
-				"transpose(iris_gbModelViewProjection)", decls,
-				"uniform mat4 iris_gbModelViewProjection;\n");
-			s = replaceIfPresent(s, "gl_ModelViewProjectionMatrix",
-				"iris_gbModelViewProjection", decls,
-				"uniform mat4 iris_gbModelViewProjection;\n");
-			s = replaceIfPresent(s, "gl_ModelViewMatrixInverseTranspose",
-				"transpose(iris_gbModelViewInverse)", decls, "uniform mat4 iris_gbModelViewInverse;\n");
-			s = replaceIfPresent(s, "gl_ProjectionMatrixInverseTranspose",
-				"transpose(iris_gbProjectionInverse)", decls, "uniform mat4 iris_gbProjectionInverse;\n");
-			s = replaceIfPresent(s, "gl_ModelViewMatrixInverse",
-				"iris_gbModelViewInverse", decls, "uniform mat4 iris_gbModelViewInverse;\n");
-			s = replaceIfPresent(s, "gl_ProjectionMatrixInverse",
-				"iris_gbProjectionInverse", decls, "uniform mat4 iris_gbProjectionInverse;\n");
-			s = replaceIfPresent(s, "gl_ModelViewMatrixTranspose",
-				"transpose(iris_gbModelView)", decls, "uniform mat4 iris_gbModelView;\n");
-			s = replaceIfPresent(s, "gl_ProjectionMatrixTranspose",
-				"transpose(iris_gbProjection)", decls, "uniform mat4 iris_gbProjection;\n");
-			s = replaceIfPresent(s, "gl_ModelViewMatrix", "iris_gbModelView", decls, "uniform mat4 iris_gbModelView;\n");
-			s = replaceIfPresent(s, "gl_ProjectionMatrix", "iris_gbProjection", decls, "uniform mat4 iris_gbProjection;\n");
-			s = replaceIfPresent(s, "gl_NormalMatrix", "iris_gbNormalMatrix", decls, "uniform mat3 iris_gbNormalMatrix;\n");
-			if (vertex && s.contains("ftransform")) {
-				s = FTRANSFORM.matcher(s).replaceAll(entity
-					? "(iris_gbModelViewProjection * vec4(iris_Position, 1.0))"
-					: "(iris_gbModelViewProjection * vec4(iris_Position + iris_chunkOffset(), 1.0))");
-				ensureDecl(decls, "uniform mat4 iris_gbModelViewProjection;\n");
+			if (entity) {
+				// Per-draw DynamicTransforms UBO for entities, block entities, sky, particles, glint
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverseTranspose",
+					"transpose(inverse(iris_DynModelViewMat) * iris_gbProjectionInverse)", decls,
+					DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverse",
+					"(inverse(iris_DynModelViewMat) * iris_gbProjectionInverse)", decls,
+					DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixTranspose",
+					"transpose(iris_gbProjection * iris_DynModelViewMat)", decls,
+					DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrix",
+					"(iris_gbProjection * iris_DynModelViewMat)", decls,
+					DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixInverseTranspose",
+					"transpose(inverse(iris_DynModelViewMat))", decls, DYNAMIC_TRANSFORMS_UBO);
+				s = replaceIfPresent(s, "gl_ProjectionMatrixInverseTranspose",
+					"transpose(iris_gbProjectionInverse)", decls, "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixInverse",
+					"inverse(iris_DynModelViewMat)", decls, DYNAMIC_TRANSFORMS_UBO);
+				s = replaceIfPresent(s, "gl_ProjectionMatrixInverse",
+					"iris_gbProjectionInverse", decls, "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixTranspose",
+					"transpose(iris_DynModelViewMat)", decls, DYNAMIC_TRANSFORMS_UBO);
+				s = replaceIfPresent(s, "gl_ProjectionMatrixTranspose",
+					"transpose(iris_gbProjection)", decls, "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrix", "iris_DynModelViewMat", decls, DYNAMIC_TRANSFORMS_UBO);
+				s = replaceIfPresent(s, "gl_ProjectionMatrix", "iris_gbProjection", decls, "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_NormalMatrix", "iris_dynNormalMatrix()", decls,
+					DYNAMIC_TRANSFORMS_UBO + DYN_NORMAL_MATRIX_FN);
+				s = replaceIfPresent(s, "iris_ColorModulator", "iris_DynColorModulator", decls, DYNAMIC_TRANSFORMS_UBO);
+				if (vertex && s.contains("ftransform")) {
+					s = FTRANSFORM.matcher(s).replaceAll(
+						"(iris_gbProjection * iris_DynModelViewMat * vec4(iris_Position + iris_DynModelOffset, 1.0))");
+					ensureDecl(decls, DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjection;\n");
+				}
+			} else {
+				// World matrices (with pre-multiplied iris_gbModelViewProjection for MVP and ftransform)
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverseTranspose",
+					"transpose(iris_gbModelViewInverse * iris_gbProjectionInverse)", decls,
+					"uniform mat4 iris_gbModelViewInverse;\nuniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixInverse",
+					"(iris_gbModelViewInverse * iris_gbProjectionInverse)", decls,
+					"uniform mat4 iris_gbModelViewInverse;\nuniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrixTranspose",
+					"transpose(iris_gbModelViewProjection)", decls,
+					"uniform mat4 iris_gbModelViewProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewProjectionMatrix",
+					"iris_gbModelViewProjection", decls,
+					"uniform mat4 iris_gbModelViewProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixInverseTranspose",
+					"transpose(iris_gbModelViewInverse)", decls, "uniform mat4 iris_gbModelViewInverse;\n");
+				s = replaceIfPresent(s, "gl_ProjectionMatrixInverseTranspose",
+					"transpose(iris_gbProjectionInverse)", decls, "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixInverse",
+					"iris_gbModelViewInverse", decls, "uniform mat4 iris_gbModelViewInverse;\n");
+				s = replaceIfPresent(s, "gl_ProjectionMatrixInverse",
+					"iris_gbProjectionInverse", decls, "uniform mat4 iris_gbProjectionInverse;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrixTranspose",
+					"transpose(iris_gbModelView)", decls, "uniform mat4 iris_gbModelView;\n");
+				s = replaceIfPresent(s, "gl_ProjectionMatrixTranspose",
+					"transpose(iris_gbProjection)", decls, "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_ModelViewMatrix", "iris_gbModelView", decls, "uniform mat4 iris_gbModelView;\n");
+				s = replaceIfPresent(s, "gl_ProjectionMatrix", "iris_gbProjection", decls, "uniform mat4 iris_gbProjection;\n");
+				s = replaceIfPresent(s, "gl_NormalMatrix", "iris_gbNormalMatrix", decls, "uniform mat3 iris_gbNormalMatrix;\n");
+				if (vertex && s.contains("ftransform")) {
+					s = FTRANSFORM.matcher(s).replaceAll("(iris_gbModelViewProjection * vec4(iris_Position + iris_chunkOffset(), 1.0))");
+					ensureDecl(decls, "uniform mat4 iris_gbModelViewProjection;\n");
+				}
 			}
 		}
 
 		if (vertex) {
 			s = rewriteVertexInputs(s, gbuffers, entity, decls, out);
 		}
-		s = fixedFunction(s, vertex, decls);
+		s = fixedFunction(s, vertex, gbuffers, entity, decls);
 		StringBuilder fragInit = new StringBuilder();
 		if (!vertex) {
 			s = fragmentOutputs(s, out, decls, fragInit);
@@ -730,14 +773,18 @@ public final class GlslTranslator {
 					}
 					break;
 				case "modelViewMatrix":
-					if (gbuffers) {
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "modelViewMatrix", "iris_DynModelViewMat", decls, DYNAMIC_TRANSFORMS_UBO);
+					} else if (gbuffers) {
 						s = replaceIfPresent(s, "modelViewMatrix", "iris_gbModelView", decls, "uniform mat4 iris_gbModelView;\n");
 					} else {
 						s = replaceIfPresent(s, "modelViewMatrix", "iris_ModelViewMatrix", decls, "uniform mat4 iris_ModelViewMatrix;\n");
 					}
 					break;
 				case "modelViewMatrixInverse":
-					if (gbuffers) {
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "modelViewMatrixInverse", "inverse(iris_DynModelViewMat)", decls, DYNAMIC_TRANSFORMS_UBO);
+					} else if (gbuffers) {
 						s = replaceIfPresent(s, "modelViewMatrixInverse", "iris_gbModelViewInverse", decls, "uniform mat4 iris_gbModelViewInverse;\n");
 					} else {
 						s = replaceIfPresent(s, "modelViewMatrixInverse", "iris_ModelViewMatrixInverse", decls, "uniform mat4 iris_ModelViewMatrixInverse;\n");
@@ -758,7 +805,10 @@ public final class GlslTranslator {
 					}
 					break;
 				case "modelViewProjectionMatrix":
-					if (gbuffers) {
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "modelViewProjectionMatrix", "(iris_gbProjection * iris_DynModelViewMat)",
+							decls, DYNAMIC_TRANSFORMS_UBO + "uniform mat4 iris_gbProjection;\n");
+					} else if (gbuffers) {
 						s = replaceIfPresent(s, "modelViewProjectionMatrix", "iris_gbModelViewProjection", decls, "uniform mat4 iris_gbModelViewProjection;\n");
 					} else {
 						s = replaceIfPresent(s, "modelViewProjectionMatrix", "(iris_ProjectionMatrix * iris_ModelViewMatrix)",
@@ -766,17 +816,34 @@ public final class GlslTranslator {
 					}
 					break;
 				case "normalMatrix":
-					if (gbuffers) {
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "normalMatrix", "iris_dynNormalMatrix()", decls, DYNAMIC_TRANSFORMS_UBO + DYN_NORMAL_MATRIX_FN);
+					} else if (gbuffers) {
 						s = replaceIfPresent(s, "normalMatrix", "iris_gbNormalMatrix", decls, "uniform mat3 iris_gbNormalMatrix;\n");
 					} else {
 						s = replaceIfPresent(s, "normalMatrix", "iris_NormalMatrix", decls, "uniform mat3 iris_NormalMatrix;\n");
 					}
 					break;
 				case "textureMatrix":
-					s = replaceIfPresent(s, "textureMatrix", "iris_TextureMatrix0", decls, "uniform mat4 iris_TextureMatrix0;\n");
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "textureMatrix", "iris_DynTextureMat", decls, DYNAMIC_TRANSFORMS_UBO);
+					} else {
+						s = replaceIfPresent(s, "textureMatrix", "iris_TextureMatrix0", decls, "uniform mat4 iris_TextureMatrix0;\n");
+					}
 					break;
 				case "colorModulator":
-					s = replaceIfPresent(s, "colorModulator", "iris_ColorModulator", decls, "uniform vec4 iris_ColorModulator;\n");
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "colorModulator", "iris_DynColorModulator", decls, DYNAMIC_TRANSFORMS_UBO);
+					} else {
+						s = replaceIfPresent(s, "colorModulator", "iris_ColorModulator", decls, "uniform vec4 iris_ColorModulator;\n");
+					}
+					break;
+				case "iris_ColorModulator":
+					if (gbuffers && entity) {
+						s = replaceIfPresent(s, "iris_ColorModulator", "iris_DynColorModulator", decls, DYNAMIC_TRANSFORMS_UBO);
+					} else {
+						ensureDecl(decls, "uniform vec4 iris_ColorModulator;\n");
+					}
 					break;
 				default:
 					break;
@@ -873,6 +940,10 @@ public final class GlslTranslator {
 		switch (name) {
 			case "vaPosition":
 				ensureDecl(decls, "in vec3 iris_Position;\n");
+				if (gbuffers && entity) {
+					ensureDecl(decls, DYNAMIC_TRANSFORMS_UBO);
+					return convertVec3(type, "(iris_Position + iris_DynModelOffset)", "1.0");
+				}
 				return convertVec3(type, "iris_Position", "1.0");
 			case "vaColor":
 				ensureDecl(decls, "in vec4 iris_Color;\n");
@@ -1276,7 +1347,7 @@ public final class GlslTranslator {
 		return -1;
 	}
 
-	private static String fixedFunction(String s, final boolean vertex, final StringBuilder decls) {
+	private static String fixedFunction(String s, final boolean vertex, final boolean gbuffers, final boolean entity, final StringBuilder decls) {
 		if (vertex) {
 			if (s.contains("ftransform")) {
 				s = FTRANSFORM.matcher(s).replaceAll("(gl_ProjectionMatrix * gl_ModelViewMatrix * gl_Vertex)");
@@ -1327,7 +1398,10 @@ public final class GlslTranslator {
 		s = replaceIfPresent(s, "gl_NormalMatrix", "iris_NormalMatrix", decls, "uniform mat3 iris_NormalMatrix;\n");
 
 		if (s.contains("gl_TextureMatrix")) {
-			// Constant gl_TextureMatrix[0] -> iris_TextureMatrix0, [1] & [2] -> iris_TextureMatrix1, [3+] -> mat4(1.0)
+			final boolean dynTex0 = gbuffers && entity;
+			final String texMat0 = dynTex0 ? "iris_DynTextureMat" : "iris_TextureMatrix0";
+			final String texMat0Decl = dynTex0 ? DYNAMIC_TRANSFORMS_UBO : "uniform mat4 iris_TextureMatrix0;\n";
+			// Constant gl_TextureMatrix[0] -> iris_DynTextureMat (entity) / iris_TextureMatrix0, [1] & [2] -> iris_TextureMatrix1, [3+] -> mat4(1.0)
 			Matcher tm = TEXTURE_MATRIX_CONST.matcher(s);
 			StringBuilder out = new StringBuilder(s.length());
 			int from = 0;
@@ -1337,7 +1411,7 @@ public final class GlslTranslator {
 				int idx = Integer.parseInt(tm.group(1));
 				String repl;
 				if (idx == 0) {
-					repl = "iris_TextureMatrix0";
+					repl = texMat0;
 					need0 = true;
 				} else if (idx == 1 || idx == 2) {
 					repl = "iris_TextureMatrix1";
@@ -1350,7 +1424,7 @@ public final class GlslTranslator {
 			}
 			s = out.append(s, from, s.length()).toString();
 			if (need0) {
-				ensureDecl(decls, "uniform mat4 iris_TextureMatrix0;\n");
+				ensureDecl(decls, texMat0Decl);
 			}
 			if (need1) {
 				ensureDecl(decls, "uniform mat4 iris_TextureMatrix1;\n");
@@ -1374,9 +1448,9 @@ public final class GlslTranslator {
 				}
 				if (anyDyn) {
 					s = dout.append(s, dfrom, s.length()).toString();
-					ensureDecl(decls, "uniform mat4 iris_TextureMatrix0;\nuniform mat4 iris_TextureMatrix1;\n");
+					ensureDecl(decls, texMat0Decl + "uniform mat4 iris_TextureMatrix1;\n");
 					ensureDecl(decls,
-						"mat4 iris_textureMatrix(int i) { return i == 0 ? iris_TextureMatrix0 : (i == 1 || i == 2) ? iris_TextureMatrix1 : mat4(1.0); }\n");
+						"mat4 iris_textureMatrix(int i) { return i == 0 ? " + texMat0 + " : (i == 1 || i == 2) ? iris_TextureMatrix1 : mat4(1.0); }\n");
 				}
 			}
 		}

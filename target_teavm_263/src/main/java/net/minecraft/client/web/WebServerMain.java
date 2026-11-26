@@ -14,9 +14,9 @@ import org.teavm.jso.JSObject;
 
 public final class WebServerMain {
 
-	private static final int MAX_POLL_MS = 16;
-	private static final long IDLE_DRAIN_NANOS = 30L * 1_000_000L;
-	private static final long INLINE_BUDGET_NANOS = 12L * 1_000_000L;
+	private static final int MAX_POLL_MS = 8;
+	private static final long IDLE_DRAIN_NANOS = 40L * 1_000_000L;
+	private static final long INLINE_BUDGET_NANOS = 18L * 1_000_000L;
 	private static long genCreditNanos;
 	private static long genCreditStamp;
 	private static final long GEN_CREDIT_MAX_NANOS = 50L * 1_000_000L;

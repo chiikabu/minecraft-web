@@ -244,7 +244,7 @@
         {
           "path": "port263/java/com/mojang/renderpearl/backend/opengl/GlProgram.java",
           "edits": "port263/com/mojang/renderpearl/backend/opengl/GlProgram.json",
-          "sha256": "e3038eb9610d5ee4aa99d7ac0eb7a9d2b982033b2f0e07d2572ca455d6cb14f9"
+          "sha256": "aeb1dd874d2d372446c1cac028c19e965d905836ca8ca11785b12e71aceb711a"
         }
       ]
     },
@@ -524,7 +524,7 @@
         {
           "path": "target_teavm_263/src/main/java/net/minecraft/client/gui/screens/TitleScreen.java",
           "edits": "twins/net/minecraft/client/gui/screens/TitleScreen.json",
-          "sha256": "9c3fff2aef114eb440f315ca8be4c97947ca1148b7c56e3b094d1f19c6e73cae"
+          "sha256": "50cdb6fc2ca0246a069fff9696679290ad10e57ee6cc644702a8d522e434a08c"
         }
       ]
     },
@@ -574,7 +574,7 @@
         {
           "path": "port263/java/net/minecraft/client/gui/screens/options/OptionsScreen.java",
           "edits": "port263/net/minecraft/client/gui/screens/options/OptionsScreen.json",
-          "sha256": "c85d4560f011109435edab85cda3a71e2f6cf0f65a27c5a2b1b167f1fedad925"
+          "sha256": "c3bf2b4d3a73a288a5f1bbcd38a7e8baaa5c05a1060b2ec90346a923de4b2dff"
         }
       ]
     },
@@ -594,7 +594,7 @@
         {
           "path": "port263/java/net/minecraft/client/gui/screens/packs/PackSelectionScreen.java",
           "edits": "port263/net/minecraft/client/gui/screens/packs/PackSelectionScreen.json",
-          "sha256": "cbf4b4c597d9af30305adaed362d9d2c2530bb3d00bbb321f91f66f6dd086c55"
+          "sha256": "736f1a1f82ccc3bf5b57af6da73adb476e29420c7730cba0942aa3d054e37914"
         }
       ]
     },
@@ -669,7 +669,7 @@
         {
           "path": "port263/java/net/minecraft/client/multiplayer/ChunkBatchSizeCalculator.java",
           "edits": "port263/net/minecraft/client/multiplayer/ChunkBatchSizeCalculator.json",
-          "sha256": "e2597828d232af7f6b0512d38c7887687e881b57a48b31f3c8708003c476b4c5"
+          "sha256": "9191ab3588b49c43ee52d12af0a398717f2795fcaa3575d0c621af97847c2ee8"
         }
       ]
     },
@@ -789,7 +789,7 @@
         {
           "path": "target_teavm_263/src/main/java/net/minecraft/client/renderer/LevelRenderer.java",
           "edits": "twins/net/minecraft/client/renderer/LevelRenderer.json",
-          "sha256": "7d431e7b6e28d73893e60ec8e91d5f98b2a11db9b5bcf189b8e312b55cf03dec"
+          "sha256": "5efee92d527d92c83f2829ab501540756034186ac2ffd7a6602debfd2a30d098"
         }
       ]
     },
@@ -954,7 +954,7 @@
         {
           "path": "port263/java/net/minecraft/client/renderer/chunk/SectionRenderDispatcher.java",
           "edits": "port263/net/minecraft/client/renderer/chunk/SectionRenderDispatcher.json",
-          "sha256": "ca782e2cc765b573865984bb62cbac1de1007ce9ddd3333e0e4173d318ff0064"
+          "sha256": "89f4c5d1766b528daa8bbfffe52d3cb1bd1b0049e918317d4e94d37a4093e94a"
         }
       ]
     },
@@ -1304,7 +1304,7 @@
         {
           "path": "target_teavm_263/src/main/java/net/minecraft/server/network/PlayerChunkSender.java",
           "edits": "twins/net/minecraft/server/network/PlayerChunkSender.json",
-          "sha256": "f2b1a9e6543b07636eb1661632cad7cd27bf8cf7831a6ec13bc313807f6fd257"
+          "sha256": "ff9f22ab942a48e7affefb293d9dc38c6a793f8b1b3a1790fe9f1fce56113745"
         }
       ]
     },
@@ -1954,7 +1954,7 @@
         {
           "path": "target_teavm_263/src/main/java/com/mojang/renderpearl/backend/opengl/GlPipelineRecompiler.java",
           "edits": "twins/com/mojang/renderpearl/backend/opengl/GlPipelineRecompiler.json",
-          "sha256": "b209455e9dc21a1efdb2127e47b4d058bfe9598ea88789bf2b28fcce38ad5e56"
+          "sha256": "5c0b0d9f2fe6b1175aefce2299c87d852eaebb070063632114d63ed5f1eecfb0"
         }
       ]
     },

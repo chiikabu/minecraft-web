@@ -1,368 +1,368 @@
 [
- {
-  "start": 127,
-  "delete": 119,
-  "insert": ""
- },
- {
-  "start": 300,
-  "delete": 0,
-  "insert": "import java.util.function.Function;\n"
- },
- {
-  "start": 482,
-  "delete": 116,
-  "insert": ""
- },
- {
-  "start": 774,
-  "delete": 61,
-  "insert": ""
- },
- {
-  "start": 1009,
-  "delete": 70,
-  "insert": ""
- },
- {
-  "start": 1154,
-  "delete": 281,
-  "insert": ""
- },
- {
-  "start": 1646,
-  "delete": 52,
-  "insert": ""
- },
- {
-  "start": 2277,
-  "delete": 0,
-  "insert": [
-   {
-    "copy": 2216,
-    "length": 59
-   },
-   ".LevelStorageAccess;\n"
-  ]
- },
- {
-  "start": 2696,
-  "delete": 0,
-  "insert": "public static @Nullable Function<Screen, Screen> profileScreen;\n   public static @Nullable Function<Screen, Screen> relaysScreen;\n   public static @Nullable Function<Screen, Screen> modsScreen;\n   "
- },
- {
-  "start": 2736,
-  "delete": 118,
-  "insert": ""
- },
- {
-  "start": 3382,
-  "delete": 416,
-  "insert": ""
- },
- {
-  "start": 4780,
-  "delete": 92,
-  "insert": "if"
- },
- {
-  "start": 4873,
-  "delete": 0,
-  "insert": "(profileScreen !"
- },
- {
-  "start": 4875,
-  "delete": 575,
-  "insert": [
-   "null && modsScreen != null) {\n         ",
-   {
-    "copy": 7674,
-    "length": 6
-   },
-   " += spacing;",
-   {
-    "copy": 7767,
-    "length": 82
-   },
-   "Edit Profile\"), var1x",
-   {
-    "copy": 7909,
-    "length": 33
-   },
-   "profileScreen.apply(this)))\n               ",
-   {
-    "copy": 10734,
-    "length": 38
-   },
-   "98",
-   {
-    "copy": 8046,
-    "length": 42
-   },
-   {
-    "copy": 7768,
-    "length": 81
-   },
-   "Mods...",
-   {
-    "copy": 6055,
-    "length": 42
-   },
-   "modsScreen.apply(this)))\n",
-   {
-    "copy": 8955,
-    "length": 33
-   }
-  ]
- },
- {
-  "start": 5451,
-  "delete": 185,
-  "insert": [
-   "/ 2 + 2, topPos, 98",
-   {
-    "copy": 8046,
-    "length": 41
-   },
-   "\n      }"
-  ]
- },
- {
-  "start": 5637,
-  "delete": 2,
-  "insert": "else"
- },
- {
-  "start": 5640,
-  "delete": 53,
-  "insert": "if (profileScreen != null) {\n         topPos += spacing;\n         "
- },
- {
-  "start": 5718,
-  "delete": 55,
-  "insert": [
-   {
-    "copy": 7802,
-    "length": 47
-   },
-   "Edit Profile\"), var1x -> this"
-  ]
- },
- {
-  "start": 5784,
-  "delete": 3,
-  "insert": "gui"
- },
- {
-  "start": 5788,
-  "delete": 40,
-  "insert": "setScreen(profileScreen.apply"
- },
- {
-  "start": 5833,
-  "delete": 2,
-  "insert": ")))\n               .bounds("
- },
- {
-  "start": 5840,
-  "delete": 19,
-  "insert": "width / 2 - 100"
- },
- {
-  "start": 5861,
-  "delete": 4,
-  "insert": "topPos, 200, 20"
- },
- {
-  "start": 5866,
-  "delete": 7,
-  "insert": [
-   {
-    "copy": 8051,
-    "length": 44
-   },
-   " else if (modsScreen != null) {\n         topPos += spacing;",
-   {
-    "copy": 7767,
-    "length": 82
-   },
-   "Mods...",
-   {
-    "copy": 6055,
-    "length": 42
-   },
-   "modsScreen.apply(this)))\n               ",
-   {
-    "copy": 7644,
-    "length": 46
-   },
-   {
-    "copy": 8051,
-    "length": 34
-   }
-  ]
- },
- {
-  "start": 5882,
-  "delete": 87,
-  "insert": "}\n\n"
- },
- {
-  "start": 6307,
-  "delete": 0,
-  "insert": "if (relaysScreen != null) {\n         "
- },
- {
-  "start": 6332,
-  "delete": 0,
-  "insert": [
-   "\n            Button.builder(Component.literal(\"Relays",
-   {
-    "copy": 6055,
-    "length": 42
-   },
-   "relaysScreen.apply(this)))\n               ",
-   {
-    "copy": 6425,
-    "length": 43
-   },
-   "\n               .build()"
-  ]
- },
- {
-  "start": 6342,
-  "delete": 0,
-  "insert": [
-   ");\n      } else {\n         ",
-   {
-    "copy": 7777,
-    "length": 38
-   }
-  ]
- },
- {
-  "start": 6476,
-  "delete": 7,
-  "insert": "\n         "
- },
- {
-  "start": 6485,
-  "delete": 0,
-  "insert": "\n      }"
- },
- {
-  "start": 6806,
-  "delete": 262,
-  "insert": ""
- },
- {
-  "start": 7520,
-  "delete": 0,
-  "insert": "\n               "
- },
- {
-  "start": 7563,
-  "delete": 0,
-  "insert": ",\n               net.minecraft.client.web.CreditsScreen.guard(this"
- },
- {
-  "start": 7631,
-  "delete": 0,
-  "insert": "\n            )"
- },
- {
-  "start": 8464,
-  "delete": 0,
-  "insert": "net.minecraft.client.web.CreditsScreen.guard(this, "
- },
- {
-  "start": 8475,
-  "delete": 141,
-  "insert": ""
- },
- {
-  "start": 8655,
-  "delete": 6,
-  "insert": "new JoinMultiplayerScreen(this)"
- },
- {
-  "start": 8671,
-  "delete": 0,
-  "insert": ")"
- },
- {
-  "start": 8797,
-  "delete": 211,
-  "insert": "return"
- },
- {
-  "start": 9013,
-  "delete": 147,
-  "insert": ""
- },
- {
-  "start": 11101,
-  "delete": 19,
-  "insert": ""
- },
- {
-  "start": 12448,
-  "delete": 19,
-  "insert": ""
- },
- {
-  "start": 14326,
-  "delete": 8,
-  "insert": "net"
- },
- {
-  "start": 14335,
-  "delete": 47,
-  "insert": "minecraft"
- },
- {
-  "start": 14383,
-  "delete": 19,
-  "insert": "client"
- },
- {
-  "start": 14403,
-  "delete": 25,
-  "insert": "web"
- },
- {
-  "start": 14429,
-  "delete": 18,
-  "insert": "CreditsScreen.line"
- },
- {
-  "start": 14458,
-  "delete": 6,
-  "insert": "this.font"
- },
- {
-  "start": 14466,
-  "delete": 6,
-  "insert": "this.height"
- },
- {
-  "start": 14474,
-  "delete": 1,
-  "insert": "ARGB.white(widgetFade)"
- },
- {
-  "start": 14477,
-  "delete": 8,
-  "insert": ""
- },
- {
-  "start": 14634,
-  "delete": 621,
-  "insert": ""
- },
- {
-  "start": 15341,
-  "delete": 19,
-  "insert": ""
- }
+  {
+    "start": 127,
+    "delete": 119,
+    "insert": ""
+  },
+  {
+    "start": 300,
+    "delete": 0,
+    "insert": "import java.util.function.Function;\n"
+  },
+  {
+    "start": 482,
+    "delete": 116,
+    "insert": ""
+  },
+  {
+    "start": 774,
+    "delete": 61,
+    "insert": ""
+  },
+  {
+    "start": 1009,
+    "delete": 70,
+    "insert": ""
+  },
+  {
+    "start": 1154,
+    "delete": 281,
+    "insert": ""
+  },
+  {
+    "start": 1646,
+    "delete": 52,
+    "insert": ""
+  },
+  {
+    "start": 2277,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 2216,
+        "length": 59
+      },
+      ".LevelStorageAccess;\n"
+    ]
+  },
+  {
+    "start": 2696,
+    "delete": 0,
+    "insert": "public static @Nullable Function<Screen, Screen> profileScreen;\n   public static @Nullable Function<Screen, Screen> relaysScreen;\n   public static @Nullable Function<Screen, Screen> modsScreen;\n   "
+  },
+  {
+    "start": 2736,
+    "delete": 118,
+    "insert": ""
+  },
+  {
+    "start": 3382,
+    "delete": 416,
+    "insert": ""
+  },
+  {
+    "start": 4780,
+    "delete": 92,
+    "insert": "if"
+  },
+  {
+    "start": 4873,
+    "delete": 0,
+    "insert": "(profileScreen !"
+  },
+  {
+    "start": 4875,
+    "delete": 575,
+    "insert": [
+      "null && modsScreen != null) {\n         ",
+      {
+        "copy": 7674,
+        "length": 6
+      },
+      " += spacing;",
+      {
+        "copy": 7767,
+        "length": 82
+      },
+      "Edit Profile\"), var1x",
+      {
+        "copy": 7909,
+        "length": 33
+      },
+      "profileScreen.apply(this)))\n               ",
+      {
+        "copy": 10734,
+        "length": 38
+      },
+      "98",
+      {
+        "copy": 8046,
+        "length": 42
+      },
+      {
+        "copy": 7768,
+        "length": 81
+      },
+      "Mods...",
+      {
+        "copy": 6055,
+        "length": 42
+      },
+      "modsScreen.apply(this)))\n",
+      {
+        "copy": 8955,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 5451,
+    "delete": 185,
+    "insert": [
+      "/ 2 + 2, topPos, 98",
+      {
+        "copy": 8046,
+        "length": 41
+      },
+      "\n      }"
+    ]
+  },
+  {
+    "start": 5637,
+    "delete": 2,
+    "insert": "else"
+  },
+  {
+    "start": 5640,
+    "delete": 53,
+    "insert": "if (profileScreen != null) {\n         topPos += spacing;\n         "
+  },
+  {
+    "start": 5718,
+    "delete": 55,
+    "insert": [
+      {
+        "copy": 7802,
+        "length": 47
+      },
+      "Edit Profile\"), var1x -> this"
+    ]
+  },
+  {
+    "start": 5784,
+    "delete": 3,
+    "insert": "gui"
+  },
+  {
+    "start": 5788,
+    "delete": 40,
+    "insert": "setScreen(profileScreen.apply"
+  },
+  {
+    "start": 5833,
+    "delete": 2,
+    "insert": ")))\n               .bounds("
+  },
+  {
+    "start": 5840,
+    "delete": 19,
+    "insert": "width / 2 - 100"
+  },
+  {
+    "start": 5861,
+    "delete": 4,
+    "insert": "topPos, 200, 20"
+  },
+  {
+    "start": 5866,
+    "delete": 7,
+    "insert": [
+      {
+        "copy": 8051,
+        "length": 44
+      },
+      " else if (modsScreen != null) {\n         topPos += spacing;",
+      {
+        "copy": 7767,
+        "length": 82
+      },
+      "Mods...",
+      {
+        "copy": 6055,
+        "length": 42
+      },
+      "modsScreen.apply(this)))\n               ",
+      {
+        "copy": 7644,
+        "length": 46
+      },
+      {
+        "copy": 8051,
+        "length": 34
+      }
+    ]
+  },
+  {
+    "start": 5882,
+    "delete": 87,
+    "insert": "}\n\n"
+  },
+  {
+    "start": 6307,
+    "delete": 0,
+    "insert": "if (relaysScreen != null) {\n         "
+  },
+  {
+    "start": 6332,
+    "delete": 0,
+    "insert": [
+      "\n            Button.builder(Component.literal(\"Relays",
+      {
+        "copy": 6055,
+        "length": 42
+      },
+      "relaysScreen.apply(this)))\n               ",
+      {
+        "copy": 6425,
+        "length": 43
+      },
+      "\n               .build()"
+    ]
+  },
+  {
+    "start": 6342,
+    "delete": 0,
+    "insert": [
+      ");\n      } else {\n         ",
+      {
+        "copy": 7777,
+        "length": 38
+      }
+    ]
+  },
+  {
+    "start": 6476,
+    "delete": 7,
+    "insert": "\n         "
+  },
+  {
+    "start": 6485,
+    "delete": 0,
+    "insert": "\n      }"
+  },
+  {
+    "start": 6806,
+    "delete": 262,
+    "insert": "      this.addRenderableWidget(net.minecraft.client.web.CreditsScreen.authorButton(this, this.font, this.height));\n"
+  },
+  {
+    "start": 7520,
+    "delete": 0,
+    "insert": "\n               "
+  },
+  {
+    "start": 7563,
+    "delete": 0,
+    "insert": ",\n               net.minecraft.client.web.CreditsScreen.guard(this"
+  },
+  {
+    "start": 7631,
+    "delete": 0,
+    "insert": "\n            )"
+  },
+  {
+    "start": 8464,
+    "delete": 0,
+    "insert": "net.minecraft.client.web.CreditsScreen.guard(this, "
+  },
+  {
+    "start": 8475,
+    "delete": 141,
+    "insert": ""
+  },
+  {
+    "start": 8655,
+    "delete": 6,
+    "insert": "new JoinMultiplayerScreen(this)"
+  },
+  {
+    "start": 8671,
+    "delete": 0,
+    "insert": ")"
+  },
+  {
+    "start": 8797,
+    "delete": 211,
+    "insert": "return"
+  },
+  {
+    "start": 9013,
+    "delete": 147,
+    "insert": ""
+  },
+  {
+    "start": 11101,
+    "delete": 19,
+    "insert": ""
+  },
+  {
+    "start": 12448,
+    "delete": 19,
+    "insert": ""
+  },
+  {
+    "start": 14326,
+    "delete": 8,
+    "insert": "net"
+  },
+  {
+    "start": 14335,
+    "delete": 47,
+    "insert": "minecraft"
+  },
+  {
+    "start": 14383,
+    "delete": 19,
+    "insert": "client"
+  },
+  {
+    "start": 14403,
+    "delete": 25,
+    "insert": "web"
+  },
+  {
+    "start": 14429,
+    "delete": 18,
+    "insert": "CreditsScreen.line"
+  },
+  {
+    "start": 14458,
+    "delete": 6,
+    "insert": "this.font"
+  },
+  {
+    "start": 14466,
+    "delete": 6,
+    "insert": "this.height"
+  },
+  {
+    "start": 14474,
+    "delete": 1,
+    "insert": "ARGB.white(widgetFade)"
+  },
+  {
+    "start": 14477,
+    "delete": 8,
+    "insert": ""
+  },
+  {
+    "start": 14634,
+    "delete": 621,
+    "insert": ""
+  },
+  {
+    "start": 15341,
+    "delete": 19,
+    "insert": ""
+  }
 ]

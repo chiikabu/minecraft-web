@@ -313,13 +313,17 @@ public final class ShaderPackRuntime {
 
 	/** Integer textures and 32F without OES_texture_float_linear must use NEAREST filtering. */
 	private static boolean filterable(final Target t) {
-		if (t == null) {
+		return t == null || filterableFormat(t.format);
+	}
+
+	private static boolean filterableFormat(final Format f) {
+		if (f == null) {
 			return true;
 		}
-		if (t.format.intKind != 0) {
+		if (f.intKind != 0) {
 			return false;
 		}
-		return t.format.type != FLOAT || GlApi.hasFloatLinear();
+		return f.type != FLOAT || GlApi.hasFloatLinear();
 	}
 
 	private static boolean isIntegerGlslType(final String type) {
@@ -518,6 +522,7 @@ public final class ShaderPackRuntime {
 	private int shadowTex;
 	private final int[] shadowColorTex = new int[ShaderPack.MAX_SHADOW_COLOR_TARGETS];
 	private final Format[] shadowColorFmts = new Format[ShaderPack.MAX_SHADOW_COLOR_TARGETS];
+	private final int[][] shadowColorClearInt = new int[ShaderPack.MAX_SHADOW_COLOR_TARGETS][];
 	private final boolean[] usedShadowColors = new boolean[ShaderPack.MAX_SHADOW_COLOR_TARGETS];
 	private int[] shadowDrawBuffers = DRAW_BUF_NONE;
 	private int whiteTex;
@@ -580,6 +585,8 @@ public final class ShaderPackRuntime {
 
 	// ---- deferred before translucent terrain (Iris order) ----
 	private boolean midDeferred;
+	private boolean depthSnapshotted;
+	private boolean needsOpaqueDepth;
 	private boolean opaqueDepthValid;
 	private int midFbo;
 	private Pass sceneRedirect;
@@ -650,8 +657,15 @@ public final class ShaderPackRuntime {
 	private static final String COPY_FS = "#version 300 es\nprecision highp float;\nuniform sampler2D colortex0;\nin vec2 uv;\n"
 		+ "layout(location = 0) out vec4 color;\nvoid main() { color = texture(colortex0, uv); }\n";
 
-	private int compile(final int type, String source, final String what) {
+	/** Repairs a shader that failed deferred compilation via up to 10 GlslFixer rounds. */
+	private int compileAfterError(final int type, String source, final String what, String errors) {
 		for (int round = 0; round < 10; round++) {
+			String fixed = GlslFixer.fix(source, errors);
+			if (fixed == null) {
+				this.log.add(what + ": " + firstLines(errors, 3));
+				return 0;
+			}
+			source = fixed;
 			int shader = GlApi.glCreateShader(type);
 			GlApi.glShaderSourceRaw(shader, source);
 			GlApi.glCompileShader(shader);
@@ -659,14 +673,8 @@ public final class ShaderPackRuntime {
 				this.lastSource = source;
 				return shader;
 			}
-			String errors = GlApi.glGetShaderInfoLog(shader);
+			errors = GlApi.glGetShaderInfoLog(shader);
 			GlApi.glDeleteShader(shader);
-			String fixed = GlslFixer.fix(source, errors);
-			if (fixed == null) {
-				this.log.add(what + ": " + firstLines(errors, 3));
-				return 0;
-			}
-			source = fixed;
 		}
 		this.log.add(what + ": still failing after 10 fix-up rounds");
 		return 0;
@@ -684,6 +692,8 @@ public final class ShaderPackRuntime {
 	private String lastSource;
 	private String lastVertexSource;
 	private String lastFragmentSource;
+	private int lastVsShader;
+	private int lastFsShader;
 	private boolean linkingEntity;
 	private int[] entityLocations;
 	private int lastUnboundColorLoc = -1;
@@ -693,35 +703,22 @@ public final class ShaderPackRuntime {
 		return name.startsWith("gbuffers_") || name.startsWith("shadow");
 	}
 
-	private int startLink(final String vs, final String fs, final String what) {
-		int v = this.compile(VERTEX_SHADER, vs, what + ".vsh");
-		this.lastVertexSource = this.lastSource;
-		int f = v == 0 ? 0 : this.compile(FRAGMENT_SHADER, fs, what + ".fsh");
-		this.lastFragmentSource = this.lastSource;
-		if (v == 0 || f == 0) {
-			if (v != 0) {
-				GlApi.glDeleteShader(v);
-			}
-			return 0;
-		}
-		int p = GlApi.glCreateProgram();
-		GlApi.glAttachShader(p, v);
-		GlApi.glAttachShader(p, f);
+	private void bindProgramAttributes(final int p, final String what, final boolean entity, final int[] locations) {
 		this.lastUnboundColorLoc = -1;
 		this.lastUnboundNormalLoc = -1;
-		if (this.linkingEntity) {
+		if (entity && locations != null) {
 			// Bind present attributes to vanilla's SPIR-V locations; bind missing (-1) attributes to
 			// unused HIGH slots (15, 14, ...) so the linker NEVER auto-assigns them to VAO slots 0..3.
 			String[] names = {"iris_Position", "iris_Color", "iris_UV0", "iris_UV2i", "iris_Normal"};
 			boolean[] used = new boolean[16];
-			for (int loc : this.entityLocations) {
+			for (int loc : locations) {
 				if (loc >= 0 && loc < 16) {
 					used[loc] = true;
 				}
 			}
 			int nextHigh = 15;
 			for (int i = 0; i < names.length; i++) {
-				int loc = this.entityLocations[i];
+				int loc = locations[i];
 				if (loc >= 0 && loc < 16) {
 					GlApi.glBindAttribLocation(p, loc, names[i]);
 				} else {
@@ -763,15 +760,36 @@ public final class ShaderPackRuntime {
 			GlApi.glBindAttribLocation(p, 3, "iris_Normal");
 			GlApi.glBindAttribLocation(p, 4, "iris_UV2");
 		}
+	}
+
+	private int startLink(final String vs, final String fs, final String what) {
+		// Defer synchronous glGetShaderi(COMPILE_STATUS) until finishPass() so KHR_parallel_shader_compile
+		// compiles VS & FS concurrently on ANGLE background threads without main-thread stalls.
+		int v = GlApi.glCreateShader(VERTEX_SHADER);
+		GlApi.glShaderSourceRaw(v, vs);
+		GlApi.glCompileShader(v);
+		int f = GlApi.glCreateShader(FRAGMENT_SHADER);
+		GlApi.glShaderSourceRaw(f, fs);
+		GlApi.glCompileShader(f);
+		this.lastVertexSource = vs;
+		this.lastFragmentSource = fs;
+		this.lastVsShader = v;
+		this.lastFsShader = f;
+		int p = GlApi.glCreateProgram();
+		GlApi.glAttachShader(p, v);
+		GlApi.glAttachShader(p, f);
+		this.bindProgramAttributes(p, what, this.linkingEntity, this.entityLocations);
 		GlApi.glLinkProgram(p);
-		GlApi.glDeleteShader(v);
-		GlApi.glDeleteShader(f);
 		return p;
 	}
 
 	private static final class Pending {
 		String name;
 		int program;
+		int vsShader;
+		int fsShader;
+		boolean linkingEntity;
+		int[] entityLocations;
 		int[] drawBuffers;
 		Map<Integer, String> outputs;
 		Map<Integer, String> outputTypes;
@@ -1408,9 +1426,16 @@ public final class ShaderPackRuntime {
 					if (this.shadowColorTex[idx] == 0) {
 						Format fmt = format(this.directives.shadowColorFormats[idx], this.floatTargets, float32Ok, this.directives.shadowColorMipmap[idx]);
 						this.shadowColorFmts[idx] = fmt;
+						float[] c = this.directives.shadowColorClearColor[idx];
+						this.shadowColorClearInt[idx] = c != null
+							? new int[] {(int) c[0], (int) c[1], (int) c[2], (int) c[3]}
+							: WHITE_CLEAR_INT;
 						Target tmp = new Target(idx, fmt);
 						tmp.nearest = this.directives.shadowColorNearest[idx] || !filterable(tmp);
 						this.shadowColorTex[idx] = colorTexture(tmp, this.shadowRes, this.shadowRes);
+						if (this.directives.shadowColorMipmap[idx] && filterableFormat(fmt)) {
+							GlApi.glGenerateMipmap(TEXTURE_2D);
+						}
 					}
 					GlApi.glFramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0 + i, TEXTURE_2D, this.shadowColorTex[idx], 0);
 					drawBufs[i] = COLOR_ATTACHMENT0 + i;
@@ -1827,6 +1852,21 @@ public final class ShaderPackRuntime {
 		return this.samplerLinear;
 	}
 
+	private int shadowColorSamplerFor(final int idx) {
+		if (idx < 0 || idx >= this.shadowColorFmts.length) {
+			return this.samplerLinear;
+		}
+		if (!filterableFormat(this.shadowColorFmts[idx])) {
+			return this.samplerNearest;
+		}
+		boolean mip = this.directives.shadowColorMipmap[idx];
+		boolean nearest = this.directives.shadowColorNearest[idx];
+		if (nearest) {
+			return mip ? this.samplerNearestMip : this.samplerNearest;
+		}
+		return mip ? this.samplerMip : this.samplerLinear;
+	}
+
 	private Pass pass(final String name, final String vs, final String fs, final int[] drawBuffers) {
 		Pending pd = this.startPass(name, vs, fs, drawBuffers, null, null, null);
 		return pd == null ? null : this.finishPass(pd);
@@ -1861,6 +1901,10 @@ public final class ShaderPackRuntime {
 		Pending pd = new Pending();
 		pd.name = name;
 		pd.program = program;
+		pd.vsShader = this.lastVsShader;
+		pd.fsShader = this.lastFsShader;
+		pd.linkingEntity = this.linkingEntity;
+		pd.entityLocations = this.linkingEntity && this.entityLocations != null ? this.entityLocations.clone() : null;
 		pd.drawBuffers = drawBuffers;
 		pd.outputs = outputs;
 		pd.outputTypes = outputTypes;
@@ -1877,10 +1921,77 @@ public final class ShaderPackRuntime {
 		String name = pd.name;
 		int program = pd.program;
 		int[] drawBuffers = pd.drawBuffers == null ? new int[0] : pd.drawBuffers;
+		int vs = pd.vsShader;
+		int fs = pd.fsShader;
+		pd.vsShader = 0;
+		pd.fsShader = 0;
 		if (GlApi.glGetProgrami(program, LINK_STATUS) == 0) {
-			this.log.add(name + ": link failed: " + firstLines(GlApi.glGetProgramInfoLog(program), 3));
-			GlApi.glDeleteProgram(program);
-			return null;
+			boolean vsOk = vs != 0 && GlApi.glGetShaderi(vs, COMPILE_STATUS) != 0;
+			boolean fsOk = fs != 0 && GlApi.glGetShaderi(fs, COMPILE_STATUS) != 0;
+			if (!vsOk || !fsOk) {
+				String vsErr = !vsOk && vs != 0 ? GlApi.glGetShaderInfoLog(vs) : "";
+				String fsErr = !fsOk && fs != 0 ? GlApi.glGetShaderInfoLog(fs) : "";
+				GlApi.glDeleteProgram(program);
+				if (!vsOk) {
+					if (vs != 0) {
+						GlApi.glDeleteShader(vs);
+					}
+					vs = this.compileAfterError(VERTEX_SHADER, pd.vertexSource, name + ".vsh", vsErr);
+					if (vs != 0) {
+						pd.vertexSource = this.lastSource;
+					}
+				}
+				if (!fsOk) {
+					if (fs != 0) {
+						GlApi.glDeleteShader(fs);
+					}
+					fs = vs == 0 ? 0 : this.compileAfterError(FRAGMENT_SHADER, pd.fragmentSource, name + ".fsh", fsErr);
+					if (fs != 0) {
+						pd.fragmentSource = this.lastSource;
+					}
+				}
+				if (vs == 0 || fs == 0) {
+					if (vs != 0) {
+						GlApi.glDeleteShader(vs);
+					}
+					if (fs != 0) {
+						GlApi.glDeleteShader(fs);
+					}
+					return null;
+				}
+				program = GlApi.glCreateProgram();
+				GlApi.glAttachShader(program, vs);
+				GlApi.glAttachShader(program, fs);
+				this.bindProgramAttributes(program, name, pd.linkingEntity, pd.entityLocations);
+				pd.unboundColorLoc = this.lastUnboundColorLoc;
+				pd.unboundNormalLoc = this.lastUnboundNormalLoc;
+				GlApi.glLinkProgram(program);
+				GlApi.glDeleteShader(vs);
+				GlApi.glDeleteShader(fs);
+				if (GlApi.glGetProgrami(program, LINK_STATUS) == 0) {
+					this.log.add(name + ": link failed: " + firstLines(GlApi.glGetProgramInfoLog(program), 3));
+					GlApi.glDeleteProgram(program);
+					return null;
+				}
+				pd.program = program;
+			} else {
+				if (vs != 0) {
+					GlApi.glDeleteShader(vs);
+				}
+				if (fs != 0) {
+					GlApi.glDeleteShader(fs);
+				}
+				this.log.add(name + ": link failed: " + firstLines(GlApi.glGetProgramInfoLog(program), 3));
+				GlApi.glDeleteProgram(program);
+				return null;
+			}
+		} else {
+			if (vs != 0) {
+				GlApi.glDeleteShader(vs);
+			}
+			if (fs != 0) {
+				GlApi.glDeleteShader(fs);
+			}
 		}
 		Pass pass = new Pass();
 		pass.name = name;
@@ -2288,10 +2399,16 @@ public final class ShaderPackRuntime {
 		}
 		switch (name) {
 			case "depthtex0":
+				if (stage.equals("gbuffers")) {
+					this.needsOpaqueDepth = true;
+				}
+				return new int[] {K_DEPTH, 0};
 			case "gdepthtex":
+				this.needsOpaqueDepth = true;
 				return new int[] {K_DEPTH, 0};
 			case "depthtex1":
 			case "depthtex2":
+				this.needsOpaqueDepth = true;
 				return new int[] {K_DEPTH, 1};
 			case "noisetex":
 				return new int[] {K_NOISE, 0};
@@ -2585,8 +2702,10 @@ public final class ShaderPackRuntime {
 		ShaderPacks.atlasSampler = 0;
 		uniforms.setRenderStage(ShaderUniforms.STAGE_NONE);
 		boolean mid = this.midDeferred && this.width == w && this.height == h;
+		boolean snapped = this.depthSnapshotted && this.width == w && this.height == h;
 		this.midDeferred = false;
-		this.opaqueDepthValid = mid;
+		this.depthSnapshotted = false;
+		this.opaqueDepthValid = mid || snapped;
 
 		this.disableAllBlend();
 		GlStateManager._disableCull();
@@ -2772,6 +2891,8 @@ public final class ShaderPackRuntime {
 		this.prepareRanThisFrame = false;
 		this.sceneTargetPrepared = false;
 		this.skyBasicRanThisFrame = false;
+		this.depthSnapshotted = false;
+		this.opaqueDepthValid = false;
 		if (this.terrainPass == null || this.broken) {
 			return;
 		}
@@ -3065,9 +3186,15 @@ public final class ShaderPackRuntime {
 				case K_SHADOW:
 					samplerObj = this.shadowSamplerFor(smp[2], smp[3]);
 					break;
-				case K_SHADOW_COLOR:
-					samplerObj = this.directives.shadowColorNearest[smp[2]] ? this.samplerNearest : this.samplerLinear;
+				case K_SHADOW_COLOR: {
+					int sIdx = smp[2];
+					samplerObj = this.shadowColorSamplerFor(sIdx);
+					if (sIdx >= 0 && sIdx < this.shadowColorFmts.length
+						&& this.directives.shadowColorMipmap[sIdx] && filterableFormat(this.shadowColorFmts[sIdx])) {
+						needMips = this.staleMips.remove(tex);
+					}
 					break;
+				}
 				case K_NOISE:
 				case K_CUSTOM:
 					samplerObj = this.customSamplerFor(tex);
@@ -3110,14 +3237,57 @@ public final class ShaderPackRuntime {
 	/**
 	 * Before translucent terrain: runs {@code deferred*} over the opaque world (Iris order),
 	 * copies buffers that translucent terrain both reads and writes, and marks mipmaps stale.
+	 * When there are no deferred/prepare passes but an active program samples {@code depthtex1},
+	 * {@code depthtex2}, or {@code gdepthtex}, snapshots opaque depth into {@link #depthTexOpaque}.
 	 */
 	public boolean beforeTranslucent() {
-		if (!this.worldFrame || !this.worldRan || this.midDeferred || this.broken || this.shadowMode
+		if (!this.worldFrame || !this.worldRan || this.midDeferred || this.depthSnapshotted || this.broken || this.shadowMode
 			|| this.sceneRedirect == null || debugPasses >= 0) {
 			return false;
 		}
 		if (!this.hasDeferredPasses && !this.hasPreparePasses) {
-			return false;
+			if (!this.needsOpaqueDepth || this.depthTexOpaque == 0) {
+				return false;
+			}
+			int bound = GlStateManager.getFrameBuffer(DRAW_FRAMEBUFFER);
+			boolean ours = this.ourWorldFbos.contains(bound);
+			int ret = ours ? this.savedFbo : bound;
+			int w = this.worldWidth;
+			int h = this.worldHeight;
+			try {
+				this.disableAllBlend();
+				GlStateManager._disableCull();
+				GlStateManager._disableScissorTest();
+				GlStateManager._disablePolygonOffset();
+				GlStateManager._glBindVertexArray(this.vao);
+				Target t0 = this.target(this.sceneTarget);
+				this.worldUniforms.set("iris_KeepSky", 0.0F);
+				this.worldUniforms.set("iris_DirectScene", 0.0F);
+				GlStateManager._colorMaskAll(false, false, false, false);
+				GlStateManager._enableDepthTest();
+				GlStateManager._depthFunc(ALWAYS);
+				GlStateManager._depthMask(true);
+				this.scratchColors[0] = this.flipped[t0.index] ? t0.alt : t0.main;
+				this.attach(this.prep, this.scratchColors, 1, this.depthTexOpaque);
+				GlApi.glClearBufferfv(DEPTH, 0, DEPTH_ONE);
+				this.draw(this.prep, this.worldMainColor, this.worldMainDepth, this.worldUniforms, w, h);
+				GlStateManager._disableDepthTest();
+				GlStateManager._depthMask(false);
+				GlStateManager._colorMaskAll(true, true, true, true);
+				this.depthSnapshotted = true;
+				this.opaqueDepthValid = true;
+			} catch (RuntimeException e) {
+				this.fail("opaque depth snapshot before translucents failed: " + e);
+			} finally {
+				GlStateManager._disableDepthTest();
+				GlStateManager._depthMask(false);
+				GlStateManager._colorMaskAll(true, true, true, true);
+				resyncGlState();
+				GlStateManager._glBindFramebuffer(FRAMEBUFFER, ret);
+				GlApi.glDrawBuffers(DRAW_BUF_0);
+				GlStateManager._viewport(0, 0, w, h);
+			}
+			return true;
 		}
 		int bound = GlStateManager.getFrameBuffer(DRAW_FRAMEBUFFER);
 		boolean ours = this.ourWorldFbos.contains(bound);
@@ -3221,12 +3391,14 @@ public final class ShaderPackRuntime {
 					Boolean clear = this.directives.shadowColorClear[idx];
 					if (clear == null || clear) {
 						Format sf = this.shadowColorFmts[idx];
-						float[] c = this.directives.shadowColorClearColor[idx];
 						if (sf != null && sf.intKind == 1) {
-							GlApi.glClearBufferiv(COLOR, i, c != null ? new int[] {(int) c[0], (int) c[1], (int) c[2], (int) c[3]} : WHITE_CLEAR_INT);
+							int[] ci = this.shadowColorClearInt[idx];
+							GlApi.glClearBufferiv(COLOR, i, ci != null ? ci : WHITE_CLEAR_INT);
 						} else if (sf != null && sf.intKind == 2) {
-							GlApi.glClearBufferuiv(COLOR, i, c != null ? new int[] {(int) c[0], (int) c[1], (int) c[2], (int) c[3]} : WHITE_CLEAR_INT);
+							int[] ci = this.shadowColorClearInt[idx];
+							GlApi.glClearBufferuiv(COLOR, i, ci != null ? ci : WHITE_CLEAR_INT);
 						} else {
+							float[] c = this.directives.shadowColorClearColor[idx];
 							GlApi.glClearBufferfv(COLOR, i, c != null ? c : WHITE_CLEAR);
 						}
 					}
@@ -3247,6 +3419,15 @@ public final class ShaderPackRuntime {
 		this.shadowMode = false;
 		this.shadowValid = true;
 		this.shadowAge = 0;
+		// Mark mipmapped shadowcolor targets stale so glGenerateMipmap runs lazily before first sample.
+		// Note: WebGL2 ES 3.0 forbids glGenerateMipmap on DEPTH_COMPONENT32F (GL_INVALID_OPERATION),
+		// so shadowTexMipmap is intentionally not mipmapped on shadowTex.
+		for (int i = 0; i < this.shadowColorTex.length; i++) {
+			int stex = this.shadowColorTex[i];
+			if (stex != 0 && this.directives.shadowColorMipmap[i] && filterableFormat(this.shadowColorFmts[i])) {
+				this.staleMips.add(stex);
+			}
+		}
 		if (this.worldUniforms != null) {
 			this.worldUniforms.commitShadow();
 		}
@@ -3320,7 +3501,7 @@ public final class ShaderPackRuntime {
 			case K_NOISE:
 				return this.noiseTex;
 			case K_DEPTH:
-				return this.midDeferred ? this.depthTex : this.farDepthTex;
+				return this.midDeferred ? this.depthTex : (this.opaqueDepthValid ? this.depthTexOpaque : this.farDepthTex);
 			case K_SHADOW:
 				return this.shadowMode ? this.farDepthTex : this.shadowTex;
 			case K_SHADOW_COLOR: {
@@ -3571,8 +3752,11 @@ public final class ShaderPackRuntime {
 					int idx = s[2];
 					int stex = idx >= 0 && idx < this.shadowColorTex.length ? this.shadowColorTex[idx] : 0;
 					tex = stex != 0 ? stex : this.whiteTex;
-					samplerObj = idx >= 0 && idx < this.directives.shadowColorNearest.length && this.directives.shadowColorNearest[idx]
-						? this.samplerNearest : this.samplerLinear;
+					samplerObj = this.shadowColorSamplerFor(idx);
+					if (stex != 0 && idx >= 0 && idx < this.shadowColorFmts.length
+						&& this.directives.shadowColorMipmap[idx] && filterableFormat(this.shadowColorFmts[idx])) {
+						mips = this.staleMips.remove(stex);
+					}
 					break;
 				}
 				case K_WHITE:
@@ -3644,6 +3828,14 @@ public final class ShaderPackRuntime {
 	public void close() {
 		this.cleanupWarmup();
 		for (Pending p : this.pendings()) {
+			if (p.vsShader != 0) {
+				GlApi.glDeleteShader(p.vsShader);
+				p.vsShader = 0;
+			}
+			if (p.fsShader != 0) {
+				GlApi.glDeleteShader(p.fsShader);
+				p.fsShader = 0;
+			}
 			GlApi.glDeleteProgram(p.program);
 		}
 		this.pendingPasses.clear();

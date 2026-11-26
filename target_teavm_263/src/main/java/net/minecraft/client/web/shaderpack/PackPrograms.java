@@ -194,8 +194,8 @@ public final class PackPrograms {
 		m.put("MC_HAND_DEPTH", "0.125");
 		m.put("MC_MIPMAP_LEVEL", "4");
 		m.put("MAX_COLOR_BUFFERS", "16");
-		m.put("MC_NORMAL_MAP", "");
-		m.put("MC_SPECULAR_MAP", "");
+		// Do not define MC_NORMAL_MAP / MC_SPECULAR_MAP: dummy flat normals & black specular
+		// are bound when absent, and defining these macros disables procedural normals/reflections.
 		m.put("MC_OLD_LIGHTING", "");
 		m.put("MC_OLD_HAND_LIGHT", "");
 		// Precipitation macros matching Biome.Precipitation ordinals

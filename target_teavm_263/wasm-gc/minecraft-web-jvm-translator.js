@@ -473,7 +473,31 @@
 	// =========================================================================
 
 	function decodeModifiedUtf8(bytes, offset, length) {
+		if (length === 0) return "";
 		const end = offset + length;
+		// Fast ASCII path (99.9% of JVM constant pool UTF-8 strings)
+		let ascii = true;
+		for (let k = offset; k < end; k++) {
+			if (bytes[k] >= 0x80) {
+				ascii = false;
+				break;
+			}
+		}
+		if (ascii) {
+			if (length <= 32) {
+				let s = "";
+				for (let k = offset; k < end; k++) s += String.fromCharCode(bytes[k]);
+				return s;
+			}
+			if (utf8Decoder) {
+				return utf8Decoder.decode(bytes.subarray(offset, end));
+			}
+			let s = "";
+			for (let k = offset; k < end; k += 4096) {
+				s += String.fromCharCode.apply(null, bytes.subarray(k, Math.min(k + 4096, end)));
+			}
+			return s;
+		}
 		let out = "";
 		let i = offset;
 		while (i < end) {
@@ -734,6 +758,7 @@
 			const count = u2();
 			const result = {
 				annotations: [],
+				annotationDefault: undefined,
 				constantValue: undefined,
 				code: null,
 				bootstrapMethods: null,
@@ -749,6 +774,8 @@
 					for (let a = 0; a < numAnn; a++) {
 						result.annotations.push(readAnnotation(visible));
 					}
+				} else if (attrName === "AnnotationDefault" && ownerKind === "method") {
+					result.annotationDefault = readElementValue();
 				} else if (attrName === "ConstantValue" && ownerKind === "field") {
 					const idx = u2();
 					const entry = cp[idx];
@@ -829,7 +856,8 @@
 				descriptor: mDesc,
 				accessFlags: mFlags,
 				code: attrs.code,
-				annotations: attrs.annotations
+				annotations: attrs.annotations,
+				annotationDefault: attrs.annotationDefault
 			};
 		}
 
@@ -935,6 +963,7 @@
 		return k === "__proto__" || k === "constructor" || k === "prototype"
 			|| k === "__cls" || k === "__fields" || k === "__samMethodMap"
 			|| k === "__jsCallable" || k === "__interfaces" || k === "__isStub"
+			|| k === "__proxyHandler" || k === "__proxyInterfaces"
 			|| k === "__ctorRan" || k === "toString" || k === "valueOf";
 	}
 
@@ -2233,7 +2262,7 @@
 
 						const o = ia.recv;
 						let callExpr;
-						const guard = "(" + o + " != null && ((" + o + ".__cls === _ic.cls && !" + o + ".__samMethodMap) || (typeof " + o + " === 'string' && _ic.isStr)))";
+						const guard = "(" + o + " != null && ((" + o + ".__cls === _ic.cls && !" + o + ".__samMethodMap && !" + o + ".__proxyHandler) || (typeof " + o + " === 'string' && _ic.isStr)))";
 						if (n <= 3) {
 							const argList = n === 0 ? "" : (", " + ia.args.join(", "));
 							callExpr = guard + " ? _ic.fn(rt, " + o + argList + ") : H.icVirt" + n + "(rt, _ic, " + o + argList + ")";
@@ -2716,7 +2745,7 @@
 				ic.isStr = true;
 				ic.fn = invoker;
 				trackIC(rt, ic);
-			} else if (typeof obj.__cls === "string" && obj.__cls.length > 0 && !obj.__samMethodMap) {
+			} else if (typeof obj.__cls === "string" && obj.__cls.length > 0 && !obj.__samMethodMap && !obj.__proxyHandler) {
 				ic.cls = obj.__cls;
 				ic.isStr = cls.name === "java/lang/String";
 				ic.fn = invoker;
@@ -2825,9 +2854,14 @@
 			return inv ? inv(rt, obj, arr) : rt._stubReturn(obj, rt.resolveClassName(ic.o), rt.resolveMemberAlias(ic.o, ic.n), ic.d);
 		},
 		icVirt0(rt, ic, obj) {
-			if (obj != null && obj.__samMethodMap) {
-				const lfn = lookupLambdaFn(rt, ic, obj);
-				if (lfn) return lfn.call(obj);
+			if (obj != null) {
+				if (obj.__proxyHandler && ic.n !== "getClass" && ic.n !== "notify" && ic.n !== "notifyAll" && ic.n !== "wait") {
+					return rt._invokeReflectProxy(obj, ic.o, ic.n, ic.d, EMPTY_ARGS);
+				}
+				if (obj.__samMethodMap) {
+					const lfn = lookupLambdaFn(rt, ic, obj);
+					if (lfn) return lfn.call(obj);
+				}
 			}
 			const r = resolveIcVirt(rt, ic, obj);
 			if (r.kind === 1) return r.invoker(rt, obj);
@@ -2835,9 +2869,14 @@
 			return r.val;
 		},
 		icVirt1(rt, ic, obj, a0) {
-			if (obj != null && obj.__samMethodMap) {
-				const lfn = lookupLambdaFn(rt, ic, obj);
-				if (lfn) return lfn.call(obj, a0);
+			if (obj != null) {
+				if (obj.__proxyHandler && ic.n !== "getClass" && ic.n !== "notify" && ic.n !== "notifyAll" && ic.n !== "wait") {
+					return rt._invokeReflectProxy(obj, ic.o, ic.n, ic.d, [a0]);
+				}
+				if (obj.__samMethodMap) {
+					const lfn = lookupLambdaFn(rt, ic, obj);
+					if (lfn) return lfn.call(obj, a0);
+				}
 			}
 			const r = resolveIcVirt(rt, ic, obj);
 			if (r.kind === 1) return r.invoker(rt, obj, a0);
@@ -2845,9 +2884,14 @@
 			return r.val;
 		},
 		icVirt2(rt, ic, obj, a0, a1) {
-			if (obj != null && obj.__samMethodMap) {
-				const lfn = lookupLambdaFn(rt, ic, obj);
-				if (lfn) return lfn.call(obj, a0, a1);
+			if (obj != null) {
+				if (obj.__proxyHandler && ic.n !== "getClass" && ic.n !== "notify" && ic.n !== "notifyAll" && ic.n !== "wait") {
+					return rt._invokeReflectProxy(obj, ic.o, ic.n, ic.d, [a0, a1]);
+				}
+				if (obj.__samMethodMap) {
+					const lfn = lookupLambdaFn(rt, ic, obj);
+					if (lfn) return lfn.call(obj, a0, a1);
+				}
 			}
 			const r = resolveIcVirt(rt, ic, obj);
 			if (r.kind === 1) return r.invoker(rt, obj, a0, a1);
@@ -2855,9 +2899,14 @@
 			return r.val;
 		},
 		icVirt3(rt, ic, obj, a0, a1, a2) {
-			if (obj != null && obj.__samMethodMap) {
-				const lfn = lookupLambdaFn(rt, ic, obj);
-				if (lfn) return lfn.call(obj, a0, a1, a2);
+			if (obj != null) {
+				if (obj.__proxyHandler && ic.n !== "getClass" && ic.n !== "notify" && ic.n !== "notifyAll" && ic.n !== "wait") {
+					return rt._invokeReflectProxy(obj, ic.o, ic.n, ic.d, [a0, a1, a2]);
+				}
+				if (obj.__samMethodMap) {
+					const lfn = lookupLambdaFn(rt, ic, obj);
+					if (lfn) return lfn.call(obj, a0, a1, a2);
+				}
 			}
 			const r = resolveIcVirt(rt, ic, obj);
 			if (r.kind === 1) return r.invoker(rt, obj, a0, a1, a2);
@@ -2865,9 +2914,14 @@
 			return r.val;
 		},
 		icVirtN(rt, ic, obj, arr) {
-			if (obj != null && obj.__samMethodMap) {
-				const lfn = lookupLambdaFn(rt, ic, obj);
-				if (lfn) return lfn.apply(obj, arr);
+			if (obj != null) {
+				if (obj.__proxyHandler && ic.n !== "getClass" && ic.n !== "notify" && ic.n !== "notifyAll" && ic.n !== "wait") {
+					return rt._invokeReflectProxy(obj, ic.o, ic.n, ic.d, arr);
+				}
+				if (obj.__samMethodMap) {
+					const lfn = lookupLambdaFn(rt, ic, obj);
+					if (lfn) return lfn.apply(obj, arr);
+				}
 			}
 			const r = resolveIcVirt(rt, ic, obj);
 			if (r.kind === 1) return r.invoker(rt, obj, arr);
@@ -3613,7 +3667,14 @@
 			["java/io/IOException", "java/lang/Exception"],
 			["java/lang/ReflectiveOperationException", "java/lang/Exception"],
 			["java/lang/ClassNotFoundException", "java/lang/ReflectiveOperationException"],
+			["java/lang/NoSuchMethodException", "java/lang/ReflectiveOperationException"],
+			["java/lang/NoSuchFieldException", "java/lang/ReflectiveOperationException"],
+			["java/lang/IllegalAccessException", "java/lang/ReflectiveOperationException"],
+			["java/lang/InstantiationException", "java/lang/ReflectiveOperationException"],
+			["java/lang/reflect/InvocationTargetException", "java/lang/ReflectiveOperationException"],
+			["java/util/ServiceConfigurationError", "java/lang/Error"],
 			["java/lang/RuntimeException", "java/lang/Exception"],
+			["java/lang/SecurityException", "java/lang/RuntimeException"],
 			["java/lang/NullPointerException", "java/lang/RuntimeException"],
 			["java/lang/ArithmeticException", "java/lang/RuntimeException"],
 			["java/lang/ClassCastException", "java/lang/RuntimeException"],
@@ -4445,6 +4506,17 @@
 				"orElseGet(Ljava/util/function/Supplier;)Ljava/lang/Object;": function (sup) {
 					return this._value != null ? this._value : rt.invokeInterface(sup, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", []);
 				},
+				"orElseThrow()Ljava/lang/Object;": function () {
+					const v = this._value !== undefined ? this._value : this._val;
+					if (v == null) throw rt.makeException("java/util/NoSuchElementException", "No value present");
+					return v;
+				},
+				"orElseThrow(Ljava/util/function/Supplier;)Ljava/lang/Object;": function (sup) {
+					const v = this._value !== undefined ? this._value : this._val;
+					if (v != null) return v;
+					const ex = sup ? rt.invokeInterface(sup, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", []) : null;
+					throw ex || rt.makeException("java/util/NoSuchElementException", "No value present");
+				},
 				"ifPresent(Ljava/util/function/Consumer;)V": function (fn) {
 					if (this._value != null) rt.invokeInterface(fn, "java/util/function/Consumer", "accept", "(Ljava/lang/Object;)V", [this._value]);
 				},
@@ -4532,6 +4604,2720 @@
 				}
 			}
 		});
+
+		// java/lang/Void
+		rt.registerNativeClass("java/lang/Void", {
+			superName: "java/lang/Object",
+			staticFields: { TYPE: rt._makePrimitiveClass("V") },
+			methods: {}
+		});
+
+		installReflectionAndCompatClasses(rt);
+	}
+
+	function classObjInternalName(clsObj) {
+		if (!clsObj) return "";
+		return String(clsObj._internalName || clsObj._name || "");
+	}
+
+	function classObjToDescriptor(clsObj) {
+		if (!clsObj) return "Ljava/lang/Object;";
+		const n = classObjInternalName(clsObj);
+		if (clsObj._isPrimitive || (n.length === 1 && "ZBSCIJFDV".indexOf(n) >= 0)) {
+			return n;
+		}
+		if (n.charCodeAt(0) === 91) return n;
+		return "L" + n + ";";
+	}
+
+	function compareSemVerStrings(a, b) {
+		function parseParts(s) {
+			const str = String(s || "0").trim();
+			const plus = str.indexOf("+");
+			const noBuild = plus >= 0 ? str.slice(0, plus) : str;
+			const dash = noBuild.indexOf("-");
+			const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
+			const pre = dash >= 0 ? noBuild.slice(dash + 1) : null;
+			const nums = core.split(".").map(function (p) {
+				const n = parseInt(p, 10);
+				return Number.isNaN(n) ? p : n;
+			});
+			return { nums, pre };
+		}
+		const pa = parseParts(a);
+		const pb = parseParts(b);
+		const maxLen = Math.max(pa.nums.length, pb.nums.length);
+		for (let i = 0; i < maxLen; i++) {
+			const va = i < pa.nums.length ? pa.nums[i] : 0;
+			const vb = i < pb.nums.length ? pb.nums[i] : 0;
+			if (typeof va === "number" && typeof vb === "number") {
+				if (va !== vb) return va < vb ? -1 : 1;
+			} else {
+				const sa = String(va), sb = String(vb);
+				if (sa !== sb) return sa < sb ? -1 : 1;
+			}
+		}
+		if (pa.pre === pb.pre) return 0;
+		if (pa.pre === null) return 1;
+		if (pb.pre === null) return -1;
+		return pa.pre < pb.pre ? -1 : 1;
+	}
+
+	function buildJavaLangClassMethods(rt) {
+		function strOf(v) { return rt.asJsString(v); }
+		function getInternal(self) { return classObjInternalName(self) || "java/lang/Object"; }
+		function getCls(self) { return rt._resolveClassNoInit(getInternal(self)); }
+
+		function collectFields(cls, publicOnly) {
+			const out = [];
+			const seen = new Set();
+			function addFrom(c) {
+				if (!c) return;
+				if (c.parsed && c.parsed.fields) {
+					for (let i = 0; i < c.parsed.fields.length; i++) {
+						const f = c.parsed.fields[i];
+						if (publicOnly && (f.accessFlags & 0x0001) === 0) continue;
+						const key = c.name + "#" + f.name;
+						if (seen.has(key)) continue;
+						seen.add(key);
+						out.push(rt._makeReflectField(c.name, f));
+					}
+				} else if (c.isNative) {
+					if (c.staticFields) {
+						const ks = Object.keys(c.staticFields);
+						for (let i = 0; i < ks.length; i++) {
+							const k = ks[i];
+							if (k.charCodeAt(0) === 95) continue;
+							out.push(rt._makeReflectField(c.name, { name: k, descriptor: "Ljava/lang/Object;", accessFlags: 0x0009, annotations: [] }));
+						}
+					}
+					if (c.fields) {
+						const ks = Object.keys(c.fields);
+						for (let i = 0; i < ks.length; i++) {
+							const k = ks[i];
+							if (k.charCodeAt(0) === 95) continue;
+							out.push(rt._makeReflectField(c.name, { name: k, descriptor: "Ljava/lang/Object;", accessFlags: 0x0001, annotations: [] }));
+						}
+					}
+				}
+			}
+			if (!publicOnly) {
+				addFrom(cls);
+			} else {
+				const queue = [cls];
+				const visited = new Set();
+				while (queue.length > 0) {
+					const cur = queue.shift();
+					if (!cur || visited.has(cur.name)) continue;
+					visited.add(cur.name);
+					addFrom(cur);
+					if (cur.interfaces) {
+						for (let i = 0; i < cur.interfaces.length; i++) queue.push(rt._resolveClassNoInit(cur.interfaces[i]));
+					}
+					if (cur.superName) queue.push(rt._resolveClassNoInit(cur.superName));
+				}
+			}
+			const arr = rt._newObjectArray("java/lang/reflect/Field", out.length);
+			for (let i = 0; i < out.length; i++) arr[i] = out[i];
+			return arr;
+		}
+
+		function findField(cls, name, publicOnly) {
+			const queue = [cls];
+			const visited = new Set();
+			while (queue.length > 0) {
+				const cur = queue.shift();
+				if (!cur || visited.has(cur.name)) continue;
+				visited.add(cur.name);
+				if (cur.parsed && cur.parsed.fields) {
+					for (let i = 0; i < cur.parsed.fields.length; i++) {
+						const f = cur.parsed.fields[i];
+						if (f.name === name && (!publicOnly || (f.accessFlags & 0x0001) !== 0)) {
+							return rt._makeReflectField(cur.name, f);
+						}
+					}
+				} else if (cur.isNative) {
+					if (cur.staticFields && Object.prototype.hasOwnProperty.call(cur.staticFields, name)) {
+						return rt._makeReflectField(cur.name, { name, descriptor: "Ljava/lang/Object;", accessFlags: 0x0009, annotations: [] });
+					}
+					if (cur.fields && Object.prototype.hasOwnProperty.call(cur.fields, name)) {
+						return rt._makeReflectField(cur.name, { name, descriptor: "Ljava/lang/Object;", accessFlags: 0x0001, annotations: [] });
+					}
+				}
+				if (!publicOnly) break;
+				if (cur.interfaces) {
+					for (let i = 0; i < cur.interfaces.length; i++) queue.push(rt._resolveClassNoInit(cur.interfaces[i]));
+				}
+				if (cur.superName) queue.push(rt._resolveClassNoInit(cur.superName));
+			}
+			throw rt.makeException("java/lang/NoSuchFieldException", cls.name + "." + name);
+		}
+
+		function buildParamPrefix(paramClasses) {
+			if (!paramClasses || paramClasses.length === 0) return "()";
+			let s = "(";
+			for (let i = 0; i < paramClasses.length; i++) {
+				s += classObjToDescriptor(paramClasses[i]);
+			}
+			return s + ")";
+		}
+
+		function collectMethods(cls, publicOnly) {
+			const out = [];
+			const seen = new Set();
+			function addFrom(c) {
+				if (!c) return;
+				if (c.parsed && c.parsed.methods) {
+					for (let i = 0; i < c.parsed.methods.length; i++) {
+						const m = c.parsed.methods[i];
+						if (m.name === "<init>" || m.name === "<clinit>") continue;
+						if (publicOnly && (m.accessFlags & 0x0001) === 0) continue;
+						const sig = m.name + m.descriptor;
+						if (seen.has(sig)) continue;
+						seen.add(sig);
+						out.push(rt._makeReflectMethod(c.name, m));
+					}
+				} else if (c.isNative && c.methods) {
+					const ks = Object.keys(c.methods);
+					for (let i = 0; i < ks.length; i++) {
+						const k = ks[i];
+						const p = k.indexOf("(");
+						if (p <= 0) continue;
+						const mn = k.slice(0, p);
+						if (mn === "<init>" || mn === "<clinit>") continue;
+						if (seen.has(k)) continue;
+						seen.add(k);
+						out.push(rt._makeReflectMethod(c.name, { name: mn, descriptor: k.slice(p), accessFlags: 0x0001, annotations: [] }));
+					}
+				}
+			}
+			if (!publicOnly) {
+				addFrom(cls);
+			} else {
+				const queue = [cls];
+				const visited = new Set();
+				while (queue.length > 0) {
+					const cur = queue.shift();
+					if (!cur || visited.has(cur.name)) continue;
+					visited.add(cur.name);
+					addFrom(cur);
+					if (cur.superName) queue.push(rt._resolveClassNoInit(cur.superName));
+					if (cur.interfaces) {
+						for (let i = 0; i < cur.interfaces.length; i++) queue.push(rt._resolveClassNoInit(cur.interfaces[i]));
+					}
+				}
+			}
+			const arr = rt._newObjectArray("java/lang/reflect/Method", out.length);
+			for (let i = 0; i < out.length; i++) arr[i] = out[i];
+			return arr;
+		}
+
+		function findMethod(cls, name, paramClasses, publicOnly) {
+			const prefix = buildParamPrefix(paramClasses);
+			const canonPrefix = rt.canonicalizeDescriptor(prefix);
+			const queue = [cls];
+			const visited = new Set();
+			while (queue.length > 0) {
+				const cur = queue.shift();
+				if (!cur || visited.has(cur.name)) continue;
+				visited.add(cur.name);
+				if (cur.parsed && cur.parsed.methods) {
+					for (let i = 0; i < cur.parsed.methods.length; i++) {
+						const m = cur.parsed.methods[i];
+						if (m.name !== name) continue;
+						if (publicOnly && (m.accessFlags & 0x0001) === 0) continue;
+						if (m.descriptor.startsWith(prefix) || rt.canonicalizeDescriptor(m.descriptor).startsWith(canonPrefix)) {
+							return rt._makeReflectMethod(cur.name, m);
+						}
+					}
+				} else if (cur.isNative && cur.methods) {
+					const ks = Object.keys(cur.methods);
+					for (let i = 0; i < ks.length; i++) {
+						const k = ks[i];
+						const p = k.indexOf("(");
+						if (p <= 0) continue;
+						if (k.slice(0, p) !== name) continue;
+						const md = k.slice(p);
+						if (md.startsWith(prefix) || rt.canonicalizeDescriptor(md).startsWith(canonPrefix)) {
+							return rt._makeReflectMethod(cur.name, { name, descriptor: md, accessFlags: 0x0001, annotations: [] });
+						}
+					}
+					if (Object.prototype.hasOwnProperty.call(cur.methods, name)) {
+						return rt._makeReflectMethod(cur.name, { name, descriptor: prefix + "Ljava/lang/Object;", accessFlags: 0x0001, annotations: [] });
+					}
+				}
+				if (!publicOnly) break;
+				if (cur.superName) queue.push(rt._resolveClassNoInit(cur.superName));
+				if (cur.interfaces) {
+					for (let i = 0; i < cur.interfaces.length; i++) queue.push(rt._resolveClassNoInit(cur.interfaces[i]));
+				}
+			}
+			throw rt.makeException("java/lang/NoSuchMethodException", cls.name + "." + name + prefix);
+		}
+
+		function collectConstructors(cls, publicOnly) {
+			const out = [];
+			if (cls.parsed && cls.parsed.methods) {
+				for (let i = 0; i < cls.parsed.methods.length; i++) {
+					const m = cls.parsed.methods[i];
+					if (m.name !== "<init>") continue;
+					if (publicOnly && (m.accessFlags & 0x0001) === 0) continue;
+					out.push(rt._makeReflectCtor(cls.name, m));
+				}
+			} else if (cls.isNative) {
+				let foundAny = false;
+				if (cls.methods) {
+					const ks = Object.keys(cls.methods);
+					for (let i = 0; i < ks.length; i++) {
+						if (ks[i].startsWith("<init>(")) {
+							foundAny = true;
+							out.push(rt._makeReflectCtor(cls.name, { name: "<init>", descriptor: ks[i].slice(6), accessFlags: 0x0001, annotations: [] }));
+						}
+					}
+				}
+				if (!foundAny && !cls.isInterface) {
+					out.push(rt._makeReflectCtor(cls.name, { name: "<init>", descriptor: "()V", accessFlags: 0x0001, annotations: [] }));
+				}
+			}
+			const arr = rt._newObjectArray("java/lang/reflect/Constructor", out.length);
+			for (let i = 0; i < out.length; i++) arr[i] = out[i];
+			return arr;
+		}
+
+		function findConstructor(cls, paramClasses, publicOnly) {
+			const desc = buildParamPrefix(paramClasses) + "V";
+			const canonDesc = rt.canonicalizeDescriptor(desc);
+			if (cls.parsed && cls.parsed.methods) {
+				for (let i = 0; i < cls.parsed.methods.length; i++) {
+					const m = cls.parsed.methods[i];
+					if (m.name !== "<init>") continue;
+					if (publicOnly && (m.accessFlags & 0x0001) === 0) continue;
+					if (m.descriptor === desc || rt.canonicalizeDescriptor(m.descriptor) === canonDesc) {
+						return rt._makeReflectCtor(cls.name, m);
+					}
+				}
+			} else if (cls.isNative) {
+				if (cls.methods && (cls.methods["<init>" + desc] || cls.methods["<init>" + canonDesc] || cls.methods["<init>"])) {
+					return rt._makeReflectCtor(cls.name, { name: "<init>", descriptor: desc, accessFlags: 0x0001, annotations: [] });
+				}
+				if (desc === "()V" && !cls.isInterface) {
+					return rt._makeReflectCtor(cls.name, { name: "<init>", descriptor: "()V", accessFlags: 0x0001, annotations: [] });
+				}
+			}
+			throw rt.makeException("java/lang/NoSuchMethodException", cls.name + ".<init>" + desc);
+		}
+
+		function forNameImpl(name, init) {
+			const dot = strOf(name);
+			let internal;
+			if (dot.length > 0 && dot.charCodeAt(0) === 91) {
+				internal = dot.replace(/\./g, "/");
+			} else {
+				internal = dot.replace(/\./g, "/");
+			}
+			if (!rt._classExists(internal)) {
+				throw rt.makeException("java/lang/ClassNotFoundException", dot);
+			}
+			if (init) {
+				rt.loadClass(internal);
+			} else {
+				rt._resolveClassNoInit(internal);
+			}
+			return rt.getClassObject(internal);
+		}
+
+		const methods = {
+			"getName()Ljava/lang/String;": function () {
+				const n = getInternal(this);
+				if (this._isPrimitive) {
+					const map = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double", V: "void" };
+					return map[n] || n;
+				}
+				return n.replace(/\//g, ".");
+			},
+			"getSimpleName()Ljava/lang/String;": function () {
+				const n = getInternal(this);
+				if (this._isPrimitive) {
+					const map = { Z: "boolean", B: "byte", C: "char", S: "short", I: "int", J: "long", F: "float", D: "double", V: "void" };
+					return map[n] || n;
+				}
+				if (n.charCodeAt(0) === 91) {
+					const comp = rt.invokeVirtual(this, "getComponentType", "()Ljava/lang/Class;", EMPTY_ARGS);
+					return comp ? (rt.invokeVirtual(comp, "getSimpleName", "()Ljava/lang/String;", EMPTY_ARGS) + "[]") : "Object[]";
+				}
+				const slash = n.lastIndexOf("/");
+				const base = slash >= 0 ? n.slice(slash + 1) : n;
+				const dollar = base.lastIndexOf("$");
+				return dollar >= 0 ? base.slice(dollar + 1) : base;
+			},
+			"getCanonicalName()Ljava/lang/String;": function () {
+				return getInternal(this).replace(/\//g, ".").replace(/\$/g, ".");
+			},
+			"getTypeName()Ljava/lang/String;": function () {
+				return getInternal(this).replace(/\//g, ".");
+			},
+			"getPackageName()Ljava/lang/String;": function () {
+				const n = getInternal(this);
+				const slash = n.lastIndexOf("/");
+				return slash >= 0 ? n.slice(0, slash).replace(/\//g, ".") : "";
+			},
+			"isInstance(Ljava/lang/Object;)Z": function (obj) {
+				return rt.isInstanceOf(obj, getInternal(this)) ? 1 : 0;
+			},
+			"isAssignableFrom(Ljava/lang/Class;)Z": function (other) {
+				if (!other) throw rt.makeException("java/lang/NullPointerException", null);
+				return rt._isAssignableFrom(getInternal(other), getInternal(this)) ? 1 : 0;
+			},
+			"isInterface()Z": function () {
+				if (this._isPrimitive) return 0;
+				const c = getCls(this);
+				return c && c.isInterface ? 1 : 0;
+			},
+			"isArray()Z": function () {
+				const n = getInternal(this);
+				return n.length > 0 && n.charCodeAt(0) === 91 ? 1 : 0;
+			},
+			"isPrimitive()Z": function () {
+				const n = getInternal(this);
+				return (this._isPrimitive || (n.length === 1 && "ZBSCIJFDV".indexOf(n) >= 0)) ? 1 : 0;
+			},
+			"isEnum()Z": function () {
+				const c = getCls(this);
+				return c && c.superName === "java/lang/Enum" ? 1 : 0;
+			},
+			"isAnnotation()Z": function () {
+				const c = getCls(this);
+				if (!c) return 0;
+				if (c.parsed && (c.parsed.accessFlags & 0x2000) !== 0) return 1;
+				return c.interfaces && c.interfaces.indexOf("java/lang/annotation/Annotation") >= 0 ? 1 : 0;
+			},
+			"isSynthetic()Z": function () {
+				const c = getCls(this);
+				return c && c.parsed && (c.parsed.accessFlags & 0x1000) !== 0 ? 1 : 0;
+			},
+			"isAnonymousClass()Z": function () {
+				const n = getInternal(this);
+				const d = n.lastIndexOf("$");
+				return d >= 0 && /^\d+$/.test(n.slice(d + 1)) ? 1 : 0;
+			},
+			"isLocalClass()Z": function () { return 0; },
+			"isMemberClass()Z": function () {
+				const n = getInternal(this);
+				const d = n.lastIndexOf("$");
+				return d >= 0 && !/^\d+$/.test(n.slice(d + 1)) ? 1 : 0;
+			},
+			"getModifiers()I": function () {
+				const c = getCls(this);
+				if (c && c.parsed) return c.parsed.accessFlags | 0;
+				return (c && c.isInterface) ? 0x0601 : 0x0001;
+			},
+			"getComponentType()Ljava/lang/Class;": function () {
+				const n = getInternal(this);
+				if (!n || n.charCodeAt(0) !== 91) return null;
+				return rt._classForDescriptor(n.slice(1));
+			},
+			"arrayType()Ljava/lang/Class;": function () {
+				return rt.getClassObject("[" + classObjToDescriptor(this));
+			},
+			"getSuperclass()Ljava/lang/Class;": function () {
+				if (this._isPrimitive) return null;
+				const n = getInternal(this);
+				if (n === "java/lang/Object") return null;
+				if (n.charCodeAt(0) === 91) return rt.getClassObject("java/lang/Object");
+				const c = getCls(this);
+				if (!c || c.isInterface || !c.superName) return null;
+				return rt.getClassObject(c.superName);
+			},
+			"getInterfaces()[Ljava/lang/Class;": function () {
+				const c = getCls(this);
+				const list = (c && c.interfaces) ? c.interfaces : [];
+				const arr = rt._newObjectArray("java/lang/Class", list.length);
+				for (let i = 0; i < list.length; i++) arr[i] = rt.getClassObject(list[i]);
+				return arr;
+			},
+			"getEnumConstants()[Ljava/lang/Object;": function () {
+				const c = rt.loadClass(getInternal(this));
+				if (!c || c.superName !== "java/lang/Enum") return null;
+				if (c.methodDefs && c.methodDefs["values()[L" + c.name + ";"]) {
+					return rt.invokeStatic(c.name, "values", "()[L" + c.name + ";", EMPTY_ARGS);
+				}
+				const out = [];
+				if (c.staticFields) {
+					const ks = Object.keys(c.staticFields);
+					for (let i = 0; i < ks.length; i++) {
+						const v = c.staticFields[ks[i]];
+						if (v && typeof v === "object" && v.__cls === c.name) out.push(v);
+					}
+				}
+				const arr = rt._newObjectArray(c.name, out.length);
+				for (let i = 0; i < out.length; i++) arr[i] = out[i];
+				return arr;
+			},
+			"cast(Ljava/lang/Object;)Ljava/lang/Object;": function (obj) {
+				if (obj != null && !rt.isInstanceOf(obj, getInternal(this))) {
+					throw rt.makeException("java/lang/ClassCastException", rt._getClassName(obj) + " cannot be cast to " + getInternal(this));
+				}
+				return obj;
+			},
+			"asSubclass(Ljava/lang/Class;)Ljava/lang/Class;": function (sup) {
+				if (!sup || !rt._isAssignableFrom(getInternal(this), getInternal(sup))) {
+					throw rt.makeException("java/lang/ClassCastException", getInternal(this));
+				}
+				return this;
+			},
+			"getClassLoader()Ljava/lang/ClassLoader;": function () {
+				return rt._getSystemClassLoader();
+			},
+			"getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": function (name) {
+				const raw = strOf(name);
+				let path;
+				if (raw.startsWith("/")) {
+					path = raw.slice(1);
+				} else {
+					const n = getInternal(this);
+					const slash = n.lastIndexOf("/");
+					const pkg = slash >= 0 ? n.slice(0, slash + 1) : "";
+					path = pkg + raw;
+				}
+				return rt._openResourceStream(path);
+			},
+			"getResource(Ljava/lang/String;)Ljava/net/URL;": function (name) {
+				const raw = strOf(name);
+				const path = raw.startsWith("/") ? raw.slice(1) : raw;
+				return rt._resources.has(path) ? { __cls: "java/net/URL", _url: "jar:memory:///" + path } : null;
+			},
+			"getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;": function (annClsObj) {
+				if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+				return rt._getClassAnnotation(getCls(this), getInternal(annClsObj), true);
+			},
+			"getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;": function (annClsObj) {
+				if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+				return rt._getClassAnnotation(getCls(this), getInternal(annClsObj), false);
+			},
+			"isAnnotationPresent(Ljava/lang/Class;)Z": function (annClsObj) {
+				if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+				return rt._getClassAnnotation(getCls(this), getInternal(annClsObj), true) != null ? 1 : 0;
+			},
+			"getAnnotations()[Ljava/lang/annotation/Annotation;": function () {
+				return rt._getAllClassAnnotations(getCls(this), true);
+			},
+			"getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;": function () {
+				return rt._getAllClassAnnotations(getCls(this), false);
+			},
+			"getAnnotationsByType(Ljava/lang/Class;)[Ljava/lang/annotation/Annotation;": function (annClsObj) {
+				if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+				const ann = rt._getClassAnnotation(getCls(this), getInternal(annClsObj), true);
+				const arr = rt._newObjectArray(getInternal(annClsObj), ann ? 1 : 0);
+				if (ann) arr[0] = ann;
+				return arr;
+			},
+			"getDeclaredAnnotationsByType(Ljava/lang/Class;)[Ljava/lang/annotation/Annotation;": function (annClsObj) {
+				if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+				const ann = rt._getClassAnnotation(getCls(this), getInternal(annClsObj), false);
+				const arr = rt._newObjectArray(getInternal(annClsObj), ann ? 1 : 0);
+				if (ann) arr[0] = ann;
+				return arr;
+			},
+			"getDeclaredFields()[Ljava/lang/reflect/Field;": function () {
+				return collectFields(getCls(this), false);
+			},
+			"getFields()[Ljava/lang/reflect/Field;": function () {
+				return collectFields(getCls(this), true);
+			},
+			"getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;": function (name) {
+				return findField(getCls(this), strOf(name), false);
+			},
+			"getField(Ljava/lang/String;)Ljava/lang/reflect/Field;": function (name) {
+				return findField(getCls(this), strOf(name), true);
+			},
+			"getDeclaredMethods()[Ljava/lang/reflect/Method;": function () {
+				return collectMethods(getCls(this), false);
+			},
+			"getMethods()[Ljava/lang/reflect/Method;": function () {
+				return collectMethods(getCls(this), true);
+			},
+			"getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;": function (name, paramTypes) {
+				return findMethod(getCls(this), strOf(name), paramTypes, false);
+			},
+			"getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;": function (name, paramTypes) {
+				return findMethod(getCls(this), strOf(name), paramTypes, true);
+			},
+			"getDeclaredConstructors()[Ljava/lang/reflect/Constructor;": function () {
+				return collectConstructors(getCls(this), false);
+			},
+			"getConstructors()[Ljava/lang/reflect/Constructor;": function () {
+				return collectConstructors(getCls(this), true);
+			},
+			"getDeclaredConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;": function (paramTypes) {
+				return findConstructor(getCls(this), paramTypes, false);
+			},
+			"getConstructor([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;": function (paramTypes) {
+				return findConstructor(getCls(this), paramTypes, true);
+			},
+			"newInstance()Ljava/lang/Object;": function () {
+				const cn = getInternal(this);
+				const inst = rt.newInstance(cn);
+				rt.invokeSpecial(inst, cn, "<init>", "()V", EMPTY_ARGS);
+				return inst;
+			},
+			"desiredAssertionStatus()Z": function () { return 0; },
+			"forName(Ljava/lang/String;)Ljava/lang/Class;": function (name) {
+				return forNameImpl(name, true);
+			},
+			"forName(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;": function (name, init) {
+				return forNameImpl(name, !!init);
+			},
+			"toString()Ljava/lang/String;": function () {
+				if (this._isPrimitive) {
+					return methods["getName()Ljava/lang/String;"].call(this);
+				}
+				const c = getCls(this);
+				return (c && c.isInterface ? "interface " : "class ") + getInternal(this).replace(/\//g, ".");
+			},
+			"equals(Ljava/lang/Object;)Z": function (o) {
+				return (o && o.__cls === "java/lang/Class" && getInternal(o) === getInternal(this)) ? 1 : 0;
+			},
+			"hashCode()I": function () {
+				return javaStringHashCode(getInternal(this));
+			}
+		};
+		// Also attach bare-name aliases so bare-name lookups (e.g. from bridge.js) use runtime-aware implementations
+		const keys = Object.keys(methods);
+		for (let i = 0; i < keys.length; i++) {
+			const k = keys[i];
+			const p = k.indexOf("(");
+			if (p > 0) {
+				const bare = k.slice(0, p);
+				if (!Object.prototype.hasOwnProperty.call(methods, bare)) {
+					methods[bare] = methods[k];
+				}
+			}
+		}
+		return methods;
+	}
+
+	function installReflectionAndCompatClasses(rt) {
+		function strOf(v) { return rt.asJsString(v); }
+
+		// Annotation & reflection marker interfaces
+		for (const iface of [
+			"java/lang/annotation/Annotation",
+			"java/lang/annotation/Inherited",
+			"java/lang/annotation/Retention",
+			"java/lang/annotation/Target",
+			"java/lang/annotation/Repeatable",
+			"java/lang/reflect/AnnotatedElement",
+			"java/lang/reflect/Type",
+			"java/lang/reflect/Member",
+			"java/lang/reflect/GenericDeclaration",
+			"java/lang/reflect/InvocationHandler"
+		]) {
+			rt.registerNativeClass(iface, { superName: "java/lang/Object", isInterface: true, methods: {} });
+		}
+
+		// Upgrade java/lang/Class with full reflection + annotations
+		rt.registerNativeClass("java/lang/Class", {
+			superName: "java/lang/Object",
+			interfaces: ["java/io/Serializable", "java/lang/reflect/Type", "java/lang/reflect/AnnotatedElement", "java/lang/reflect/GenericDeclaration"],
+			methods: buildJavaLangClassMethods(rt)
+		});
+
+		// java/lang/reflect/InvocationTargetException constructor support
+		rt.registerNativeClass("java/lang/reflect/InvocationTargetException", {
+			superName: "java/lang/ReflectiveOperationException",
+			methods: {
+				"<init>(Ljava/lang/Throwable;)V": function (target) {
+					this.target = target || null;
+					this.cause = target || null;
+					this.detailMessage = target ? rt.jvmToString(target, "Ljava/lang/Object;") : null;
+				},
+				"<init>(Ljava/lang/Throwable;Ljava/lang/String;)V": function (target, msg) {
+					this.target = target || null;
+					this.cause = target || null;
+					this.detailMessage = msg == null ? null : strOf(msg);
+				},
+				"getTargetException()Ljava/lang/Throwable;": function () { return this.target || this.cause || null; },
+				"getCause()Ljava/lang/Throwable;": function () { return this.target || this.cause || null; }
+			}
+		});
+
+		// java/lang/ClassLoader
+		rt.registerNativeClass("java/lang/ClassLoader", {
+			superName: "java/lang/Object",
+			methods: {
+				"<init>()V": function () {},
+				"<init>(Ljava/lang/ClassLoader;)V": function (parent) { this._parent = parent || null; },
+				"getSystemClassLoader()Ljava/lang/ClassLoader;": function () { return rt._getSystemClassLoader(); },
+				"getPlatformClassLoader()Ljava/lang/ClassLoader;": function () { return rt._getSystemClassLoader(); },
+				"getParent()Ljava/lang/ClassLoader;": function () { return this._parent || null; },
+				"loadClass(Ljava/lang/String;)Ljava/lang/Class;": function (name) {
+					const dot = strOf(name);
+					const internal = dot.replace(/\./g, "/");
+					if (!rt._classExists(internal)) {
+						throw rt.makeException("java/lang/ClassNotFoundException", dot);
+					}
+					rt._resolveClassNoInit(internal);
+					return rt.getClassObject(internal);
+				},
+				"loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": function (name) {
+					return rt.invokeVirtual(this, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", [name]);
+				},
+				"getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": function (name) {
+					return rt._openResourceStream(strOf(name).replace(/^\/+/, ""));
+				},
+				"getResource(Ljava/lang/String;)Ljava/net/URL;": function (name) {
+					const path = strOf(name).replace(/^\/+/, "");
+					return rt._resources.has(path) ? { __cls: "java/net/URL", _url: "jar:memory:///" + path } : null;
+				}
+			}
+		});
+
+		// java/lang/reflect/AccessibleObject
+		rt.registerNativeClass("java/lang/reflect/AccessibleObject", {
+			superName: "java/lang/Object",
+			interfaces: ["java/lang/reflect/AnnotatedElement"],
+			methods: {
+				"setAccessible(Z)V": function (flag) { this._accessible = !!flag; },
+				"trySetAccessible()Z": function () { this._accessible = true; return 1; },
+				"isAccessible()Z": function () { return this._accessible ? 1 : 0; },
+				"canAccess(Ljava/lang/Object;)Z": function () { return 1; },
+				"getAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;": function (annClsObj) {
+					if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+					return rt._findAnnotationOnList(this._annotations, classObjInternalName(annClsObj));
+				},
+				"getDeclaredAnnotation(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;": function (annClsObj) {
+					if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+					return rt._findAnnotationOnList(this._annotations, classObjInternalName(annClsObj));
+				},
+				"isAnnotationPresent(Ljava/lang/Class;)Z": function (annClsObj) {
+					if (!annClsObj) throw rt.makeException("java/lang/NullPointerException", null);
+					return rt._findAnnotationOnList(this._annotations, classObjInternalName(annClsObj)) != null ? 1 : 0;
+				},
+				"getAnnotations()[Ljava/lang/annotation/Annotation;": function () {
+					return rt._materializeAnnotationArray(this._annotations);
+				},
+				"getDeclaredAnnotations()[Ljava/lang/annotation/Annotation;": function () {
+					return rt._materializeAnnotationArray(this._annotations);
+				},
+				"getAnnotationsByType(Ljava/lang/Class;)[Ljava/lang/annotation/Annotation;": function (annClsObj) {
+					const ann = rt._findAnnotationOnList(this._annotations, classObjInternalName(annClsObj));
+					const arr = rt._newObjectArray(classObjInternalName(annClsObj), ann ? 1 : 0);
+					if (ann) arr[0] = ann;
+					return arr;
+				},
+				"getDeclaredAnnotationsByType(Ljava/lang/Class;)[Ljava/lang/annotation/Annotation;": function (annClsObj) {
+					const ann = rt._findAnnotationOnList(this._annotations, classObjInternalName(annClsObj));
+					const arr = rt._newObjectArray(classObjInternalName(annClsObj), ann ? 1 : 0);
+					if (ann) arr[0] = ann;
+					return arr;
+				}
+			}
+		});
+
+		// java/lang/reflect/Executable
+		rt.registerNativeClass("java/lang/reflect/Executable", {
+			superName: "java/lang/reflect/AccessibleObject",
+			interfaces: ["java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
+			methods: {
+				"getName()Ljava/lang/String;": function () { return this._name || ""; },
+				"getDeclaringClass()Ljava/lang/Class;": function () { return rt.getClassObject(this._owner || "java/lang/Object"); },
+				"getModifiers()I": function () { return (this._accessFlags || 0) | 0; },
+				"getParameterTypes()[Ljava/lang/Class;": function () {
+					const params = parseMethodDescriptor(this._descriptor || "()V").params;
+					const arr = rt._newObjectArray("java/lang/Class", params.length);
+					for (let i = 0; i < params.length; i++) arr[i] = rt._classForDescriptor(params[i]);
+					return arr;
+				},
+				"getGenericParameterTypes()[Ljava/lang/reflect/Type;": function () {
+					return rt.invokeVirtual(this, "getParameterTypes", "()[Ljava/lang/Class;", EMPTY_ARGS);
+				},
+				"getParameterCount()I": function () {
+					return parseMethodDescriptor(this._descriptor || "()V").params.length | 0;
+				},
+				"isVarArgs()Z": function () { return ((this._accessFlags || 0) & 0x0080) !== 0 ? 1 : 0; },
+				"isSynthetic()Z": function () { return ((this._accessFlags || 0) & 0x1000) !== 0 ? 1 : 0; }
+			}
+		});
+
+		function unboxReflectArgs(descriptor, rawArgs) {
+			const params = parseMethodDescriptor(descriptor || "()V").params;
+			const out = new Array(params.length);
+			for (let i = 0; i < params.length; i++) {
+				const raw = rawArgs && i < rawArgs.length ? rawArgs[i] : null;
+				out[i] = rt._adaptValue(raw, "Ljava/lang/Object;", params[i]);
+			}
+			return out;
+		}
+
+		// java/lang/reflect/Method
+		rt.registerNativeClass("java/lang/reflect/Method", {
+			superName: "java/lang/reflect/Executable",
+			methods: {
+				"getReturnType()Ljava/lang/Class;": function () {
+					return rt._classForDescriptor(parseMethodDescriptor(this._descriptor || "()V").ret);
+				},
+				"getGenericReturnType()Ljava/lang/reflect/Type;": function () {
+					return rt._classForDescriptor(parseMethodDescriptor(this._descriptor || "()V").ret);
+				},
+				"getDefaultValue()Ljava/lang/Object;": function () {
+					if (this._annotationDefault === undefined) return null;
+					const ret = parseMethodDescriptor(this._descriptor || "()V").ret;
+					const val = rt._materializeAnnotationValue(this._annotationDefault, ret);
+					return rt._adaptValue(val, ret, "Ljava/lang/Object;");
+				},
+				"isDefault()Z": function () {
+					const c = rt._resolveClassNoInit(this._owner);
+					return (c && c.isInterface && ((this._accessFlags || 0) & (ACC_ABSTRACT | ACC_STATIC)) === 0) ? 1 : 0;
+				},
+				"isBridge()Z": function () { return ((this._accessFlags || 0) & 0x0040) !== 0 ? 1 : 0; },
+				"invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": function (obj, args) {
+					const desc = this._descriptor || "()V";
+					const pd = parseMethodDescriptor(desc);
+					const callArgs = unboxReflectArgs(desc, args);
+					const isStatic = ((this._accessFlags || 0) & ACC_STATIC) !== 0;
+					let res;
+					if (isStatic) {
+						res = rt.invokeStatic(this._owner, this._name, desc, callArgs);
+					} else {
+						if (obj == null) throw rt.makeException("java/lang/NullPointerException", "Method.invoke on null");
+						res = rt.invokeVirtual(obj, this._name, desc, callArgs, this._owner);
+					}
+					if (pd.ret === "V") return null;
+					return rt._adaptValue(res, pd.ret, "Ljava/lang/Object;");
+				},
+				"equals(Ljava/lang/Object;)Z": function (o) {
+					return (o && o.__cls === "java/lang/reflect/Method"
+						&& o._owner === this._owner && o._name === this._name && o._descriptor === this._descriptor) ? 1 : 0;
+				},
+				"hashCode()I": function () {
+					return (javaStringHashCode(this._owner || "") ^ javaStringHashCode(this._name || "")) | 0;
+				},
+				"toString()Ljava/lang/String;": function () {
+					return (this._owner || "").replace(/\//g, ".") + "." + (this._name || "") + (this._descriptor || "");
+				}
+			}
+		});
+
+		// java/lang/reflect/Constructor
+		rt.registerNativeClass("java/lang/reflect/Constructor", {
+			superName: "java/lang/reflect/Executable",
+			methods: {
+				"getName()Ljava/lang/String;": function () { return (this._owner || "").replace(/\//g, "."); },
+				"newInstance([Ljava/lang/Object;)Ljava/lang/Object;": function (args) {
+					const desc = this._descriptor || "()V";
+					const callArgs = unboxReflectArgs(desc, args);
+					const inst = rt.newInstance(this._owner);
+					rt.invokeSpecial(inst, this._owner, "<init>", desc, callArgs);
+					return inst;
+				},
+				"equals(Ljava/lang/Object;)Z": function (o) {
+					return (o && o.__cls === "java/lang/reflect/Constructor"
+						&& o._owner === this._owner && o._descriptor === this._descriptor) ? 1 : 0;
+				},
+				"hashCode()I": function () {
+					return javaStringHashCode((this._owner || "") + (this._descriptor || ""));
+				},
+				"toString()Ljava/lang/String;": function () {
+					return (this._owner || "").replace(/\//g, ".") + (this._descriptor || "()V");
+				}
+			}
+		});
+
+		// java/lang/reflect/Field
+		rt.registerNativeClass("java/lang/reflect/Field", {
+			superName: "java/lang/reflect/AccessibleObject",
+			interfaces: ["java/lang/reflect/Member"],
+			methods: {
+				"getName()Ljava/lang/String;": function () { return this._name || ""; },
+				"getDeclaringClass()Ljava/lang/Class;": function () { return rt.getClassObject(this._owner || "java/lang/Object"); },
+				"getModifiers()I": function () { return (this._accessFlags || 0) | 0; },
+				"getType()Ljava/lang/Class;": function () { return rt._classForDescriptor(this._descriptor || "Ljava/lang/Object;"); },
+				"getGenericType()Ljava/lang/reflect/Type;": function () { return rt._classForDescriptor(this._descriptor || "Ljava/lang/Object;"); },
+				"isSynthetic()Z": function () { return ((this._accessFlags || 0) & 0x1000) !== 0 ? 1 : 0; },
+				"isEnumConstant()Z": function () { return ((this._accessFlags || 0) & 0x4000) !== 0 ? 1 : 0; },
+				"get(Ljava/lang/Object;)Ljava/lang/Object;": function (obj) {
+					const isStatic = ((this._accessFlags || 0) & ACC_STATIC) !== 0;
+					const v = isStatic
+						? rt.getStatic(this._owner, this._name, this._descriptor)
+						: rt.getField(obj, this._owner, this._name, this._descriptor);
+					return rt._adaptValue(v, this._descriptor, "Ljava/lang/Object;");
+				},
+				"set(Ljava/lang/Object;Ljava/lang/Object;)V": function (obj, val) {
+					const isStatic = ((this._accessFlags || 0) & ACC_STATIC) !== 0;
+					const adapted = rt._adaptValue(val, "Ljava/lang/Object;", this._descriptor);
+					if (isStatic) {
+						rt.putStatic(this._owner, this._name, this._descriptor, adapted);
+					} else {
+						rt.putField(obj, this._owner, this._name, this._descriptor, adapted);
+					}
+				},
+				"getBoolean(Ljava/lang/Object;)Z": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return rt._adaptValue(v, "Ljava/lang/Object;", "Z") ? 1 : 0;
+				},
+				"getByte(Ljava/lang/Object;)B": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return ((rt._adaptValue(v, "Ljava/lang/Object;", "I") << 24) >> 24);
+				},
+				"getChar(Ljava/lang/Object;)C": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return rt._adaptValue(v, "Ljava/lang/Object;", "C") & 0xFFFF;
+				},
+				"getShort(Ljava/lang/Object;)S": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return ((rt._adaptValue(v, "Ljava/lang/Object;", "I") << 16) >> 16);
+				},
+				"getInt(Ljava/lang/Object;)I": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return rt._adaptValue(v, "Ljava/lang/Object;", "I") | 0;
+				},
+				"getLong(Ljava/lang/Object;)J": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return rt._adaptValue(v, "Ljava/lang/Object;", "J");
+				},
+				"getFloat(Ljava/lang/Object;)F": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return Math.fround(rt._adaptValue(v, "Ljava/lang/Object;", "F"));
+				},
+				"getDouble(Ljava/lang/Object;)D": function (obj) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [obj]);
+					return Number(rt._adaptValue(v, "Ljava/lang/Object;", "D"));
+				},
+				"setBoolean(Ljava/lang/Object;Z)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, v ? rt._boolTrue : rt._boolFalse]); },
+				"setByte(Ljava/lang/Object;B)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, { __cls: "java/lang/Byte", value: (v << 24) >> 24 }]); },
+				"setChar(Ljava/lang/Object;C)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, { __cls: "java/lang/Character", value: v & 0xFFFF }]); },
+				"setShort(Ljava/lang/Object;S)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, { __cls: "java/lang/Short", value: (v << 16) >> 16 }]); },
+				"setInt(Ljava/lang/Object;I)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, COMPILED_HELPERS.boxInt(v)]); },
+				"setLong(Ljava/lang/Object;J)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, { __cls: "java/lang/Long", value: BigInt.asIntN(64, v) }]); },
+				"setFloat(Ljava/lang/Object;F)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, COMPILED_HELPERS.boxFloat(v)]); },
+				"setDouble(Ljava/lang/Object;D)V": function (obj, v) { rt.invokeVirtual(this, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [obj, COMPILED_HELPERS.boxDouble(v)]); },
+				"equals(Ljava/lang/Object;)Z": function (o) {
+					return (o && o.__cls === "java/lang/reflect/Field" && o._owner === this._owner && o._name === this._name) ? 1 : 0;
+				},
+				"hashCode()I": function () {
+					return (javaStringHashCode(this._owner || "") ^ javaStringHashCode(this._name || "")) | 0;
+				},
+				"toString()Ljava/lang/String;": function () {
+					return (this._owner || "").replace(/\//g, ".") + "." + (this._name || "");
+				}
+			}
+		});
+
+		// java/lang/reflect/Modifier
+		rt.registerNativeClass("java/lang/reflect/Modifier", {
+			superName: "java/lang/Object",
+			staticFields: {
+				PUBLIC: 0x0001, PRIVATE: 0x0002, PROTECTED: 0x0004, STATIC: 0x0008,
+				FINAL: 0x0010, SYNCHRONIZED: 0x0020, VOLATILE: 0x0040, TRANSIENT: 0x0080,
+				NATIVE: 0x0100, INTERFACE: 0x0200, ABSTRACT: 0x0400, STRICT: 0x0800
+			},
+			methods: {
+				"isPublic(I)Z": function (m) { return (m & 0x0001) !== 0 ? 1 : 0; },
+				"isPrivate(I)Z": function (m) { return (m & 0x0002) !== 0 ? 1 : 0; },
+				"isProtected(I)Z": function (m) { return (m & 0x0004) !== 0 ? 1 : 0; },
+				"isStatic(I)Z": function (m) { return (m & 0x0008) !== 0 ? 1 : 0; },
+				"isFinal(I)Z": function (m) { return (m & 0x0010) !== 0 ? 1 : 0; },
+				"isSynchronized(I)Z": function (m) { return (m & 0x0020) !== 0 ? 1 : 0; },
+				"isVolatile(I)Z": function (m) { return (m & 0x0040) !== 0 ? 1 : 0; },
+				"isTransient(I)Z": function (m) { return (m & 0x0080) !== 0 ? 1 : 0; },
+				"isNative(I)Z": function (m) { return (m & 0x0100) !== 0 ? 1 : 0; },
+				"isInterface(I)Z": function (m) { return (m & 0x0200) !== 0 ? 1 : 0; },
+				"isAbstract(I)Z": function (m) { return (m & 0x0400) !== 0 ? 1 : 0; },
+				"isStrict(I)Z": function (m) { return (m & 0x0800) !== 0 ? 1 : 0; }
+			}
+		});
+
+		// java/lang/reflect/Array
+		rt.registerNativeClass("java/lang/reflect/Array", {
+			superName: "java/lang/Object",
+			methods: {
+				"newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": function (compType, len) {
+					if (!compType) throw rt.makeException("java/lang/NullPointerException", null);
+					return rt.createArray("[" + classObjToDescriptor(compType), len | 0);
+				},
+				"newInstance(Ljava/lang/Class;[I)Ljava/lang/Object;": function (compType, dims) {
+					if (!compType || !dims) throw rt.makeException("java/lang/NullPointerException", null);
+					let prefix = "";
+					for (let i = 0; i < dims.length; i++) prefix += "[";
+					return rt.createMultiArray(prefix + classObjToDescriptor(compType), dims, 0);
+				},
+				"getLength(Ljava/lang/Object;)I": function (arr) {
+					if (!arr) throw rt.makeException("java/lang/NullPointerException", null);
+					return arr.length | 0;
+				},
+				"get(Ljava/lang/Object;I)Ljava/lang/Object;": function (arr, idx) {
+					const i = checkArrayAccess(rt, arr, idx);
+					const elemDesc = arr.__elemType && arr.__elemType.length === 1 ? arr.__elemType : "Ljava/lang/Object;";
+					return rt._adaptValue(arr[i], elemDesc, "Ljava/lang/Object;");
+				},
+				"set(Ljava/lang/Object;ILjava/lang/Object;)V": function (arr, idx, val) {
+					const i = checkArrayAccess(rt, arr, idx);
+					const elemDesc = arr.__elemType && arr.__elemType.length === 1 ? arr.__elemType : "Ljava/lang/Object;";
+					arr[i] = rt._adaptValue(val, "Ljava/lang/Object;", elemDesc);
+				}
+			}
+		});
+
+		// java/lang/reflect/Proxy
+		rt.registerNativeClass("java/lang/reflect/Proxy", {
+			superName: "java/lang/Object",
+			interfaces: ["java/io/Serializable"],
+			methods: {
+				"<init>(Ljava/lang/reflect/InvocationHandler;)V": function (h) { this.h = h; },
+				"newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": function (loader, ifaces, handler) {
+					return rt._createReflectProxy(loader, ifaces, handler);
+				},
+				"isProxyClass(Ljava/lang/Class;)Z": function (clsObj) {
+					return (clsObj && rt._proxyClasses.has(classObjInternalName(clsObj))) ? 1 : 0;
+				},
+				"getInvocationHandler(Ljava/lang/Object;)Ljava/lang/reflect/InvocationHandler;": function (proxy) {
+					if (!proxy || !proxy.__proxyHandler) {
+						throw rt.makeException("java/lang/IllegalArgumentException", "not a proxy instance");
+					}
+					return proxy.__proxyHandler;
+				},
+				"getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": function (_loader, ifaces) {
+					const names = [];
+					if (ifaces) {
+						for (let i = 0; i < ifaces.length; i++) {
+							if (ifaces[i]) names.push(rt.resolveClassName(classObjInternalName(ifaces[i])));
+						}
+					}
+					const pCls = rt._getOrCreateProxyClass(names);
+					return rt.getClassObject(pCls.name);
+				}
+			}
+		});
+
+		// com/google/common/reflect/AbstractInvocationHandler (Guava)
+		rt.registerNativeClass("com/google/common/reflect/AbstractInvocationHandler", {
+			superName: "java/lang/Object",
+			interfaces: ["java/lang/reflect/InvocationHandler"],
+			methods: {
+				"<init>()V": function () {},
+				"invoke(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;": function (proxy, method, args) {
+					const safeArgs = args == null ? rt._newObjectArray("java/lang/Object", 0) : args;
+					const mName = method ? (method._name || "") : "";
+					const mParams = method ? parseMethodDescriptor(method._descriptor || "()V").params : [];
+					if (safeArgs.length === 0 && mName === "hashCode" && mParams.length === 0) {
+						return COMPILED_HELPERS.boxInt(rt.invokeVirtual(this, "hashCode", "()I", EMPTY_ARGS));
+					}
+					if (safeArgs.length === 1 && mName === "equals" && mParams.length === 1 && mParams[0] === "Ljava/lang/Object;") {
+						const arg = safeArgs[0];
+						if (arg == null) return rt._boolFalse;
+						if (proxy === arg) return rt._boolTrue;
+						if (arg.__proxyHandler && proxy.__cls === arg.__cls) {
+							return rt.invokeVirtual(this, "equals", "(Ljava/lang/Object;)Z", [arg.__proxyHandler]) ? rt._boolTrue : rt._boolFalse;
+						}
+						return rt._boolFalse;
+					}
+					if (safeArgs.length === 0 && mName === "toString" && mParams.length === 0) {
+						return rt.invokeVirtual(this, "toString", "()Ljava/lang/String;", EMPTY_ARGS);
+					}
+					return rt.invokeVirtual(this, "handleInvocation", "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;", [proxy, method, safeArgs]);
+				},
+				"equals(Ljava/lang/Object;)Z": function (o) { return this === o ? 1 : 0; },
+				"hashCode()I": function () { return rt._identityHash(this); },
+				"toString()Ljava/lang/String;": function () {
+					return (this.__cls || "com/google/common/reflect/AbstractInvocationHandler").replace(/\//g, ".") + "@" + (rt._identityHash(this) >>> 0).toString(16);
+				}
+			}
+		});
+
+		// java/lang/invoke/MethodType, MethodHandle, MethodHandles, MethodHandles$Lookup
+		rt.registerNativeClass("java/lang/invoke/MethodType", {
+			superName: "java/lang/Object",
+			methods: {
+				"methodType(Ljava/lang/Class;)Ljava/lang/invoke/MethodType;": function (retCls) {
+					return { __cls: "java/lang/invoke/MethodType", _descriptor: "()" + classObjToDescriptor(retCls) };
+				},
+				"methodType(Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;": function (retCls, ptypes) {
+					let p = "(";
+					if (ptypes) for (let i = 0; i < ptypes.length; i++) p += classObjToDescriptor(ptypes[i]);
+					p += ")" + classObjToDescriptor(retCls);
+					return { __cls: "java/lang/invoke/MethodType", _descriptor: p };
+				},
+				"methodType(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/invoke/MethodType;": function (retCls, p0) {
+					return { __cls: "java/lang/invoke/MethodType", _descriptor: "(" + classObjToDescriptor(p0) + ")" + classObjToDescriptor(retCls) };
+				},
+				"methodType(Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;": function (retCls, p0, rest) {
+					let p = "(" + classObjToDescriptor(p0);
+					if (rest) for (let i = 0; i < rest.length; i++) p += classObjToDescriptor(rest[i]);
+					p += ")" + classObjToDescriptor(retCls);
+					return { __cls: "java/lang/invoke/MethodType", _descriptor: p };
+				},
+				"toMethodDescriptorString()Ljava/lang/String;": function () { return this._descriptor || "()V"; },
+				"toString()Ljava/lang/String;": function () { return this._descriptor || "()V"; }
+			}
+		});
+
+		function invokeMethodHandleObj(mhObj, passedArgs) {
+			const bound = mhObj._boundArgs || EMPTY_ARGS;
+			const all = bound.length > 0 ? bound.concat(passedArgs) : passedArgs;
+			if (mhObj._reflectMethod) {
+				const m = mhObj._reflectMethod;
+				const isStatic = ((m._accessFlags || 0) & ACC_STATIC) !== 0;
+				const receiver = isStatic ? null : all[0];
+				const callArgs = isStatic ? all : all.slice(1);
+				return rt.invokeVirtual(m, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", [receiver, callArgs]);
+			}
+			if (mhObj._reflectCtor) {
+				return rt.invokeVirtual(mhObj._reflectCtor, "newInstance", "([Ljava/lang/Object;)Ljava/lang/Object;", [all]);
+			}
+			if (mhObj._reflectFieldGet) {
+				return rt.invokeVirtual(mhObj._reflectFieldGet, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [all[0]]);
+			}
+			if (mhObj._reflectFieldSet) {
+				rt.invokeVirtual(mhObj._reflectFieldSet, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [all[0], all[1]]);
+				return null;
+			}
+			if (mhObj._mh) {
+				return rt._invokeMethodHandle(mhObj._mh, all, null, null);
+			}
+			return null;
+		}
+
+		rt.registerNativeClass("java/lang/invoke/MethodHandle", {
+			superName: "java/lang/Object",
+			methods: {
+				"bindTo(Ljava/lang/Object;)Ljava/lang/invoke/MethodHandle;": function (val) {
+					const prev = this._boundArgs ? this._boundArgs.slice() : [];
+					prev.push(val);
+					return {
+						__cls: "java/lang/invoke/MethodHandle",
+						_mh: this._mh || null,
+						_reflectMethod: this._reflectMethod || null,
+						_reflectCtor: this._reflectCtor || null,
+						_reflectFieldGet: this._reflectFieldGet || null,
+						_reflectFieldSet: this._reflectFieldSet || null,
+						_boundArgs: prev
+					};
+				},
+				"invokeWithArguments([Ljava/lang/Object;)Ljava/lang/Object;": function (args) {
+					return invokeMethodHandleObj(this, args ? Array.from(args) : []);
+				},
+				"invokeWithArguments(Ljava/util/List;)Ljava/lang/Object;": function (list) {
+					const arr = list ? rt.invokeInterface(list, "java/util/List", "toArray", "()[Ljava/lang/Object;", EMPTY_ARGS) : [];
+					return invokeMethodHandleObj(this, arr ? Array.from(arr) : []);
+				},
+				"invoke": function () {
+					return invokeMethodHandleObj(this, Array.prototype.slice.call(arguments));
+				},
+				"invokeExact": function () {
+					return invokeMethodHandleObj(this, Array.prototype.slice.call(arguments));
+				},
+				"asType(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;": function () { return this; }
+			}
+		});
+
+		const defaultLookup = { __cls: "java/lang/invoke/MethodHandles$Lookup" };
+		rt.registerNativeClass("java/lang/invoke/MethodHandles$Lookup", {
+			superName: "java/lang/Object",
+			methods: {
+				"unreflect(Ljava/lang/reflect/Method;)Ljava/lang/invoke/MethodHandle;": function (m) {
+					if (!m) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectMethod: m, _boundArgs: [] };
+				},
+				"unreflectConstructor(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;": function (c) {
+					if (!c) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectCtor: c, _boundArgs: [] };
+				},
+				"unreflectGetter(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;": function (f) {
+					if (!f) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectFieldGet: f, _boundArgs: [] };
+				},
+				"unreflectSetter(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;": function (f) {
+					if (!f) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectFieldSet: f, _boundArgs: [] };
+				},
+				"findVirtual(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;": function (refc, name, mt) {
+					const desc = mt ? mt._descriptor : "()V";
+					const m = rt._makeReflectMethod(classObjInternalName(refc), { name: strOf(name), descriptor: desc, accessFlags: 0x0001, annotations: [] });
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectMethod: m, _boundArgs: [] };
+				},
+				"findStatic(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;": function (refc, name, mt) {
+					const desc = mt ? mt._descriptor : "()V";
+					const m = rt._makeReflectMethod(classObjInternalName(refc), { name: strOf(name), descriptor: desc, accessFlags: 0x0009, annotations: [] });
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectMethod: m, _boundArgs: [] };
+				},
+				"findSpecial(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;": function (refc, name, mt) {
+					const desc = mt ? mt._descriptor : "()V";
+					const m = rt._makeReflectMethod(classObjInternalName(refc), { name: strOf(name), descriptor: desc, accessFlags: 0x0001, annotations: [] });
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectMethod: m, _boundArgs: [] };
+				},
+				"findConstructor(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;": function (refc, mt) {
+					const desc = mt ? mt._descriptor : "()V";
+					const c = rt._makeReflectCtor(classObjInternalName(refc), { name: "<init>", descriptor: desc, accessFlags: 0x0001, annotations: [] });
+					return { __cls: "java/lang/invoke/MethodHandle", _reflectCtor: c, _boundArgs: [] };
+				},
+				"in(Ljava/lang/Class;)Ljava/lang/invoke/MethodHandles$Lookup;": function () { return this; }
+			}
+		});
+		rt.registerNativeClass("java/lang/invoke/MethodHandles", {
+			superName: "java/lang/Object",
+			methods: {
+				"lookup()Ljava/lang/invoke/MethodHandles$Lookup;": function () { return defaultLookup; },
+				"publicLookup()Ljava/lang/invoke/MethodHandles$Lookup;": function () { return defaultLookup; },
+				"privateLookupIn(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;": function () { return defaultLookup; }
+			}
+		});
+
+		// java/util/ServiceLoader & ServiceLoader$Provider
+		rt.registerNativeClass("java/util/ServiceLoader$Provider", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/util/function/Supplier"],
+			methods: {
+				"type()Ljava/lang/Class;": function () { return rt.getClassObject(this._implInternal); },
+				"get()Ljava/lang/Object;": function () {
+					if (!this._instance) {
+						const inst = rt.newInstance(this._implInternal);
+						rt.invokeSpecial(inst, this._implInternal, "<init>", "()V", EMPTY_ARGS);
+						this._instance = inst;
+					}
+					return this._instance;
+				}
+			}
+		});
+
+		function getServiceProviderNames(loaderObj) {
+			const internal = loaderObj._serviceInternal || "";
+			const dot = internal.replace(/\//g, ".");
+			const list = rt._services.get(dot) || rt._services.get(internal) || [];
+			return list;
+		}
+
+		function instantiateServiceProviders(loaderObj) {
+			if (loaderObj._instances) return loaderObj._instances;
+			const names = getServiceProviderNames(loaderObj);
+			const out = [];
+			for (let i = 0; i < names.length; i++) {
+				const implInternal = names[i].replace(/\./g, "/");
+				const inst = rt.newInstance(implInternal);
+				rt.invokeSpecial(inst, implInternal, "<init>", "()V", EMPTY_ARGS);
+				out.push(inst);
+			}
+			loaderObj._instances = out;
+			return out;
+		}
+
+		rt.registerNativeClass("java/util/ServiceLoader", {
+			superName: "java/lang/Object",
+			interfaces: ["java/lang/Iterable"],
+			methods: {
+				"load(Ljava/lang/Class;)Ljava/util/ServiceLoader;": function (svcCls) {
+					if (!svcCls) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/util/ServiceLoader", _serviceInternal: rt.resolveClassName(classObjInternalName(svcCls)), _instances: null };
+				},
+				"load(Ljava/lang/Class;Ljava/lang/ClassLoader;)Ljava/util/ServiceLoader;": function (svcCls) {
+					if (!svcCls) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/util/ServiceLoader", _serviceInternal: rt.resolveClassName(classObjInternalName(svcCls)), _instances: null };
+				},
+				"loadInstalled(Ljava/lang/Class;)Ljava/util/ServiceLoader;": function (svcCls) {
+					if (!svcCls) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/util/ServiceLoader", _serviceInternal: rt.resolveClassName(classObjInternalName(svcCls)), _instances: null };
+				},
+				"iterator()Ljava/util/Iterator;": function () {
+					const items = instantiateServiceProviders(this);
+					return { __cls: "java/util/Iterator", _items: items.slice(), _arr: items.slice(), _backing: null, _idx: 0 };
+				},
+				"findFirst()Ljava/util/Optional;": function () {
+					const names = getServiceProviderNames(this);
+					if (names.length === 0) {
+						return rt.invokeStatic("java/util/Optional", "empty", "()Ljava/util/Optional;", EMPTY_ARGS);
+					}
+					const items = instantiateServiceProviders(this);
+					if (items.length === 0) {
+						return rt.invokeStatic("java/util/Optional", "empty", "()Ljava/util/Optional;", EMPTY_ARGS);
+					}
+					return rt.invokeStatic("java/util/Optional", "of", "(Ljava/lang/Object;)Ljava/util/Optional;", [items[0]]);
+				},
+				"stream()Ljava/util/stream/Stream;": function () {
+					const names = getServiceProviderNames(this);
+					const arr = rt._newObjectArray("java/util/ServiceLoader$Provider", names.length);
+					for (let i = 0; i < names.length; i++) {
+						arr[i] = { __cls: "java/util/ServiceLoader$Provider", _implInternal: names[i].replace(/\./g, "/"), _instance: null };
+					}
+					return rt.invokeStatic("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", [arr]);
+				},
+				"forEach(Ljava/util/function/Consumer;)V": function (fn) {
+					const items = instantiateServiceProviders(this);
+					for (let i = 0; i < items.length; i++) {
+						rt.invokeInterface(fn, "java/util/function/Consumer", "accept", "(Ljava/lang/Object;)V", [items[i]]);
+					}
+				},
+				"reload()V": function () { this._instances = null; }
+			}
+		});
+
+		// java/lang/ThreadLocal & InheritableThreadLocal
+		rt.registerNativeClass("java/lang/ThreadLocal", {
+			superName: "java/lang/Object",
+			ctor: function () { this._hasValue = false; this._value = null; this._supplier = null; },
+			methods: {
+				"<init>()V": function () { this._hasValue = false; this._value = null; this._supplier = null; },
+				"initialValue()Ljava/lang/Object;": function () { return null; },
+				"get()Ljava/lang/Object;": function () {
+					if (!this._hasValue) {
+						if (this._supplier) {
+							this._value = rt.invokeInterface(this._supplier, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS);
+						} else {
+							this._value = rt.invokeVirtual(this, "initialValue", "()Ljava/lang/Object;", EMPTY_ARGS);
+						}
+						this._hasValue = true;
+					}
+					return this._value;
+				},
+				"set(Ljava/lang/Object;)V": function (v) { this._value = v; this._hasValue = true; },
+				"remove()V": function () { this._value = null; this._hasValue = false; },
+				"withInitial(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;": function (sup) {
+					if (!sup) throw rt.makeException("java/lang/NullPointerException", null);
+					return { __cls: "java/lang/ThreadLocal", _hasValue: false, _value: null, _supplier: sup };
+				}
+			}
+		});
+		rt.registerNativeClass("java/lang/InheritableThreadLocal", {
+			superName: "java/lang/ThreadLocal",
+			methods: {
+				"<init>()V": function () { this._hasValue = false; this._value = null; this._supplier = null; },
+				"childValue(Ljava/lang/Object;)Ljava/lang/Object;": function (parentValue) { return parentValue; }
+			}
+		});
+
+		// java/lang/Thread & java/lang/ScopedValue
+		const mainThreadObj = { __cls: "java/lang/Thread", _name: "Render thread", _id: 1n, _ccl: null };
+		rt.registerNativeClass("java/lang/Thread", {
+			superName: "java/lang/Object",
+			interfaces: ["java/lang/Runnable"],
+			methods: {
+				"<init>()V": function () { this._name = "Thread-0"; this._id = 2n; this._target = null; },
+				"<init>(Ljava/lang/String;)V": function (n) { this._name = strOf(n); this._id = 2n; this._target = null; },
+				"<init>(Ljava/lang/Runnable;)V": function (r) { this._name = "Thread-0"; this._id = 2n; this._target = r; },
+				"<init>(Ljava/lang/Runnable;Ljava/lang/String;)V": function (r, n) { this._name = strOf(n); this._id = 2n; this._target = r; },
+				"currentThread()Ljava/lang/Thread;": function () { return mainThreadObj; },
+				"getName()Ljava/lang/String;": function () { return this._name || "Render thread"; },
+				"setName(Ljava/lang/String;)V": function (n) { this._name = strOf(n); },
+				"getId()J": function () { return this._id || 1n; },
+				"threadId()J": function () { return this._id || 1n; },
+				"isAlive()Z": function () { return 1; },
+				"isInterrupted()Z": function () { return 0; },
+				"interrupted()Z": function () { return 0; },
+				"setDaemon(Z)V": function () {},
+				"setPriority(I)V": function () {},
+				"getContextClassLoader()Ljava/lang/ClassLoader;": function () { return this._ccl || rt._getSystemClassLoader(); },
+				"setContextClassLoader(Ljava/lang/ClassLoader;)V": function (cl) { this._ccl = cl; },
+				"getStackTrace()[Ljava/lang/StackTraceElement;": function () { return rt._newObjectArray("java/lang/StackTraceElement", 0); },
+				"start()V": function () {
+					if (this._target) rt.invokeInterface(this._target, "java/lang/Runnable", "run", "()V", EMPTY_ARGS);
+				},
+				"run()V": function () {
+					if (this._target) rt.invokeInterface(this._target, "java/lang/Runnable", "run", "()V", EMPTY_ARGS);
+				},
+				"sleep(J)V": function () {},
+				"yield()V": function () {}
+			}
+		});
+		rt.registerNativeClass("java/lang/ScopedValue", {
+			superName: "java/lang/Object",
+			methods: {
+				"newInstance()Ljava/lang/ScopedValue;": function () { return { __cls: "java/lang/ScopedValue", _bound: false, _value: null }; },
+				"isBound()Z": function () { return this._bound ? 1 : 0; },
+				"get()Ljava/lang/Object;": function () {
+					if (!this._bound) throw rt.makeException("java/util/NoSuchElementException", "ScopedValue not bound");
+					return this._value;
+				},
+				"orElse(Ljava/lang/Object;)Ljava/lang/Object;": function (other) { return this._bound ? this._value : other; }
+			}
+		});
+
+		// java/lang/ThreadGroup, java/lang/Runtime, locks, ForkJoinPool
+		rt.registerNativeClass("java/lang/ThreadGroup", {
+			superName: "java/lang/Object",
+			methods: {
+				"<init>(Ljava/lang/String;)V": function (n) { this._name = strOf(n); },
+				"<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (p, n) { this._parent = p; this._name = strOf(n); },
+				"getName()Ljava/lang/String;": function () { return this._name || "main"; },
+				"getParent()Ljava/lang/ThreadGroup;": function () { return this._parent || null; }
+			}
+		});
+		const runtimeSingleton = { __cls: "java/lang/Runtime" };
+		rt.registerNativeClass("java/lang/Runtime", {
+			superName: "java/lang/Object",
+			methods: {
+				"getRuntime()Ljava/lang/Runtime;": function () { return runtimeSingleton; },
+				"availableProcessors()I": function () { return (typeof navigator !== "undefined" && navigator.hardwareConcurrency) ? (navigator.hardwareConcurrency | 0) : 4; },
+				"freeMemory()J": function () { return 268435456n; },
+				"totalMemory()J": function () { return 536870912n; },
+				"maxMemory()J": function () { return 1073741824n; },
+				"addShutdownHook(Ljava/lang/Thread;)V": function () {},
+				"removeShutdownHook(Ljava/lang/Thread;)Z": function () { return 1; },
+				"gc()V": function () {}
+			}
+		});
+		const lockMethods = {
+			"<init>()V": function () {},
+			"<init>(Z)V": function () {},
+			"lock()V": function () {},
+			"lockInterruptibly()V": function () {},
+			"tryLock()Z": function () { return 1; },
+			"tryLock(JLjava/util/concurrent/TimeUnit;)Z": function () { return 1; },
+			"unlock()V": function () {}
+		};
+		rt.registerNativeClass("java/util/concurrent/locks/Lock", { superName: "java/lang/Object", isInterface: true, methods: lockMethods });
+		rt.registerNativeClass("java/util/concurrent/locks/ReentrantLock", { superName: "java/lang/Object", interfaces: ["java/util/concurrent/locks/Lock"], methods: lockMethods });
+		rt.registerNativeClass("java/util/concurrent/locks/ReadWriteLock", { superName: "java/lang/Object", isInterface: true, methods: {} });
+		const rwLockMethods = {
+			"<init>()V": function () {
+				this._read = { __cls: "java/util/concurrent/locks/ReentrantLock" };
+				this._write = { __cls: "java/util/concurrent/locks/ReentrantLock" };
+			},
+			"<init>(Z)V": function () {
+				this._read = { __cls: "java/util/concurrent/locks/ReentrantLock" };
+				this._write = { __cls: "java/util/concurrent/locks/ReentrantLock" };
+			},
+			"readLock()Ljava/util/concurrent/locks/Lock;": function () { return this._read || (this._read = { __cls: "java/util/concurrent/locks/ReentrantLock" }); },
+			"writeLock()Ljava/util/concurrent/locks/Lock;": function () { return this._write || (this._write = { __cls: "java/util/concurrent/locks/ReentrantLock" }); },
+			"readLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$ReadLock;": function () { return this._read || (this._read = { __cls: "java/util/concurrent/locks/ReentrantLock" }); },
+			"writeLock()Ljava/util/concurrent/locks/ReentrantReadWriteLock$WriteLock;": function () { return this._write || (this._write = { __cls: "java/util/concurrent/locks/ReentrantLock" }); }
+		};
+		rt.registerNativeClass("java/util/concurrent/locks/ReentrantReadWriteLock", {
+			superName: "java/lang/Object",
+			interfaces: ["java/util/concurrent/locks/ReadWriteLock"],
+			methods: rwLockMethods
+		});
+		rt.registerNativeClass("java/util/concurrent/Executor", { superName: "java/lang/Object", isInterface: true, methods: {} });
+		rt.registerNativeClass("java/util/concurrent/ExecutorService", { superName: "java/lang/Object", isInterface: true, interfaces: ["java/util/concurrent/Executor"], methods: {} });
+		const commonFjp = { __cls: "java/util/concurrent/ForkJoinPool" };
+		rt.registerNativeClass("java/util/concurrent/ForkJoinPool", {
+			superName: "java/lang/Object",
+			interfaces: ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
+			methods: {
+				"<init>()V": function () {},
+				"<init>(I)V": function () {},
+				"<init>(ILjava/util/concurrent/ForkJoinPool$ForkJoinWorkerThreadFactory;Ljava/lang/Thread$UncaughtExceptionHandler;Z)V": function () {},
+				"commonPool()Ljava/util/concurrent/ForkJoinPool;": function () { return commonFjp; },
+				"execute(Ljava/lang/Runnable;)V": function (r) { if (r) rt.invokeInterface(r, "java/lang/Runnable", "run", "()V", EMPTY_ARGS); },
+				"shutdown()V": function () {},
+				"isShutdown()Z": function () { return 0; },
+				"isTerminated()Z": function () { return 0; },
+				"getParallelism()I": function () { return 1; }
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/longs/LongOpenHashSet", {
+			superName: "java/lang/Object",
+			methods: {
+				"<init>()V": function () { this._set = new Set(); },
+				"<init>(I)V": function () { this._set = new Set(); },
+				"add(J)Z": function (v) {
+					if (!this._set) this._set = new Set();
+					const k = BigInt.asIntN(64, v);
+					if (this._set.has(k)) return 0;
+					this._set.add(k);
+					return 1;
+				},
+				"contains(J)Z": function (v) { return (this._set && this._set.has(BigInt.asIntN(64, v))) ? 1 : 0; },
+				"remove(J)Z": function (v) { return (this._set && this._set.delete(BigInt.asIntN(64, v))) ? 1 : 0; },
+				"size()I": function () { return this._set ? (this._set.size | 0) : 0; },
+				"isEmpty()Z": function () { return (!this._set || this._set.size === 0) ? 1 : 0; },
+				"clear()V": function () { if (this._set) this._set.clear(); }
+			}
+		});
+
+		// java/time/LocalDateTime & java/time/format/DateTimeFormatter
+		rt.registerNativeClass("java/time/temporal/TemporalAccessor", { superName: "java/lang/Object", isInterface: true, methods: {} });
+		rt.registerNativeClass("java/time/LocalDateTime", {
+			superName: "java/lang/Object",
+			interfaces: ["java/time/temporal/TemporalAccessor", "java/lang/Comparable", "java/io/Serializable"],
+			methods: {
+				"now()Ljava/time/LocalDateTime;": function () { return { __cls: "java/time/LocalDateTime", _date: new Date() }; },
+				"getYear()I": function () { return (this._date || new Date()).getFullYear() | 0; },
+				"getMonthValue()I": function () { return ((this._date || new Date()).getMonth() + 1) | 0; },
+				"getDayOfMonth()I": function () { return (this._date || new Date()).getDate() | 0; },
+				"getHour()I": function () { return (this._date || new Date()).getHours() | 0; },
+				"getMinute()I": function () { return (this._date || new Date()).getMinutes() | 0; },
+				"getSecond()I": function () { return (this._date || new Date()).getSeconds() | 0; },
+				"format(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;": function (fmt) {
+					return fmt ? rt.invokeVirtual(fmt, "format", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;", [this]) : (this._date || new Date()).toISOString();
+				},
+				"toString()Ljava/lang/String;": function () { return (this._date || new Date()).toISOString().replace("Z", ""); }
+			}
+		});
+		function makeDateTimeFormatter(pattern) {
+			return { __cls: "java/time/format/DateTimeFormatter", _pattern: pattern || "yyyy-MM-dd HH:mm:ss" };
+		}
+		rt.registerNativeClass("java/time/format/DateTimeFormatter", {
+			superName: "java/lang/Object",
+			staticFields: {
+				ISO_LOCAL_DATE_TIME: makeDateTimeFormatter("yyyy-MM-dd'T'HH:mm:ss"),
+				ISO_LOCAL_DATE: makeDateTimeFormatter("yyyy-MM-dd"),
+				ISO_LOCAL_TIME: makeDateTimeFormatter("HH:mm:ss")
+			},
+			methods: {
+				"ofPattern(Ljava/lang/String;)Ljava/time/format/DateTimeFormatter;": function (pat) { return makeDateTimeFormatter(strOf(pat)); },
+				"ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": function (pat) { return makeDateTimeFormatter(strOf(pat)); },
+				"format(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;": function (ta) {
+					const d = (ta && ta._date) ? ta._date : new Date();
+					const pad = function (n, w) { return String(n).padStart(w || 2, "0"); };
+					return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " "
+						+ pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+				}
+			}
+		});
+
+		// Guava Suppliers, ImmutableList, ImmutableSet, ImmutableMap
+		rt.registerNativeClass("com/google/common/base/Supplier", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/util/function/Supplier"],
+			methods: {}
+		});
+		rt.registerNativeClass("com/google/common/base/Suppliers", {
+			superName: "java/lang/Object",
+			methods: {
+				"memoize(Lcom/google/common/base/Supplier;)Lcom/google/common/base/Supplier;": function (delegate) {
+					let initialized = false;
+					let cached = null;
+					const fn = function () {
+						if (!initialized) {
+							cached = rt.invokeInterface(delegate, "com/google/common/base/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS);
+							initialized = true;
+						}
+						return cached;
+					};
+					return {
+						__cls: "com/google/common/base/Supplier",
+						__interfaces: ["com/google/common/base/Supplier", "java/util/function/Supplier"],
+						__samMethodMap: { "get()Ljava/lang/Object;": fn, "get": fn }
+					};
+				},
+				"ofInstance(Ljava/lang/Object;)Lcom/google/common/base/Supplier;": function (inst) {
+					const fn = function () { return inst; };
+					return {
+						__cls: "com/google/common/base/Supplier",
+						__interfaces: ["com/google/common/base/Supplier", "java/util/function/Supplier"],
+						__samMethodMap: { "get()Ljava/lang/Object;": fn, "get": fn }
+					};
+				},
+				"synchronizedSupplier(Lcom/google/common/base/Supplier;)Lcom/google/common/base/Supplier;": function (s) { return s; }
+			}
+		});
+		function makeImmList(items) {
+			const list = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+			list.__cls = "com/google/common/collect/ImmutableList";
+			for (let i = 0; i < items.length; i++) {
+				rt.invokeVirtual(list, "add", "(Ljava/lang/Object;)Z", [items[i]]);
+			}
+			return list;
+		}
+		rt.registerNativeClass("com/google/common/collect/ImmutableList$Builder", {
+			superName: "java/lang/Object",
+			ctor: function () { this._buf = []; },
+			methods: {
+				"<init>()V": function () { this._buf = []; },
+				"add(Ljava/lang/Object;)Lcom/google/common/collect/ImmutableList$Builder;": function (e) { if (!this._buf) this._buf = []; this._buf.push(e); return this; },
+				"add([Ljava/lang/Object;)Lcom/google/common/collect/ImmutableList$Builder;": function (arr) { if (!this._buf) this._buf = []; if (arr) for (let i = 0; i < arr.length; i++) this._buf.push(arr[i]); return this; },
+				"addAll(Ljava/lang/Iterable;)Lcom/google/common/collect/ImmutableList$Builder;": function (itb) {
+					if (!this._buf) this._buf = [];
+					if (itb) {
+						const it = rt.invokeInterface(itb, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							this._buf.push(rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS));
+						}
+					}
+					return this;
+				},
+				"addAll(Ljava/util/Iterator;)Lcom/google/common/collect/ImmutableList$Builder;": function (it) {
+					if (!this._buf) this._buf = [];
+					if (it) {
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							this._buf.push(rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS));
+						}
+					}
+					return this;
+				},
+				"build()Lcom/google/common/collect/ImmutableList;": function () { return makeImmList(this._buf || []); }
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ImmutableList", {
+			superName: "java/util/ArrayList",
+			interfaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"of": function () {
+					if (arguments.length === 1 && Array.isArray(arguments[0])) return makeImmList(arguments[0]);
+					return makeImmList(Array.prototype.slice.call(arguments));
+				},
+				"copyOf(Ljava/util/Collection;)Lcom/google/common/collect/ImmutableList;": function (col) {
+					const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+					out.__cls = "com/google/common/collect/ImmutableList";
+					if (col) rt.invokeVirtual(out, "addAll", "(Ljava/util/Collection;)Z", [col]);
+					return out;
+				},
+				"copyOf(Ljava/lang/Iterable;)Lcom/google/common/collect/ImmutableList;": function (itb) {
+					const items = [];
+					if (itb) {
+						const it = rt.invokeInterface(itb, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							items.push(rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS));
+						}
+					}
+					return makeImmList(items);
+				},
+				"copyOf([Ljava/lang/Object;)Lcom/google/common/collect/ImmutableList;": function (arr) {
+					return makeImmList(arr ? Array.from(arr) : []);
+				},
+				"builder()Lcom/google/common/collect/ImmutableList$Builder;": function () {
+					return { __cls: "com/google/common/collect/ImmutableList$Builder", _buf: [] };
+				},
+				"toImmutableList()Ljava/util/stream/Collector;": function () {
+					return { __cls: "java/util/stream/Collector", _collect: function (a) { return makeImmList(a); } };
+				}
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ImmutableSet", {
+			superName: "java/util/LinkedHashSet",
+			interfaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"of": function () {
+					const s = rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS);
+					s.__cls = "com/google/common/collect/ImmutableSet";
+					const items = (arguments.length === 1 && Array.isArray(arguments[0])) ? arguments[0] : Array.prototype.slice.call(arguments);
+					for (let i = 0; i < items.length; i++) rt.invokeVirtual(s, "add", "(Ljava/lang/Object;)Z", [items[i]]);
+					return s;
+				},
+				"copyOf": function (col) {
+					const s = rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS);
+					s.__cls = "com/google/common/collect/ImmutableSet";
+					if (Array.isArray(col)) {
+						for (let i = 0; i < col.length; i++) rt.invokeVirtual(s, "add", "(Ljava/lang/Object;)Z", [col[i]]);
+					} else if (col) {
+						const it = rt.invokeInterface(col, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							rt.invokeVirtual(s, "add", "(Ljava/lang/Object;)Z", [rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS)]);
+						}
+					}
+					return s;
+				}
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ImmutableMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"of": function () {
+					const m = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					m.__cls = "com/google/common/collect/ImmutableMap";
+					for (let i = 0; i + 1 < arguments.length; i += 2) {
+						rt.invokeVirtual(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [arguments[i], arguments[i + 1]]);
+					}
+					return m;
+				}
+			}
+		});
+
+		// Apache Commons Lang3 Mutable* & Pair
+		rt.registerNativeClass("org/apache/commons/lang3/mutable/MutableLong", {
+			superName: "java/lang/Number",
+			interfaces: ["java/lang/Comparable"],
+			methods: {
+				"<init>()V": function () { this.value = 0n; },
+				"<init>(J)V": function (v) { this.value = BigInt.asIntN(64, v); },
+				"<init>(Ljava/lang/Number;)V": function (n) { this.value = n ? rt.invokeVirtual(n, "longValue", "()J", EMPTY_ARGS) : 0n; },
+				"getValue()Ljava/lang/Long;": function () { return { __cls: "java/lang/Long", value: this.value || 0n }; },
+				"getValue()Ljava/lang/Object;": function () { return { __cls: "java/lang/Long", value: this.value || 0n }; },
+				"setValue(J)V": function (v) { this.value = BigInt.asIntN(64, v); },
+				"setValue(Ljava/lang/Number;)V": function (n) { this.value = n ? rt.invokeVirtual(n, "longValue", "()J", EMPTY_ARGS) : 0n; },
+				"setValue(Ljava/lang/Object;)V": function (n) { this.value = n ? rt.invokeVirtual(n, "longValue", "()J", EMPTY_ARGS) : 0n; },
+				"longValue()J": function () { return this.value || 0n; },
+				"intValue()I": function () { return Number(BigInt.asIntN(32, this.value || 0n)); },
+				"increment()V": function () { this.value = BigInt.asIntN(64, (this.value || 0n) + 1n); },
+				"decrement()V": function () { this.value = BigInt.asIntN(64, (this.value || 0n) - 1n); },
+				"add(J)V": function (v) { this.value = BigInt.asIntN(64, (this.value || 0n) + BigInt.asIntN(64, v)); }
+			}
+		});
+		rt.registerNativeClass("org/apache/commons/lang3/mutable/MutableInt", {
+			superName: "java/lang/Number",
+			interfaces: ["java/lang/Comparable"],
+			methods: {
+				"<init>()V": function () { this.value = 0; },
+				"<init>(I)V": function (v) { this.value = v | 0; },
+				"getValue()Ljava/lang/Integer;": function () { return COMPILED_HELPERS.boxInt(this.value | 0); },
+				"getValue()Ljava/lang/Object;": function () { return COMPILED_HELPERS.boxInt(this.value | 0); },
+				"setValue(I)V": function (v) { this.value = v | 0; },
+				"intValue()I": function () { return this.value | 0; },
+				"increment()V": function () { this.value = ((this.value | 0) + 1) | 0; },
+				"decrement()V": function () { this.value = ((this.value | 0) - 1) | 0; }
+			}
+		});
+		rt.registerNativeClass("org/apache/commons/lang3/mutable/MutableBoolean", {
+			superName: "java/lang/Object",
+			methods: {
+				"<init>()V": function () { this.value = 0; },
+				"<init>(Z)V": function (v) { this.value = v ? 1 : 0; },
+				"booleanValue()Z": function () { return this.value ? 1 : 0; },
+				"isTrue()Z": function () { return this.value ? 1 : 0; },
+				"isFalse()Z": function () { return this.value ? 0 : 1; },
+				"setTrue()V": function () { this.value = 1; },
+				"setFalse()V": function () { this.value = 0; },
+				"setValue(Z)V": function (v) { this.value = v ? 1 : 0; }
+			}
+		});
+		rt.registerNativeClass("org/apache/commons/lang3/mutable/MutableObject", {
+			superName: "java/lang/Object",
+			methods: {
+				"<init>()V": function () { this.value = null; },
+				"<init>(Ljava/lang/Object;)V": function (v) { this.value = v; },
+				"getValue()Ljava/lang/Object;": function () { return this.value; },
+				"setValue(Ljava/lang/Object;)V": function (v) { this.value = v; }
+			}
+		});
+		rt.registerNativeClass("org/apache/commons/lang3/tuple/Pair", {
+			superName: "java/lang/Object",
+			interfaces: ["java/util/Map$Entry", "java/lang/Comparable", "java/io/Serializable"],
+			methods: {
+				"of(Ljava/lang/Object;Ljava/lang/Object;)Lorg/apache/commons/lang3/tuple/Pair;": function (l, r) {
+					return { __cls: "org/apache/commons/lang3/tuple/Pair", _left: l, _right: r };
+				},
+				"getLeft()Ljava/lang/Object;": function () { return this._left; },
+				"getRight()Ljava/lang/Object;": function () { return this._right; },
+				"getKey()Ljava/lang/Object;": function () { return this._left; },
+				"getValue()Ljava/lang/Object;": function () { return this._right; },
+				"equals(Ljava/lang/Object;)Z": function (o) {
+					return (o && o.__cls === "org/apache/commons/lang3/tuple/Pair"
+						&& rt.invokeStatic("java/util/Objects", "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", [this._left, o._left])
+						&& rt.invokeStatic("java/util/Objects", "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", [this._right, o._right])) ? 1 : 0;
+				},
+				"hashCode()I": function () {
+					return (rt.invokeStatic("java/util/Objects", "hashCode", "(Ljava/lang/Object;)I", [this._left])
+						^ rt.invokeStatic("java/util/Objects", "hashCode", "(Ljava/lang/Object;)I", [this._right])) | 0;
+				}
+			}
+		});
+
+		// Log4j Level & Mojang LogUtils
+		rt.registerNativeClass("com/mojang/logging/LogUtils", {
+			superName: "java/lang/Object",
+			methods: {
+				"getLogger()Lorg/slf4j/Logger;": function () {
+					if (rt.nativeClasses.has("org/slf4j/LoggerFactory")) {
+						return rt.invokeStatic("org/slf4j/LoggerFactory", "getLogger", "(Ljava/lang/String;)Lorg/slf4j/Logger;", ["Minecraft"]);
+					}
+					return { __cls: "org/slf4j/Logger", _logName: "Minecraft" };
+				},
+				"getClassLogger()Lorg/slf4j/Logger;": function () {
+					return rt.invokeStatic("com/mojang/logging/LogUtils", "getLogger", "()Lorg/slf4j/Logger;", EMPTY_ARGS);
+				}
+			}
+		});
+
+		// Extra JDK collections: IdentityHashMap, WeakHashMap, CopyOnWriteArrayList, CopyOnWriteArraySet
+		rt.registerNativeClass("java/util/IdentityHashMap", {
+			superName: "java/util/HashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; },
+				"<init>(I)V": function () { this._entries = []; },
+				"<init>(Ljava/util/Map;)V": function (m) {
+					this._entries = [];
+					if (m) rt.invokeVirtual(this, "putAll", "(Ljava/util/Map;)V", [m]);
+				}
+			}
+		});
+		rt.registerNativeClass("java/util/WeakHashMap", {
+			superName: "java/util/HashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; },
+				"<init>(I)V": function () { this._entries = []; },
+				"<init>(IF)V": function () { this._entries = []; }
+			}
+		});
+		rt.registerNativeClass("java/util/concurrent/CopyOnWriteArrayList", {
+			superName: "java/util/ArrayList",
+			interfaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () { this._items = []; this._arr = []; },
+				"<init>(Ljava/util/Collection;)V": function (c) {
+					this._items = []; this._arr = [];
+					if (c) rt.invokeVirtual(this, "addAll", "(Ljava/util/Collection;)Z", [c]);
+				},
+				"<init>([Ljava/lang/Object;)V": function (arr) {
+					this._items = []; this._arr = [];
+					if (arr) for (let i = 0; i < arr.length; i++) rt.invokeVirtual(this, "add", "(Ljava/lang/Object;)Z", [arr[i]]);
+				}
+			}
+		});
+		rt.registerNativeClass("java/util/concurrent/CopyOnWriteArraySet", {
+			superName: "java/util/LinkedHashSet",
+			interfaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () { this._items = []; this._arr = []; }
+			}
+		});
+
+		// Guava Maps, Lists, Sets, BiMap, HashBiMap, Forwarding*, Multimaps, HashBasedTable, Stopwatch
+		rt.registerNativeClass("com/google/common/collect/Maps", {
+			superName: "java/lang/Object",
+			methods: {
+				"newHashMap()Ljava/util/HashMap;": function () { return rt.newInstance("java/util/HashMap", EMPTY_ARGS); },
+				"newHashMap(Ljava/util/Map;)Ljava/util/HashMap;": function (m) {
+					const out = rt.newInstance("java/util/HashMap", EMPTY_ARGS);
+					if (m) rt.invokeVirtual(out, "putAll", "(Ljava/util/Map;)V", [m]);
+					return out;
+				},
+				"newHashMapWithExpectedSize(I)Ljava/util/HashMap;": function () { return rt.newInstance("java/util/HashMap", EMPTY_ARGS); },
+				"newLinkedHashMap()Ljava/util/LinkedHashMap;": function () { return rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS); },
+				"newLinkedHashMap(Ljava/util/Map;)Ljava/util/LinkedHashMap;": function (m) {
+					const out = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					if (m) rt.invokeVirtual(out, "putAll", "(Ljava/util/Map;)V", [m]);
+					return out;
+				},
+				"newLinkedHashMapWithExpectedSize(I)Ljava/util/LinkedHashMap;": function () { return rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS); },
+				"newConcurrentMap()Ljava/util/concurrent/ConcurrentMap;": function () { return rt.newInstance("java/util/concurrent/ConcurrentHashMap", EMPTY_ARGS); },
+				"newIdentityHashMap()Ljava/util/IdentityHashMap;": function () { return rt.newInstance("java/util/IdentityHashMap", EMPTY_ARGS); },
+				"newTreeMap()Ljava/util/TreeMap;": function () { return rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS); },
+				"newEnumMap(Ljava/lang/Class;)Ljava/util/EnumMap;": function () { return rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS); },
+				"immutableEntry(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map$Entry;": function (k, v) {
+					return { __cls: "java/util/Map$Entry", _key: k, _val: v, key: k, value: v };
+				}
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/Lists", {
+			superName: "java/lang/Object",
+			methods: {
+				"newArrayList()Ljava/util/ArrayList;": function () { return rt.newInstance("java/util/ArrayList", EMPTY_ARGS); },
+				"newArrayList([Ljava/lang/Object;)Ljava/util/ArrayList;": function (arr) {
+					const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+					if (arr) for (let i = 0; i < arr.length; i++) rt.invokeVirtual(out, "add", "(Ljava/lang/Object;)Z", [arr[i]]);
+					return out;
+				},
+				"newArrayList(Ljava/lang/Iterable;)Ljava/util/ArrayList;": function (itb) {
+					const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+					if (itb) {
+						const it = rt.invokeInterface(itb, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							rt.invokeVirtual(out, "add", "(Ljava/lang/Object;)Z", [rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS)]);
+						}
+					}
+					return out;
+				},
+				"newArrayListWithCapacity(I)Ljava/util/ArrayList;": function () { return rt.newInstance("java/util/ArrayList", EMPTY_ARGS); },
+				"newArrayListWithExpectedSize(I)Ljava/util/ArrayList;": function () { return rt.newInstance("java/util/ArrayList", EMPTY_ARGS); },
+				"newLinkedList()Ljava/util/LinkedList;": function () { return rt.newInstance("java/util/LinkedList", EMPTY_ARGS); },
+				"newCopyOnWriteArrayList()Ljava/util/concurrent/CopyOnWriteArrayList;": function () { return rt.newInstance("java/util/concurrent/CopyOnWriteArrayList", EMPTY_ARGS); },
+				"reverse(Ljava/util/List;)Ljava/util/List;": function (list) {
+					const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+					if (list) {
+						const sz = rt.invokeInterface(list, "java/util/List", "size", "()I", EMPTY_ARGS) | 0;
+						for (let i = sz - 1; i >= 0; i--) {
+							rt.invokeVirtual(out, "add", "(Ljava/lang/Object;)Z", [rt.invokeInterface(list, "java/util/List", "get", "(I)Ljava/lang/Object;", [i])]);
+						}
+					}
+					return out;
+				}
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/Sets", {
+			superName: "java/lang/Object",
+			methods: {
+				"newHashSet()Ljava/util/HashSet;": function () { return rt.newInstance("java/util/HashSet", EMPTY_ARGS); },
+				"newHashSet([Ljava/lang/Object;)Ljava/util/HashSet;": function (arr) {
+					const out = rt.newInstance("java/util/HashSet", EMPTY_ARGS);
+					if (arr) for (let i = 0; i < arr.length; i++) rt.invokeVirtual(out, "add", "(Ljava/lang/Object;)Z", [arr[i]]);
+					return out;
+				},
+				"newLinkedHashSet()Ljava/util/LinkedHashSet;": function () { return rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS); },
+				"newIdentityHashSet()Ljava/util/Set;": function () { return rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS); },
+				"newConcurrentHashSet()Ljava/util/Set;": function () { return rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS); }
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/BiMap", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/util/Map"],
+			methods: {}
+		});
+		rt.registerNativeClass("com/google/common/collect/HashBiMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["com/google/common/collect/BiMap", "java/util/Map"],
+			methods: {
+				"create()Lcom/google/common/collect/HashBiMap;": function () {
+					const m = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					m.__cls = "com/google/common/collect/HashBiMap";
+					return m;
+				},
+				"create(I)Lcom/google/common/collect/HashBiMap;": function () {
+					const m = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					m.__cls = "com/google/common/collect/HashBiMap";
+					return m;
+				},
+				"forcePut(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (k, v) {
+					return rt.invokeVirtual(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, v]);
+				},
+				"inverse()Lcom/google/common/collect/BiMap;": function () {
+					const inv = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					inv.__cls = "com/google/common/collect/HashBiMap";
+					const entries = this._entries || [];
+					for (let i = 0; i < entries.length; i++) {
+						rt.invokeVirtual(inv, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [entries[i][1], entries[i][0]]);
+					}
+					return inv;
+				}
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ForwardingObject", {
+			superName: "java/lang/Object",
+			methods: { "<init>()V": function () {} }
+		});
+		rt.registerNativeClass("com/google/common/collect/ForwardingCollection", {
+			superName: "com/google/common/collect/ForwardingObject",
+			interfaces: ["java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () {},
+				"size()I": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "size", "()I", EMPTY_ARGS); },
+				"isEmpty()Z": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "isEmpty", "()Z", EMPTY_ARGS); },
+				"add(Ljava/lang/Object;)Z": function (e) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "add", "(Ljava/lang/Object;)Z", [e]); },
+				"addAll(Ljava/util/Collection;)Z": function (c) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "addAll", "(Ljava/util/Collection;)Z", [c]); },
+				"contains(Ljava/lang/Object;)Z": function (e) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "contains", "(Ljava/lang/Object;)Z", [e]); },
+				"remove(Ljava/lang/Object;)Z": function (e) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "remove", "(Ljava/lang/Object;)Z", [e]); },
+				"clear()V": function () { rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/util/Collection", "clear", "()V", EMPTY_ARGS); },
+				"iterator()Ljava/util/Iterator;": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/lang/Object;", EMPTY_ARGS), "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS); }
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ForwardingList", {
+			superName: "com/google/common/collect/ForwardingCollection",
+			interfaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () {},
+				"get(I)Ljava/lang/Object;": function (i) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/List;", EMPTY_ARGS), "java/util/List", "get", "(I)Ljava/lang/Object;", [i]); },
+				"set(ILjava/lang/Object;)Ljava/lang/Object;": function (i, v) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/List;", EMPTY_ARGS), "java/util/List", "set", "(ILjava/lang/Object;)Ljava/lang/Object;", [i, v]); },
+				"add(ILjava/lang/Object;)V": function (i, v) { rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/List;", EMPTY_ARGS), "java/util/List", "add", "(ILjava/lang/Object;)V", [i, v]); },
+				"remove(I)Ljava/lang/Object;": function (i) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/List;", EMPTY_ARGS), "java/util/List", "remove", "(I)Ljava/lang/Object;", [i]); },
+				"indexOf(Ljava/lang/Object;)I": function (o) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/List;", EMPTY_ARGS), "java/util/List", "indexOf", "(Ljava/lang/Object;)I", [o]); }
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/ForwardingMap", {
+			superName: "com/google/common/collect/ForwardingObject",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () {},
+				"size()I": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "size", "()I", EMPTY_ARGS); },
+				"isEmpty()Z": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "isEmpty", "()Z", EMPTY_ARGS); },
+				"get(Ljava/lang/Object;)Ljava/lang/Object;": function (k) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]); },
+				"put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (k, v) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, v]); },
+				"putAll(Ljava/util/Map;)V": function (m) { rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "putAll", "(Ljava/util/Map;)V", [m]); },
+				"remove(Ljava/lang/Object;)Ljava/lang/Object;": function (k) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]); },
+				"containsKey(Ljava/lang/Object;)Z": function (k) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", [k]); },
+				"containsValue(Ljava/lang/Object;)Z": function (v) { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "containsValue", "(Ljava/lang/Object;)Z", [v]); },
+				"clear()V": function () { rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "clear", "()V", EMPTY_ARGS); },
+				"keySet()Ljava/util/Set;": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "keySet", "()Ljava/util/Set;", EMPTY_ARGS); },
+				"values()Ljava/util/Collection;": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "values", "()Ljava/util/Collection;", EMPTY_ARGS); },
+				"entrySet()Ljava/util/Set;": function () { return rt.invokeInterface(rt.invokeVirtual(this, "delegate", "()Ljava/util/Map;", EMPTY_ARGS), "java/util/Map", "entrySet", "()Ljava/util/Set;", EMPTY_ARGS); }
+			}
+		});
+		function makeMultimapObj(backingMap, listSupplier, clsName) {
+			return {
+				__cls: clsName || "com/google/common/collect/ListMultimap",
+				_map: backingMap || rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS),
+				_factory: listSupplier || null
+			};
+		}
+		const multimapMethods = {
+			"get(Ljava/lang/Object;)Ljava/util/List;": function (k) {
+				let v = rt.invokeInterface(this._map, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]);
+				if (!v) {
+					v = this._factory
+						? rt.invokeInterface(this._factory, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS)
+						: rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+					rt.invokeInterface(this._map, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, v]);
+				}
+				return v;
+			},
+			"get(Ljava/lang/Object;)Ljava/util/Collection;": function (k) { return multimapMethods["get(Ljava/lang/Object;)Ljava/util/List;"].call(this, k); },
+			"put(Ljava/lang/Object;Ljava/lang/Object;)Z": function (k, v) {
+				const col = multimapMethods["get(Ljava/lang/Object;)Ljava/util/List;"].call(this, k);
+				return rt.invokeInterface(col, "java/util/Collection", "add", "(Ljava/lang/Object;)Z", [v]) ? 1 : 0;
+			},
+			"putAll(Ljava/lang/Object;Ljava/lang/Iterable;)Z": function (k, itb) {
+				const col = multimapMethods["get(Ljava/lang/Object;)Ljava/util/List;"].call(this, k);
+				let changed = 0;
+				if (itb) {
+					const it = rt.invokeInterface(itb, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+					while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+						if (rt.invokeInterface(col, "java/util/Collection", "add", "(Ljava/lang/Object;)Z", [rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS)])) changed = 1;
+					}
+				}
+				return changed;
+			},
+			"containsKey(Ljava/lang/Object;)Z": function (k) { return rt.invokeInterface(this._map, "java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", [k]) ? 1 : 0; },
+			"keySet()Ljava/util/Set;": function () { return rt.invokeInterface(this._map, "java/util/Map", "keySet", "()Ljava/util/Set;", EMPTY_ARGS); },
+			"asMap()Ljava/util/Map;": function () { return this._map; },
+			"clear()V": function () { rt.invokeInterface(this._map, "java/util/Map", "clear", "()V", EMPTY_ARGS); },
+			"isEmpty()Z": function () { return rt.invokeInterface(this._map, "java/util/Map", "isEmpty", "()Z", EMPTY_ARGS) ? 1 : 0; },
+			"size()I": function () { return rt.invokeInterface(this._map, "java/util/Map", "size", "()I", EMPTY_ARGS) | 0; },
+			"values()Ljava/util/Collection;": function () {
+				const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+				const vals = rt.invokeInterface(this._map, "java/util/Map", "values", "()Ljava/util/Collection;", EMPTY_ARGS);
+				const it = rt.invokeInterface(vals, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+				while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+					rt.invokeVirtual(out, "addAll", "(Ljava/util/Collection;)Z", [rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS)]);
+				}
+				return out;
+			}
+		};
+		rt.registerNativeClass("com/google/common/collect/Multimap", { superName: "java/lang/Object", isInterface: true, methods: multimapMethods });
+		rt.registerNativeClass("com/google/common/collect/ListMultimap", { superName: "java/lang/Object", isInterface: true, interfaces: ["com/google/common/collect/Multimap"], methods: multimapMethods });
+		rt.registerNativeClass("com/google/common/collect/SetMultimap", { superName: "java/lang/Object", isInterface: true, interfaces: ["com/google/common/collect/Multimap"], methods: multimapMethods });
+		rt.registerNativeClass("com/google/common/collect/Multimaps", {
+			superName: "java/lang/Object",
+			methods: {
+				"newListMultimap(Ljava/util/Map;Lcom/google/common/base/Supplier;)Lcom/google/common/collect/ListMultimap;": function (m, sup) {
+					return makeMultimapObj(m, sup, "com/google/common/collect/ListMultimap");
+				},
+				"newSetMultimap(Ljava/util/Map;Lcom/google/common/base/Supplier;)Lcom/google/common/collect/SetMultimap;": function (m, sup) {
+					return makeMultimapObj(m, sup, "com/google/common/collect/SetMultimap");
+				},
+				"newMultimap(Ljava/util/Map;Lcom/google/common/base/Supplier;)Lcom/google/common/collect/Multimap;": function (m, sup) {
+					return makeMultimapObj(m, sup, "com/google/common/collect/Multimap");
+				},
+				"synchronizedListMultimap(Lcom/google/common/collect/ListMultimap;)Lcom/google/common/collect/ListMultimap;": function (mm) { return mm; },
+				"synchronizedSetMultimap(Lcom/google/common/collect/SetMultimap;)Lcom/google/common/collect/SetMultimap;": function (mm) { return mm; },
+				"unmodifiableListMultimap(Lcom/google/common/collect/ListMultimap;)Lcom/google/common/collect/ListMultimap;": function (mm) { return mm; }
+			}
+		});
+		rt.registerNativeClass("com/google/common/collect/Table", { superName: "java/lang/Object", isInterface: true, methods: {} });
+		rt.registerNativeClass("com/google/common/collect/HashBasedTable", {
+			superName: "java/lang/Object",
+			interfaces: ["com/google/common/collect/Table"],
+			methods: {
+				"create()Lcom/google/common/collect/HashBasedTable;": function () {
+					return { __cls: "com/google/common/collect/HashBasedTable", _rows: rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS) };
+				},
+				"put(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (r, c, v) {
+					let row = rt.invokeInterface(this._rows, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [r]);
+					if (!row) {
+						row = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+						rt.invokeInterface(this._rows, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [r, row]);
+					}
+					return rt.invokeInterface(row, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [c, v]);
+				},
+				"get(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (r, c) {
+					const row = rt.invokeInterface(this._rows, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [r]);
+					return row ? rt.invokeInterface(row, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [c]) : null;
+				},
+				"row(Ljava/lang/Object;)Ljava/util/Map;": function (r) {
+					let row = rt.invokeInterface(this._rows, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [r]);
+					if (!row) {
+						row = rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+						rt.invokeInterface(this._rows, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [r, row]);
+					}
+					return row;
+				},
+				"clear()V": function () { rt.invokeInterface(this._rows, "java/util/Map", "clear", "()V", EMPTY_ARGS); },
+				"isEmpty()Z": function () { return rt.invokeInterface(this._rows, "java/util/Map", "isEmpty", "()Z", EMPTY_ARGS) ? 1 : 0; }
+			}
+		});
+		rt.registerNativeClass("com/google/common/base/Stopwatch", {
+			superName: "java/lang/Object",
+			methods: {
+				"createUnstarted()Lcom/google/common/base/Stopwatch;": function () { return { __cls: "com/google/common/base/Stopwatch", _start: 0, _elapsed: 0, _running: false }; },
+				"createStarted()Lcom/google/common/base/Stopwatch;": function () { return { __cls: "com/google/common/base/Stopwatch", _start: Date.now(), _elapsed: 0, _running: true }; },
+				"start()Lcom/google/common/base/Stopwatch;": function () { this._start = Date.now(); this._running = true; return this; },
+				"stop()Lcom/google/common/base/Stopwatch;": function () { if (this._running) { this._elapsed += Date.now() - this._start; this._running = false; } return this; },
+				"reset()Lcom/google/common/base/Stopwatch;": function () { this._elapsed = 0; this._running = false; return this; },
+				"isRunning()Z": function () { return this._running ? 1 : 0; },
+				"toString()Ljava/lang/String;": function () { return (this._elapsed + (this._running ? (Date.now() - this._start) : 0)) + " ms"; }
+			}
+		});
+
+		// Fastutil lightweight Map/Set implementations
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Object2ObjectOpenHashMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; },
+				"<init>(I)V": function () { this._entries = []; },
+				"<init>(IF)V": function () { this._entries = []; },
+				"<init>(Ljava/util/Map;)V": function (m) { this._entries = []; if (m) rt.invokeVirtual(this, "putAll", "(Ljava/util/Map;)V", [m]); }
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Reference2ObjectOpenHashMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; },
+				"<init>(I)V": function () { this._entries = []; }
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Object2IntOpenHashMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; this._defRet = 0; },
+				"<init>(I)V": function () { this._entries = []; this._defRet = 0; },
+				"defaultReturnValue(I)V": function (v) { this._defRet = v | 0; },
+				"defaultReturnValue()I": function () { return this._defRet | 0; },
+				"getInt(Ljava/lang/Object;)I": function (k) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]);
+					return v == null ? (this._defRet | 0) : (rt._adaptValue(v, "Ljava/lang/Object;", "I") | 0);
+				},
+				"put(Ljava/lang/Object;I)I": function (k, v) {
+					const old = rt.invokeVirtual(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, COMPILED_HELPERS.boxInt(v)]);
+					return old == null ? (this._defRet | 0) : (rt._adaptValue(old, "Ljava/lang/Object;", "I") | 0);
+				}
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Object2LongOpenHashMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; this._defRet = 0n; },
+				"<init>(I)V": function () { this._entries = []; this._defRet = 0n; },
+				"defaultReturnValue(J)V": function (v) { this._defRet = BigInt.asIntN(64, v); },
+				"getLong(Ljava/lang/Object;)J": function (k) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]);
+					return v == null ? (this._defRet || 0n) : rt._adaptValue(v, "Ljava/lang/Object;", "J");
+				},
+				"put(Ljava/lang/Object;J)J": function (k, v) {
+					const old = rt.invokeVirtual(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, { __cls: "java/lang/Long", value: BigInt.asIntN(64, v) }]);
+					return old == null ? (this._defRet || 0n) : rt._adaptValue(old, "Ljava/lang/Object;", "J");
+				}
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/ReferenceOpenHashSet", {
+			superName: "java/util/LinkedHashSet",
+			interfaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () { this._items = []; this._arr = []; },
+				"<init>(I)V": function () { this._items = []; this._arr = []; }
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/ObjectOpenHashSet", {
+			superName: "java/util/LinkedHashSet",
+			interfaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
+			methods: {
+				"<init>()V": function () { this._items = []; this._arr = []; },
+				"<init>(I)V": function () { this._items = []; this._arr = []; }
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Reference2BooleanMap", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/util/Map"],
+			methods: {}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Reference2BooleanOpenHashMap", {
+			superName: "java/util/LinkedHashMap",
+			interfaces: ["it/unimi/dsi/fastutil/objects/Reference2BooleanMap", "java/util/Map"],
+			methods: {
+				"<init>()V": function () { this._entries = []; this._defRet = 0; },
+				"getBoolean(Ljava/lang/Object;)Z": function (k) {
+					const v = rt.invokeVirtual(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]);
+					return v == null ? (this._defRet ? 1 : 0) : (rt._adaptValue(v, "Ljava/lang/Object;", "Z") ? 1 : 0);
+				},
+				"put(Ljava/lang/Object;Z)Z": function (k, v) {
+					const old = rt.invokeVirtual(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, v ? rt._boolTrue : rt._boolFalse]);
+					return old == null ? (this._defRet ? 1 : 0) : (rt._adaptValue(old, "Ljava/lang/Object;", "Z") ? 1 : 0);
+				}
+			}
+		});
+		rt.registerNativeClass("it/unimi/dsi/fastutil/objects/Reference2BooleanMaps", {
+			superName: "java/lang/Object",
+			methods: {
+				"synchronize(Lit/unimi/dsi/fastutil/objects/Reference2BooleanMap;)Lit/unimi/dsi/fastutil/objects/Reference2BooleanMap;": function (m) { return m; },
+				"emptyMap()Lit/unimi/dsi/fastutil/objects/Reference2BooleanMap;": function () { return rt.newInstance("it/unimi/dsi/fastutil/objects/Reference2BooleanOpenHashMap", EMPTY_ARGS); }
+			}
+		});
+
+		// Log4j Level
+		function makeLogLevel(name, intLvl) {
+			return { __cls: "org/apache/logging/log4j/Level", _name: name, _intLevel: intLvl };
+		}
+		rt.registerNativeClass("org/apache/logging/log4j/Level", {
+			superName: "java/lang/Object",
+			interfaces: ["java/lang/Comparable", "java/io/Serializable"],
+			staticFields: {
+				OFF: makeLogLevel("OFF", 0),
+				FATAL: makeLogLevel("FATAL", 100),
+				ERROR: makeLogLevel("ERROR", 200),
+				WARN: makeLogLevel("WARN", 300),
+				INFO: makeLogLevel("INFO", 400),
+				DEBUG: makeLogLevel("DEBUG", 500),
+				TRACE: makeLogLevel("TRACE", 600),
+				ALL: makeLogLevel("ALL", 2147483647)
+			},
+			methods: {
+				"name()Ljava/lang/String;": function () { return this._name || "INFO"; },
+				"toString()Ljava/lang/String;": function () { return this._name || "INFO"; },
+				"intLevel()I": function () { return (this._intLevel || 400) | 0; },
+				"isMoreSpecificThan(Lorg/apache/logging/log4j/Level;)Z": function (o) {
+					return ((this._intLevel || 400) <= (o ? (o._intLevel || 400) : 400)) ? 1 : 0;
+				},
+				"isLessSpecificThan(Lorg/apache/logging/log4j/Level;)Z": function (o) {
+					return ((this._intLevel || 400) >= (o ? (o._intLevel || 400) : 400)) ? 1 : 0;
+				},
+				"compareTo(Lorg/apache/logging/log4j/Level;)I": function (o) {
+					const a = this._intLevel || 400, b = o ? (o._intLevel || 400) : 400;
+					return a < b ? -1 : (a > b ? 1 : 0);
+				},
+				"compareTo(Ljava/lang/Object;)I": function (o) {
+					const a = this._intLevel || 400, b = o ? (o._intLevel || 400) : 400;
+					return a < b ? -1 : (a > b ? 1 : 0);
+				}
+			}
+		});
+
+		// java/util/function/Function, Predicate, Consumer helpers
+		const identityFn = {
+			__cls: "java/util/function/Function",
+			__interfaces: ["java/util/function/Function"],
+			__samMethodMap: {
+				"apply(Ljava/lang/Object;)Ljava/lang/Object;": function (x) { return x; },
+				"apply": function (x) { return x; }
+			}
+		};
+		rt.registerNativeClass("java/util/function/Function", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"identity()Ljava/util/function/Function;": function () { return identityFn; },
+				"identity": function () { return identityFn; },
+				"andThen(Ljava/util/function/Function;)Ljava/util/function/Function;": function (after) {
+					const self = this;
+					const fn = function (x) {
+						const mid = rt.invokeInterface(self, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [x]);
+						return rt.invokeInterface(after, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [mid]);
+					};
+					return { __cls: "java/util/function/Function", __interfaces: ["java/util/function/Function"], __samMethodMap: { "apply(Ljava/lang/Object;)Ljava/lang/Object;": fn, "apply": fn } };
+				},
+				"compose(Ljava/util/function/Function;)Ljava/util/function/Function;": function (before) {
+					const self = this;
+					const fn = function (x) {
+						const mid = rt.invokeInterface(before, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [x]);
+						return rt.invokeInterface(self, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [mid]);
+					};
+					return { __cls: "java/util/function/Function", __interfaces: ["java/util/function/Function"], __samMethodMap: { "apply(Ljava/lang/Object;)Ljava/lang/Object;": fn, "apply": fn } };
+				}
+			}
+		});
+		rt.registerNativeClass("java/util/function/UnaryOperator", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/util/function/Function"],
+			methods: {
+				"identity()Ljava/util/function/UnaryOperator;": function () { return identityFn; }
+			}
+		});
+		rt.registerNativeClass("java/util/function/Predicate", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"and(Ljava/util/function/Predicate;)Ljava/util/function/Predicate;": function (other) {
+					const self = this;
+					const fn = function (x) {
+						return (rt.invokeInterface(self, "java/util/function/Predicate", "test", "(Ljava/lang/Object;)Z", [x])
+							&& rt.invokeInterface(other, "java/util/function/Predicate", "test", "(Ljava/lang/Object;)Z", [x])) ? 1 : 0;
+					};
+					return { __cls: "java/util/function/Predicate", __interfaces: ["java/util/function/Predicate"], __samMethodMap: { "test(Ljava/lang/Object;)Z": fn, "test": fn } };
+				},
+				"or(Ljava/util/function/Predicate;)Ljava/util/function/Predicate;": function (other) {
+					const self = this;
+					const fn = function (x) {
+						return (rt.invokeInterface(self, "java/util/function/Predicate", "test", "(Ljava/lang/Object;)Z", [x])
+							|| rt.invokeInterface(other, "java/util/function/Predicate", "test", "(Ljava/lang/Object;)Z", [x])) ? 1 : 0;
+					};
+					return { __cls: "java/util/function/Predicate", __interfaces: ["java/util/function/Predicate"], __samMethodMap: { "test(Ljava/lang/Object;)Z": fn, "test": fn } };
+				},
+				"negate()Ljava/util/function/Predicate;": function () {
+					const self = this;
+					const fn = function (x) {
+						return rt.invokeInterface(self, "java/util/function/Predicate", "test", "(Ljava/lang/Object;)Z", [x]) ? 0 : 1;
+					};
+					return { __cls: "java/util/function/Predicate", __interfaces: ["java/util/function/Predicate"], __samMethodMap: { "test(Ljava/lang/Object;)Z": fn, "test": fn } };
+				},
+				"isEqual(Ljava/lang/Object;)Ljava/util/function/Predicate;": function (target) {
+					const fn = function (x) {
+						return rt.invokeStatic("java/util/Objects", "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", [target, x]) ? 1 : 0;
+					};
+					return { __cls: "java/util/function/Predicate", __interfaces: ["java/util/function/Predicate"], __samMethodMap: { "test(Ljava/lang/Object;)Z": fn, "test": fn } };
+				}
+			}
+		});
+		rt.registerNativeClass("java/util/function/Consumer", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"andThen(Ljava/util/function/Consumer;)Ljava/util/function/Consumer;": function (after) {
+					const self = this;
+					const fn = function (x) {
+						rt.invokeInterface(self, "java/util/function/Consumer", "accept", "(Ljava/lang/Object;)V", [x]);
+						rt.invokeInterface(after, "java/util/function/Consumer", "accept", "(Ljava/lang/Object;)V", [x]);
+					};
+					return { __cls: "java/util/function/Consumer", __interfaces: ["java/util/function/Consumer"], __samMethodMap: { "accept(Ljava/lang/Object;)V": fn, "accept": fn } };
+				}
+			}
+		});
+	}
+
+	function installPostBridgeCompat(rt) {
+		// Re-install runtime-aware reflection on java/lang/Class so definedClasses & pendingClassBuffers are visible
+		rt.registerNativeClass("java/lang/Class", {
+			superName: "java/lang/Object",
+			interfaces: ["java/io/Serializable", "java/lang/reflect/Type", "java/lang/reflect/AnnotatedElement", "java/lang/reflect/GenericDeclaration"],
+			methods: buildJavaLangClassMethods(rt)
+		});
+
+		// Ensure Optional.orElseThrow() throws when empty & supports Supplier overload
+		rt.registerNativeClass("java/util/Optional", {
+			methods: {
+				"orElseThrow()Ljava/lang/Object;": function () {
+					const v = this._value !== undefined ? this._value : this._val;
+					if (v == null) throw rt.makeException("java/util/NoSuchElementException", "No value present");
+					return v;
+				},
+				"orElseThrow(Ljava/util/function/Supplier;)Ljava/lang/Object;": function (sup) {
+					const v = this._value !== undefined ? this._value : this._val;
+					if (v != null) return v;
+					const ex = sup ? rt.invokeInterface(sup, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS) : null;
+					throw ex || rt.makeException("java/util/NoSuchElementException", "No value present");
+				}
+			}
+		});
+
+		// Ensure Function.identity / Predicate / Consumer combinators survive bridge re-registration
+		installReflectionAndCompatClasses(rt);
+
+		// Augment java/util/stream/Collectors with 3-arg and 4-arg toMap + toCollection
+		function makeToMapCollector(kFn, vFn, mergeFn, mapSup) {
+			return {
+				__cls: "java/util/stream/Collector",
+				_collect: function (items) {
+					const m = mapSup
+						? rt.invokeInterface(mapSup, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS)
+						: rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS);
+					for (let i = 0; i < items.length; i++) {
+						const k = rt.invokeInterface(kFn, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [items[i]]);
+						let v = rt.invokeInterface(vFn, "java/util/function/Function", "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", [items[i]]);
+						if (mergeFn && rt.invokeInterface(m, "java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", [k])) {
+							const old = rt.invokeInterface(m, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]);
+							v = rt.invokeInterface(mergeFn, "java/util/function/BiFunction", "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [old, v]);
+						}
+						rt.invokeInterface(m, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [k, v]);
+					}
+					return m;
+				}
+			};
+		}
+		rt.registerNativeClass("java/util/stream/Collectors", {
+			methods: {
+				"toMap(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;)Ljava/util/stream/Collector;": function (kFn, vFn, mergeFn) {
+					return makeToMapCollector(kFn, vFn, mergeFn, null);
+				},
+				"toMap(Ljava/util/function/Function;Ljava/util/function/Function;Ljava/util/function/BinaryOperator;Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": function (kFn, vFn, mergeFn, mapSup) {
+					return makeToMapCollector(kFn, vFn, mergeFn, mapSup);
+				},
+				"toCollection(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": function (colSup) {
+					return {
+						__cls: "java/util/stream/Collector",
+						_collect: function (items) {
+							const col = rt.invokeInterface(colSup, "java/util/function/Supplier", "get", "()Ljava/lang/Object;", EMPTY_ARGS);
+							for (let i = 0; i < items.length; i++) {
+								rt.invokeInterface(col, "java/util/Collection", "add", "(Ljava/lang/Object;)Z", [items[i]]);
+							}
+							return col;
+						}
+					};
+				}
+			}
+		});
+
+		// Augment Fabric Event / EventFactory / ClientTickEvents (26.3 Mojmap renames & phased events)
+		const fabricEventCls = rt.nativeClasses.get("net/fabricmc/fabric/api/event/Event");
+		if (fabricEventCls) {
+			const defPhase = rt.nativeClasses.has("net/minecraft/resources/Identifier")
+				? rt.invokeStatic("net/minecraft/resources/Identifier", "fromNamespaceAndPath", "(Ljava/lang/String;Ljava/lang/String;)Lnet/minecraft/resources/Identifier;", ["fabric", "default"])
+				: { __cls: "net/minecraft/resources/Identifier", namespace: "fabric", path: "default" };
+			rt.registerNativeClass("net/fabricmc/fabric/api/event/Event", {
+				staticFields: { DEFAULT_PHASE: defPhase },
+				methods: {
+					"addPhaseOrdering(Lnet/minecraft/resources/Identifier;Lnet/minecraft/resources/Identifier;)V": function () {},
+					"addPhaseOrdering(Lnet/minecraft/resources/ResourceLocation;Lnet/minecraft/resources/ResourceLocation;)V": function () {}
+				}
+			});
+		}
+		const fabricEfCls = rt.nativeClasses.get("net/fabricmc/fabric/api/event/EventFactory");
+		if (fabricEfCls) {
+			rt.registerNativeClass("net/fabricmc/fabric/api/event/EventFactory", {
+				methods: {
+					"createWithPhases(Ljava/lang/Class;Ljava/util/function/Function;[Lnet/minecraft/resources/Identifier;)Lnet/fabricmc/fabric/api/event/Event;": function (t, f) {
+						return rt.invokeStatic("net/fabricmc/fabric/api/event/EventFactory", "createArrayBacked", "(Ljava/lang/Class;Ljava/util/function/Function;)Lnet/fabricmc/fabric/api/event/Event;", [t, f]);
+					},
+					"createWithPhases(Ljava/lang/Class;Ljava/util/function/Function;[Lnet/minecraft/resources/ResourceLocation;)Lnet/fabricmc/fabric/api/event/Event;": function (t, f) {
+						return rt.invokeStatic("net/fabricmc/fabric/api/event/EventFactory", "createArrayBacked", "(Ljava/lang/Class;Ljava/util/function/Function;)Lnet/fabricmc/fabric/api/event/Event;", [t, f]);
+					},
+					"isProfilingEnabled()Z": function () { return 0; },
+					"invalidate()V": function () {},
+					"getHandlerName(Ljava/lang/Object;)Ljava/lang/String;": function (h) { return h ? rt._getClassName(h).replace(/\//g, ".") : "null"; }
+				}
+			});
+		}
+		const cteCls = rt.nativeClasses.get("net/fabricmc/fabric/api/client/event/lifecycle/v1/ClientTickEvents");
+		if (cteCls && cteCls.staticFields) {
+			const patchFields = {};
+			if (!cteCls.staticFields.START_LEVEL_TICK && cteCls.staticFields.START_WORLD_TICK) {
+				patchFields.START_LEVEL_TICK = cteCls.staticFields.START_WORLD_TICK;
+			}
+			if (!cteCls.staticFields.END_LEVEL_TICK && cteCls.staticFields.END_WORLD_TICK) {
+				patchFields.END_LEVEL_TICK = cteCls.staticFields.END_WORLD_TICK;
+			}
+			if (Object.keys(patchFields).length > 0) {
+				rt.registerNativeClass("net/fabricmc/fabric/api/client/event/lifecycle/v1/ClientTickEvents", { staticFields: patchFields });
+			}
+			rt.registerNativeClass("net/fabricmc/fabric/api/client/event/lifecycle/v1/ClientTickEvents$StartLevelTick", { isInterface: true });
+			rt.registerNativeClass("net/fabricmc/fabric/api/client/event/lifecycle/v1/ClientTickEvents$EndLevelTick", { isInterface: true });
+		}
+
+		// Augment InputConstants$Type with 26.3 Mojmap KEYBOARD alias (renamed from KEYSYM)
+		const ictCls = rt.nativeClasses.get("com/mojang/blaze3d/platform/InputConstants$Type");
+		if (ictCls && ictCls.staticFields && !ictCls.staticFields.KEYBOARD && ictCls.staticFields.KEYSYM) {
+			rt.registerNativeClass("com/mojang/blaze3d/platform/InputConstants$Type", {
+				staticFields: { KEYBOARD: ictCls.staticFields.KEYSYM }
+			});
+		}
+
+		// Augment Log4j LogManager with getFormatterLogger & 0-arg getLogger
+		if (rt.nativeClasses.has("org/apache/logging/log4j/LogManager")) {
+			rt.registerNativeClass("org/apache/logging/log4j/LogManager", {
+				methods: {
+					"getLogger()Lorg/apache/logging/log4j/Logger;": function () {
+						return rt.invokeStatic("org/apache/logging/log4j/LogManager", "getLogger", "(Ljava/lang/String;)Lorg/apache/logging/log4j/Logger;", ["mod"]);
+					},
+					"getFormatterLogger(Ljava/lang/String;)Lorg/apache/logging/log4j/Logger;": function (n) {
+						return rt.invokeStatic("org/apache/logging/log4j/LogManager", "getLogger", "(Ljava/lang/String;)Lorg/apache/logging/log4j/Logger;", [n]);
+					},
+					"getFormatterLogger(Ljava/lang/Class;)Lorg/apache/logging/log4j/Logger;": function (c) {
+						return rt.invokeStatic("org/apache/logging/log4j/LogManager", "getLogger", "(Ljava/lang/Class;)Lorg/apache/logging/log4j/Logger;", [c]);
+					}
+				}
+			});
+		}
+
+		// Minimal DFU Codec, Netty ByteBufUtil, MC VarInt, StreamCodec, ByteBufCodecs, CustomPacketPayload & Fabric Attachment Accessor
+		const dummyCodec = { __cls: "com/mojang/serialization/Codec" };
+		rt.registerNativeClass("com/mojang/serialization/Codec", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			staticFields: {
+				BOOL: dummyCodec, BYTE: dummyCodec, SHORT: dummyCodec, INT: dummyCodec,
+				LONG: dummyCodec, FLOAT: dummyCodec, DOUBLE: dummyCodec, STRING: dummyCodec,
+				BYTE_BUFFER: dummyCodec, INT_STREAM: dummyCodec, LONG_STREAM: dummyCodec, PASSTHROUGH: dummyCodec
+			},
+			methods: {
+				"xmap": function () { return dummyCodec; },
+				"comapFlatMap": function () { return dummyCodec; },
+				"flatXmap": function () { return dummyCodec; },
+				"flatComapMap": function () { return dummyCodec; },
+				"listOf": function () { return dummyCodec; },
+				"fieldOf": function () { return dummyCodec; },
+				"optionalFieldOf": function () { return dummyCodec; },
+				"unit": function () { return dummyCodec; },
+				"dispatch": function () { return dummyCodec; },
+				"unboundedMap": function () { return dummyCodec; }
+			}
+		});
+
+		const dummyStreamCodec = { __cls: "net/minecraft/network/codec/StreamCodec" };
+		rt.registerNativeClass("net/minecraft/network/codec/StreamCodec", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"of": function () { return dummyStreamCodec; },
+				"ofMember": function () { return dummyStreamCodec; },
+				"unit": function () { return dummyStreamCodec; },
+				"composite": function () { return dummyStreamCodec; },
+				"recursive": function () { return dummyStreamCodec; },
+				"map": function () { return dummyStreamCodec; },
+				"apply": function () { return dummyStreamCodec; },
+				"dispatch": function () { return dummyStreamCodec; },
+				"cast": function () { return dummyStreamCodec; },
+				"encode": function () {},
+				"decode": function () { return null; }
+			}
+		});
+		rt.registerNativeClass("net/minecraft/network/codec/ByteBufCodecs", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			staticFields: {
+				BOOL: dummyStreamCodec, BYTE: dummyStreamCodec, SHORT: dummyStreamCodec, UNSIGNED_SHORT: dummyStreamCodec,
+				INT: dummyStreamCodec, VAR_INT: dummyStreamCodec, OPTIONAL_VAR_INT: dummyStreamCodec,
+				LONG: dummyStreamCodec, VAR_LONG: dummyStreamCodec, FLOAT: dummyStreamCodec, DOUBLE: dummyStreamCodec,
+				BYTE_ARRAY: dummyStreamCodec, STRING_UTF8: dummyStreamCodec, TAG: dummyStreamCodec,
+				TRUSTED_TAG: dummyStreamCodec, COMPOUND_TAG: dummyStreamCodec, TRUSTED_COMPOUND_TAG: dummyStreamCodec,
+				OPTIONAL_COMPOUND_TAG: dummyStreamCodec, VECTOR3F: dummyStreamCodec, QUATERNIONF: dummyStreamCodec,
+				CONTAINER_ID: dummyStreamCodec, GAME_PROFILE: dummyStreamCodec, RGB_COLOR: dummyStreamCodec,
+				IDENTITY: dummyStreamCodec
+			},
+			methods: {
+				"registry": function () { return dummyStreamCodec; },
+				"holderRegistry": function () { return dummyStreamCodec; },
+				"holder": function () { return dummyStreamCodec; },
+				"fromCodec": function () { return dummyStreamCodec; },
+				"fromCodecWithRegistries": function () { return dummyStreamCodec; },
+				"fromCodecTrusted": function () { return dummyStreamCodec; },
+				"fromCodecWithRegistriesTrusted": function () { return dummyStreamCodec; },
+				"byteArray": function () { return dummyStreamCodec; },
+				"stringUtf8": function () { return dummyStreamCodec; },
+				"optional": function () { return dummyStreamCodec; },
+				"list": function () { return dummyStreamCodec; },
+				"collection": function () { return dummyStreamCodec; },
+				"map": function () { return dummyStreamCodec; },
+				"either": function () { return dummyStreamCodec; },
+				"idMapper": function () { return dummyStreamCodec; },
+				"varInt": function () { return dummyStreamCodec; }
+			}
+		});
+		rt.registerNativeClass("net/minecraft/network/protocol/common/custom/CustomPacketPayload", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"codec": function () { return dummyStreamCodec; },
+				"codec(Lnet/minecraft/network/codec/StreamMemberEncoder;Lnet/minecraft/network/codec/StreamDecoder;)Lnet/minecraft/network/codec/StreamCodec;": function () { return dummyStreamCodec; },
+				"codec(Lnet/minecraft/network/codec/StreamMemberEncoder;Lnet/minecraft/network/codec/StreamDecoder;I)Lnet/minecraft/network/codec/StreamCodec;": function () { return dummyStreamCodec; }
+			}
+		});
+		rt.registerNativeClass("net/minecraft/network/protocol/common/custom/CustomPacketPayload$Type", {
+			superName: "java/lang/Record",
+			methods: {
+				"<init>(Lnet/minecraft/resources/Identifier;)V": function (id) { this.id = id; },
+				"<init>(Lnet/minecraft/resources/ResourceLocation;)V": function (id) { this.id = id; },
+				"id()Lnet/minecraft/resources/Identifier;": function () { return this.id; },
+				"equals(Ljava/lang/Object;)Z": function (o) {
+					return (o && o.__cls === "net/minecraft/network/protocol/common/custom/CustomPacketPayload$Type"
+						&& rt.invokeStatic("java/util/Objects", "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", [this.id, o.id])) ? 1 : 0;
+				},
+				"hashCode()I": function () { return rt.invokeStatic("java/util/Objects", "hashCode", "(Ljava/lang/Object;)I", [this.id]) | 0; }
+			}
+		});
+		rt.registerNativeClass("io/netty/buffer/ByteBufUtil", {
+			superName: "java/lang/Object",
+			methods: {
+				"utf8MaxBytes(Ljava/lang/CharSequence;)I": function (cs) { return (rt.asJsString(cs).length * 3) | 0; },
+				"utf8MaxBytes(I)I": function (n) { return ((n | 0) * 3) | 0; },
+				"getBytes(Lio/netty/buffer/ByteBuf;)[B": function () { return rt._newPrimitiveArray(8, 0); }
+			}
+		});
+		rt.registerNativeClass("net/minecraft/network/VarInt", {
+			superName: "java/lang/Object",
+			methods: {
+				"getByteSize(I)I": function (v) {
+					const u = v >>> 0;
+					for (let i = 1; i < 5; i++) {
+						if ((u & (0xFFFFFFFF << (i * 7))) === 0) return i;
+					}
+					return 5;
+				}
+			}
+		});
+		rt.registerNativeClass("net/fabricmc/fabric/mixin/attachment/ClientboundCustomPayloadPacketAccessor", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			methods: {
+				"getMaxPayloadSize()I": function () { return 1048576; }
+			}
+		});
+
+		// Minimal MC Registry / DefaultedRegistry / BuiltInRegistries & NBT shims
+		function makeRegistryObj(name) {
+			return {
+				__cls: "net/minecraft/core/DefaultedRegistry",
+				_regName: name,
+				_map: rt.newInstance("java/util/LinkedHashMap", EMPTY_ARGS)
+			};
+		}
+		const regMethods = {
+			"keySet()Ljava/util/Set;": function () {
+				return this._map ? rt.invokeInterface(this._map, "java/util/Map", "keySet", "()Ljava/util/Set;", EMPTY_ARGS) : rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS);
+			},
+			"entrySet()Ljava/util/Set;": function () {
+				return this._map ? rt.invokeInterface(this._map, "java/util/Map", "entrySet", "()Ljava/util/Set;", EMPTY_ARGS) : rt.newInstance("java/util/LinkedHashSet", EMPTY_ARGS);
+			},
+			"iterator()Ljava/util/Iterator;": function () {
+				const vals = this._map ? rt.invokeInterface(this._map, "java/util/Map", "values", "()Ljava/util/Collection;", EMPTY_ARGS) : rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+				return rt.invokeInterface(vals, "java/lang/Iterable", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+			},
+			"stream()Ljava/util/stream/Stream;": function () {
+				const vals = this._map ? rt.invokeInterface(this._map, "java/util/Map", "values", "()Ljava/util/Collection;", EMPTY_ARGS) : rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+				return rt.invokeInterface(vals, "java/util/Collection", "stream", "()Ljava/util/stream/Stream;", EMPTY_ARGS);
+			},
+			"get(Lnet/minecraft/resources/Identifier;)Ljava/lang/Object;": function (k) {
+				return this._map ? rt.invokeInterface(this._map, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]) : null;
+			},
+			"getValue(Lnet/minecraft/resources/Identifier;)Ljava/lang/Object;": function (k) {
+				return this._map ? rt.invokeInterface(this._map, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]) : null;
+			},
+			"getOptional(Lnet/minecraft/resources/Identifier;)Ljava/util/Optional;": function (k) {
+				const v = this._map ? rt.invokeInterface(this._map, "java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;", [k]) : null;
+				return rt.invokeStatic("java/util/Optional", "ofNullable", "(Ljava/lang/Object;)Ljava/util/Optional;", [v]);
+			},
+			"getKey(Ljava/lang/Object;)Lnet/minecraft/resources/Identifier;": function () { return null; },
+			"containsKey(Lnet/minecraft/resources/Identifier;)Z": function (k) {
+				return (this._map && rt.invokeInterface(this._map, "java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", [k])) ? 1 : 0;
+			},
+			"size()I": function () { return this._map ? (rt.invokeInterface(this._map, "java/util/Map", "size", "()I", EMPTY_ARGS) | 0) : 0; },
+			"byNameCodec()Lcom/mojang/serialization/Codec;": function () { return dummyCodec; },
+			"register(Lnet/minecraft/core/Registry;Lnet/minecraft/resources/Identifier;Ljava/lang/Object;)Ljava/lang/Object;": function (reg, id, val) {
+				if (reg && reg._map) rt.invokeInterface(reg._map, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [id, val]);
+				return val;
+			},
+			"register(Lnet/minecraft/core/Registry;Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;": function (reg, id, val) {
+				if (reg && reg._map) rt.invokeInterface(reg._map, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", [id, val]);
+				return val;
+			}
+		};
+		rt.registerNativeClass("net/minecraft/core/Registry", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["java/lang/Iterable"],
+			methods: regMethods
+		});
+		rt.registerNativeClass("net/minecraft/core/DefaultedRegistry", {
+			superName: "java/lang/Object",
+			isInterface: true,
+			interfaces: ["net/minecraft/core/Registry", "java/lang/Iterable"],
+			methods: regMethods
+		});
+		const builtInRegFields = {};
+		for (const rk of [
+			"REGISTRY", "ITEM", "BLOCK", "FLUID", "ENTITY_TYPE", "BLOCK_ENTITY_TYPE",
+			"MOB_EFFECT", "SOUND_EVENT", "POTION", "PARTICLE_TYPE", "MENU", "RECIPE_TYPE",
+			"RECIPE_SERIALIZER", "ATTRIBUTE", "DATA_COMPONENT_TYPE", "CREATIVE_MODE_TAB",
+			"CUSTOM_STAT", "VILLAGER_PROFESSION", "VILLAGER_TYPE", "ENCHANTMENT",
+			"CONSUME_EFFECT_TYPE", "LOOT_POOL_ENTRY_TYPE", "LOOT_FUNCTION_TYPE", "LOOT_CONDITION_TYPE"
+		]) {
+			builtInRegFields[rk] = makeRegistryObj(rk);
+		}
+		rt.registerNativeClass("net/minecraft/core/registries/BuiltInRegistries", {
+			superName: "java/lang/Object",
+			staticFields: builtInRegFields,
+			methods: {}
+		});
+		rt.registerNativeClass("net/minecraft/nbt/Tag", { superName: "java/lang/Object", isInterface: true, methods: {} });
+		rt.registerNativeClass("net/minecraft/nbt/CompoundTag", {
+			superName: "java/lang/Object",
+			interfaces: ["net/minecraft/nbt/Tag"],
+			ctor: function () { this._tags = Object.create(null); },
+			methods: {
+				"<init>()V": function () { this._tags = Object.create(null); },
+				"put(Ljava/lang/String;Lnet/minecraft/nbt/Tag;)Lnet/minecraft/nbt/Tag;": function (k, v) { if (!this._tags) this._tags = Object.create(null); const s = rt.asJsString(k); const o = this._tags[s] || null; this._tags[s] = v; return o; },
+				"putString(Ljava/lang/String;Ljava/lang/String;)V": function (k, v) { if (!this._tags) this._tags = Object.create(null); this._tags[rt.asJsString(k)] = rt.asJsString(v); },
+				"putInt(Ljava/lang/String;I)V": function (k, v) { if (!this._tags) this._tags = Object.create(null); this._tags[rt.asJsString(k)] = v | 0; },
+				"putBoolean(Ljava/lang/String;Z)V": function (k, v) { if (!this._tags) this._tags = Object.create(null); this._tags[rt.asJsString(k)] = !!v; },
+				"contains(Ljava/lang/String;)Z": function (k) { return (this._tags && Object.prototype.hasOwnProperty.call(this._tags, rt.asJsString(k))) ? 1 : 0; },
+				"isEmpty()Z": function () { return (!this._tags || Object.keys(this._tags).length === 0) ? 1 : 0; },
+				"size()I": function () { return this._tags ? Object.keys(this._tags).length : 0; },
+				"copy()Lnet/minecraft/nbt/CompoundTag;": function () { return { __cls: "net/minecraft/nbt/CompoundTag", _tags: Object.assign(Object.create(null), this._tags || {}) }; },
+				"toString()Ljava/lang/String;": function () { return JSON.stringify(this._tags || {}); }
+			}
+		});
+		const nbtOpsInst = { __cls: "net/minecraft/nbt/NbtOps" };
+		rt.registerNativeClass("net/minecraft/nbt/NbtOps", {
+			superName: "java/lang/Object",
+			staticFields: { INSTANCE: nbtOpsInst },
+			methods: {}
+		});
+		rt.registerNativeClass("net/minecraft/nbt/TagParser", {
+			superName: "java/lang/Object",
+			methods: {
+				"parseCompoundFully(Ljava/lang/String;)Lnet/minecraft/nbt/CompoundTag;": function () { return { __cls: "net/minecraft/nbt/CompoundTag", _tags: Object.create(null) }; },
+				"parseTag(Ljava/lang/String;)Lnet/minecraft/nbt/CompoundTag;": function () { return { __cls: "net/minecraft/nbt/CompoundTag", _tags: Object.create(null) }; }
+			}
+		});
+
+		// Augment Fabric Loader Version / SemanticVersion / EntrypointContainer / FabricLoader
+		rt.registerNativeClass("net/fabricmc/loader/api/Version", {
+			isInterface: true,
+			interfaces: ["java/lang/Comparable"],
+			methods: {
+				"compareTo(Lnet/fabricmc/loader/api/Version;)I": function (other) {
+					const a = this._ver || "0.0.0";
+					const b = other ? (other._ver || rt.asJsString(rt.invokeInterface(other, "net/fabricmc/loader/api/Version", "getFriendlyString", "()Ljava/lang/String;", EMPTY_ARGS))) : "0.0.0";
+					return compareSemVerStrings(a, b);
+				},
+				"compareTo(Ljava/lang/Object;)I": function (other) {
+					return rt.invokeInterface(this, "net/fabricmc/loader/api/Version", "compareTo", "(Lnet/fabricmc/loader/api/Version;)I", [other]);
+				}
+			}
+		});
+		rt.registerNativeClass("net/fabricmc/loader/api/SemanticVersion", {
+			isInterface: true,
+			interfaces: ["net/fabricmc/loader/api/Version", "java/lang/Comparable"],
+			methods: {
+				"parse(Ljava/lang/String;)Lnet/fabricmc/loader/api/SemanticVersion;": function (s) {
+					return { __cls: "net/fabricmc/loader/api/SemanticVersion", _ver: rt.asJsString(s) };
+				},
+				"getFriendlyString()Ljava/lang/String;": function () { return this._ver || "0.0.0"; },
+				"toString()Ljava/lang/String;": function () { return this._ver || "0.0.0"; }
+			}
+		});
+		rt.registerNativeClass("net/fabricmc/loader/api/entrypoint/EntrypointContainer", {
+			isInterface: true,
+			methods: {
+				"getProvider()Lnet/fabricmc/loader/api/ModContainer;": function () { return this._provider; },
+				"getEntrypoint()Ljava/lang/Object;": function () {
+					if (!this._resolved) {
+						this._resolved = true;
+						const spec = this._spec || "";
+						const parts = spec.split("::");
+						const cn = parts[0].replace(/\./g, "/");
+						const inst = rt.newInstance(cn);
+						rt.invokeSpecial(inst, cn, "<init>", "()V", EMPTY_ARGS);
+						this._instance = inst;
+					}
+					return this._instance;
+				}
+			}
+		});
+		if (rt.nativeClasses.has("net/fabricmc/loader/api/FabricLoader")) {
+			rt.registerNativeClass("net/fabricmc/loader/api/FabricLoader", {
+				methods: {
+					"getEntrypointContainers(Ljava/lang/String;Ljava/lang/Class;)Ljava/util/List;": function (key, typeCls) {
+						const k = rt.asJsString(key);
+						const list = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+						const entries = rt._modEntrypoints.get(k) || [];
+						const targetType = typeCls ? classObjInternalName(typeCls) : "java/lang/Object";
+						for (let i = 0; i < entries.length; i++) {
+							const e = entries[i];
+							const meta = {
+								__cls: "net/fabricmc/loader/api/metadata/ModMetadata",
+								_id: e.modId, _name: e.modName || e.modId, _version: e.modVersion || "1.0.0", _description: ""
+							};
+							const provider = { __cls: "net/fabricmc/loader/api/ModContainer", _meta: meta };
+							const container = {
+								__cls: "net/fabricmc/loader/api/entrypoint/EntrypointContainer",
+								_provider: provider, _spec: e.spec, _resolved: false, _instance: null
+							};
+							try {
+								const inst = rt.invokeInterface(container, "net/fabricmc/loader/api/entrypoint/EntrypointContainer", "getEntrypoint", "()Ljava/lang/Object;", EMPTY_ARGS);
+								if (inst != null && (!targetType || targetType === "java/lang/Object" || rt.isInstanceOf(inst, targetType))) {
+									rt.invokeVirtual(list, "add", "(Ljava/lang/Object;)Z", [container]);
+								}
+							} catch (_epErr) {}
+						}
+						return list;
+					},
+					"getEntrypoints(Ljava/lang/String;Ljava/lang/Class;)Ljava/util/List;": function (key, typeCls) {
+						const containers = rt.invokeInterface(this, "net/fabricmc/loader/api/FabricLoader", "getEntrypointContainers", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/util/List;", [key, typeCls]);
+						const out = rt.newInstance("java/util/ArrayList", EMPTY_ARGS);
+						const it = rt.invokeInterface(containers, "java/util/List", "iterator", "()Ljava/util/Iterator;", EMPTY_ARGS);
+						while (rt.invokeInterface(it, "java/util/Iterator", "hasNext", "()Z", EMPTY_ARGS)) {
+							const c = rt.invokeInterface(it, "java/util/Iterator", "next", "()Ljava/lang/Object;", EMPTY_ARGS);
+							const ep = rt.invokeInterface(c, "net/fabricmc/loader/api/entrypoint/EntrypointContainer", "getEntrypoint", "()Ljava/lang/Object;", EMPTY_ARGS);
+							rt.invokeVirtual(out, "add", "(Ljava/lang/Object;)Z", [ep]);
+						}
+						return out;
+					}
+				}
+			});
+		}
 	}
 
 	function formatJavaPrintf(rt, fmt, args) {
@@ -4575,6 +7361,9 @@
 	function createRuntime() {
 		const nativeClasses = new Map();
 		const definedClasses = new Map();
+		const pendingClassBuffers = new Map();
+		const proxyClasses = new Map();
+		const proxyClassByKey = new Map();
 		const stubClasses = new Map();
 		const loggedStubs = new Set();
 		const aliases = new Map();
@@ -4582,10 +7371,41 @@
 		const resolvedNameCache = new Map();
 		const classObjects = new Map();
 		const hooks = new Map(); // hookName -> Array<{ modId, fn }>
+		const services = new Map(); // serviceDotName -> Array<implDotName>
+		const resources = new Map(); // resourcePath -> Uint8Array
+		const modEntrypoints = new Map(); // entrypointKey -> Array<{ modId, modName, modVersion, spec }>
+		const mods = new Map(); // modId -> { id, name, version, description }
+		const annotationProxyCache = new WeakMap();
 		const identityHashes = new WeakMap();
 		const activeICs = [];
+		let systemClassLoaderObj = null;
+		let nextProxyId = 0;
 		let cacheEpoch = 1;
 		let nextIdentityHash = 1;
+
+		const rawMapHas = Map.prototype.has;
+		const rawMapGet = Map.prototype.get;
+		const rawMapSet = Map.prototype.set;
+
+		function materializePendingClass(internalName) {
+			const buf = pendingClassBuffers.get(internalName);
+			if (!buf) return undefined;
+			pendingClassBuffers.delete(internalName);
+			const parsed = parseClass(buf);
+			return rt.defineClass(parsed, true);
+		}
+
+		definedClasses.has = function (key) {
+			return rawMapHas.call(definedClasses, key) || pendingClassBuffers.has(key);
+		};
+		definedClasses.get = function (key) {
+			const hit = rawMapGet.call(definedClasses, key);
+			if (hit !== undefined) return hit;
+			if (pendingClassBuffers.has(key)) {
+				return materializePendingClass(key);
+			}
+			return undefined;
+		};
 
 		function invalidateCaches() {
 			cacheEpoch++;
@@ -4613,6 +7433,12 @@
 			definedClasses,
 			stubClasses,
 			hooks,
+			mods,
+			_pendingClassBuffers: pendingClassBuffers,
+			_proxyClasses: proxyClasses,
+			_services: services,
+			_resources: resources,
+			_modEntrypoints: modEntrypoints,
 			_ics: activeICs,
 			_boolTrue: null,
 			_boolFalse: null,
@@ -4621,6 +7447,483 @@
 			__bridgeInstalled: false,
 
 			parseMethodDescriptor,
+			_invalidateCaches: invalidateCaches,
+
+			_getSystemClassLoader() {
+				if (!systemClassLoaderObj) {
+					systemClassLoaderObj = { __cls: "java/lang/ClassLoader", _parent: null };
+				}
+				return systemClassLoaderObj;
+			},
+
+			_registerLazyClass(internalName, bytes) {
+				if (!internalName || nativeClasses.has(internalName)) return;
+				pendingClassBuffers.set(internalName, bytes);
+				stubClasses.delete(internalName);
+			},
+
+			_registerServiceProvider(serviceName, providerName) {
+				if (!serviceName || !providerName) return;
+				const key = String(serviceName).trim().replace(/\//g, ".");
+				const impl = String(providerName).trim().replace(/\//g, ".");
+				let list = services.get(key);
+				if (!list) {
+					list = [];
+					services.set(key, list);
+				}
+				if (list.indexOf(impl) === -1) list.push(impl);
+			},
+
+			_registerResource(path, bytes) {
+				if (!path || !bytes) return;
+				const clean = String(path).replace(/^\/+/, "");
+				if (!resources.has(clean)) {
+					resources.set(clean, bytes);
+				}
+			},
+
+			_openResourceStream(path) {
+				const clean = String(path || "").replace(/^\/+/, "");
+				const data = resources.get(clean);
+				if (!data) return null;
+				const signed = new Int8Array(data.length);
+				for (let i = 0; i < data.length; i++) signed[i] = (data[i] << 24) >> 24;
+				signed.__cls = "[B";
+				signed.__elemType = "B";
+				const stream = this.newInstance("java/io/ByteArrayInputStream");
+				this.invokeSpecial(stream, "java/io/ByteArrayInputStream", "<init>", "([B)V", [signed]);
+				return stream;
+			},
+
+			_registerModEntrypoints(modInfo, entrypointsObj) {
+				if (!entrypointsObj || typeof entrypointsObj !== "object") return;
+				const keys = Object.keys(entrypointsObj);
+				for (let i = 0; i < keys.length; i++) {
+					const k = keys[i];
+					const specs = normalizeEntrypointList(entrypointsObj[k]);
+					if (specs.length === 0) continue;
+					let list = modEntrypoints.get(k);
+					if (!list) {
+						list = [];
+						modEntrypoints.set(k, list);
+					}
+					for (let j = 0; j < specs.length; j++) {
+						const spec = specs[j];
+						let dup = false;
+						for (let m = 0; m < list.length; m++) {
+							if (list[m].modId === modInfo.id && list[m].spec === spec) { dup = true; break; }
+						}
+						if (!dup) {
+							list.push({
+								modId: modInfo.id,
+								modName: modInfo.name || modInfo.id,
+								modVersion: modInfo.version || "1.0.0",
+								spec
+							});
+						}
+					}
+				}
+			},
+
+			_classExists(internalName) {
+				const canon = this.resolveClassName(internalName);
+				if (!canon) return false;
+				if (canon.charCodeAt(0) === 91) {
+					let dims = 0;
+					while (dims < canon.length && canon.charCodeAt(dims) === 91) dims++;
+					const elem = canon.slice(dims);
+					if (elem.length === 1 && "ZBSCIJFD".indexOf(elem) >= 0) return true;
+					if (elem.charCodeAt(0) === 76 && elem.charCodeAt(elem.length - 1) === 59) {
+						return this._classExists(elem.slice(1, -1));
+					}
+					return false;
+				}
+				return nativeClasses.has(canon) || rawMapHas.call(definedClasses, canon) || pendingClassBuffers.has(canon) || proxyClasses.has(canon);
+			},
+
+			_classForDescriptor(desc) {
+				if (!desc) return this.getClassObject("java/lang/Object");
+				if (desc.length === 1 && "ZBSCIJFDV".indexOf(desc) >= 0) {
+					return this._makePrimitiveClass(desc);
+				}
+				if (desc.charCodeAt(0) === 91) {
+					return this.getClassObject(desc);
+				}
+				return this.getClassObject(descToInternalName(desc));
+			},
+
+			_makeReflectField(owner, f) {
+				return {
+					__cls: "java/lang/reflect/Field",
+					_owner: owner,
+					_name: f.name,
+					_descriptor: f.descriptor || "Ljava/lang/Object;",
+					_accessFlags: f.accessFlags | 0,
+					_annotations: f.annotations || [],
+					_accessible: false
+				};
+			},
+
+			_makeReflectMethod(owner, m) {
+				return {
+					__cls: "java/lang/reflect/Method",
+					_owner: owner,
+					_name: m.name,
+					_descriptor: m.descriptor || "()V",
+					_accessFlags: m.accessFlags | 0,
+					_annotations: m.annotations || [],
+					_annotationDefault: m.annotationDefault,
+					_accessible: false
+				};
+			},
+
+			_makeReflectCtor(owner, m) {
+				return {
+					__cls: "java/lang/reflect/Constructor",
+					_owner: owner,
+					_name: "<init>",
+					_descriptor: m.descriptor || "()V",
+					_accessFlags: m.accessFlags | 0,
+					_annotations: m.annotations || [],
+					_accessible: false
+				};
+			},
+
+			_materializeAnnotationValue(rawVal, retDesc) {
+				if (rawVal === undefined || rawVal === null) {
+					return defaultValueForDesc(retDesc);
+				}
+				if (Array.isArray(rawVal)) {
+					const arrDesc = (retDesc && retDesc.charCodeAt(0) === 91) ? retDesc : "[Ljava/lang/Object;";
+					const elemDesc = arrDesc.slice(1);
+					const arr = this.createArray(arrDesc, rawVal.length);
+					for (let i = 0; i < rawVal.length; i++) {
+						arr[i] = this._materializeAnnotationValue(rawVal[i], elemDesc);
+					}
+					return arr;
+				}
+				if (typeof rawVal === "object") {
+					if (rawVal.enumType && rawVal.constName) {
+						const enumClsName = descToInternalName(rawVal.enumType);
+						return this.getStatic(enumClsName, rawVal.constName, rawVal.enumType);
+					}
+					if (rawVal.className !== undefined && rawVal.descriptor !== undefined) {
+						return this._classForDescriptor(rawVal.descriptor);
+					}
+					if (rawVal.internalName && rawVal.values) {
+						return this._createAnnotationProxy(rawVal);
+					}
+				}
+				if (retDesc === "Z" || typeof rawVal === "boolean") return rawVal ? 1 : 0;
+				if (retDesc === "C") return typeof rawVal === "string" ? rawVal.charCodeAt(0) : (rawVal & 0xFFFF);
+				if (retDesc === "B") return ((rawVal | 0) << 24) >> 24;
+				if (retDesc === "S") return ((rawVal | 0) << 16) >> 16;
+				if (retDesc === "I") return rawVal | 0;
+				if (retDesc === "J") return typeof rawVal === "bigint" ? rawVal : BigInt(rawVal | 0);
+				if (retDesc === "F") return Math.fround(Number(rawVal));
+				if (retDesc === "D") return Number(rawVal);
+				return rawVal;
+			},
+
+			_createAnnotationProxy(annData) {
+				if (!annData) return null;
+				const cached = annotationProxyCache.get(annData);
+				if (cached) return cached;
+				const annInternal = this.resolveClassName(annData.internalName || descToInternalName(annData.type));
+				const annCls = this._resolveClassNoInit(annInternal);
+				const rawValues = annData.values || Object.create(null);
+				const samMap = Object.create(null);
+				const resolvedValues = Object.create(null);
+				const self = this;
+
+				function bindElem(mName, mDesc, rawVal) {
+					const retDesc = parseMethodDescriptor(mDesc).ret;
+					let computed = false;
+					let cachedVal;
+					const getter = function () {
+						if (!computed) {
+							cachedVal = self._materializeAnnotationValue(rawVal, retDesc);
+							computed = true;
+						}
+						return cachedVal;
+					};
+					samMap[mName + mDesc] = getter;
+					samMap[mName + self.canonicalizeDescriptor(mDesc)] = getter;
+					samMap[mName] = getter;
+					resolvedValues[mName] = getter;
+				}
+
+				const boundNames = new Set();
+				if (annCls && annCls.parsed && annCls.parsed.methods) {
+					for (let i = 0; i < annCls.parsed.methods.length; i++) {
+						const m = annCls.parsed.methods[i];
+						if (m.name === "<init>" || m.name === "<clinit>") continue;
+						const hasExplicit = Object.prototype.hasOwnProperty.call(rawValues, m.name);
+						const rawVal = hasExplicit ? rawValues[m.name] : m.annotationDefault;
+						bindElem(m.name, m.descriptor, rawVal);
+						boundNames.add(m.name);
+					}
+				}
+				const extraKeys = Object.keys(rawValues);
+				for (let i = 0; i < extraKeys.length; i++) {
+					const k = extraKeys[i];
+					if (boundNames.has(k)) continue;
+					const rv = rawValues[k];
+					let guessRet = "Ljava/lang/Object;";
+					if (typeof rv === "string") guessRet = "Ljava/lang/String;";
+					else if (typeof rv === "boolean") guessRet = "Z";
+					else if (typeof rv === "number") guessRet = "I";
+					else if (typeof rv === "bigint") guessRet = "J";
+					bindElem(k, "()" + guessRet, rv);
+				}
+
+				const annTypeFn = function () { return self.getClassObject(annInternal); };
+				const toStringFn = function () {
+					const parts = [];
+					const ks = Object.keys(resolvedValues);
+					for (let i = 0; i < ks.length; i++) {
+						parts.push(ks[i] + "=" + self.jvmToString(resolvedValues[ks[i]](), "Ljava/lang/Object;"));
+					}
+					return "@" + annInternal.replace(/\//g, ".") + "(" + parts.join(", ") + ")";
+				};
+				const equalsFn = function (other) {
+					if (this === other) return 1;
+					if (!other || !self.isInstanceOf(other, annInternal)) return 0;
+					const ks = Object.keys(resolvedValues);
+					for (let i = 0; i < ks.length; i++) {
+						const k = ks[i];
+						const va = resolvedValues[k]();
+						const vb = other.__samMethodMap && other.__samMethodMap[k] ? other.__samMethodMap[k]() : self.invokeVirtual(other, k, "()Ljava/lang/Object;", EMPTY_ARGS);
+						if (!self.invokeStatic("java/util/Objects", "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", [va, vb])) return 0;
+					}
+					return 1;
+				};
+				const hashCodeFn = function () {
+					let h = 0;
+					const ks = Object.keys(resolvedValues);
+					for (let i = 0; i < ks.length; i++) {
+						const k = ks[i];
+						const v = resolvedValues[k]();
+						const vh = self.invokeStatic("java/util/Objects", "hashCode", "(Ljava/lang/Object;)I", [v]) | 0;
+						h = (h + ((Math.imul(127, javaStringHashCode(k)) ^ vh) | 0)) | 0;
+					}
+					return h;
+				};
+
+				samMap["annotationType()Ljava/lang/Class;"] = annTypeFn;
+				samMap["annotationType"] = annTypeFn;
+				samMap["toString()Ljava/lang/String;"] = toStringFn;
+				samMap["toString"] = toStringFn;
+				samMap["equals(Ljava/lang/Object;)Z"] = equalsFn;
+				samMap["equals"] = equalsFn;
+				samMap["hashCode()I"] = hashCodeFn;
+				samMap["hashCode"] = hashCodeFn;
+
+				const proxy = {
+					__cls: annInternal,
+					__interfaces: [annInternal, "java/lang/annotation/Annotation"],
+					__annotationType: annInternal,
+					__samMethodMap: samMap
+				};
+				annotationProxyCache.set(annData, proxy);
+				return proxy;
+			},
+
+			_findAnnotationOnList(annList, targetAnnInternal) {
+				if (!annList || annList.length === 0) return null;
+				const canonTarget = this.resolveClassName(targetAnnInternal);
+				for (let i = 0; i < annList.length; i++) {
+					const a = annList[i];
+					if (!a || !a.visible) continue;
+					if (this.resolveClassName(a.internalName || descToInternalName(a.type)) === canonTarget) {
+						return this._createAnnotationProxy(a);
+					}
+				}
+				return null;
+			},
+
+			_materializeAnnotationArray(annList) {
+				const out = [];
+				if (annList) {
+					for (let i = 0; i < annList.length; i++) {
+						if (annList[i] && annList[i].visible) {
+							out.push(this._createAnnotationProxy(annList[i]));
+						}
+					}
+				}
+				const arr = this._newObjectArray("java/lang/annotation/Annotation", out.length);
+				for (let i = 0; i < out.length; i++) arr[i] = out[i];
+				return arr;
+			},
+
+			_isInheritedAnnotation(annInternal) {
+				const annCls = this._resolveClassNoInit(annInternal);
+				if (!annCls || !annCls.parsed || !annCls.parsed.annotations) return false;
+				const anns = annCls.parsed.annotations;
+				for (let i = 0; i < anns.length; i++) {
+					if (anns[i] && anns[i].visible && (anns[i].internalName === "java/lang/annotation/Inherited")) {
+						return true;
+					}
+				}
+				return false;
+			},
+
+			_getClassAnnotation(cls, targetAnnInternal, checkInherited) {
+				if (!cls) return null;
+				const direct = cls.parsed ? this._findAnnotationOnList(cls.parsed.annotations, targetAnnInternal) : null;
+				if (direct) return direct;
+				if (!checkInherited || !cls.superName || !this._isInheritedAnnotation(targetAnnInternal)) {
+					return null;
+				}
+				let cur = this._resolveClassNoInit(cls.superName);
+				let depth = 0;
+				while (cur && depth++ < 64) {
+					if (cur.parsed) {
+						const hit = this._findAnnotationOnList(cur.parsed.annotations, targetAnnInternal);
+						if (hit) return hit;
+					}
+					cur = cur.superName ? this._resolveClassNoInit(cur.superName) : null;
+				}
+				return null;
+			},
+
+			_getAllClassAnnotations(cls, includeInherited) {
+				const map = new Map();
+				if (cls && cls.parsed && cls.parsed.annotations) {
+					for (let i = 0; i < cls.parsed.annotations.length; i++) {
+						const a = cls.parsed.annotations[i];
+						if (a && a.visible) {
+							const k = this.resolveClassName(a.internalName || descToInternalName(a.type));
+							map.set(k, this._createAnnotationProxy(a));
+						}
+					}
+				}
+				if (includeInherited && cls && cls.superName) {
+					let cur = this._resolveClassNoInit(cls.superName);
+					let depth = 0;
+					while (cur && depth++ < 64) {
+						if (cur.parsed && cur.parsed.annotations) {
+							for (let i = 0; i < cur.parsed.annotations.length; i++) {
+								const a = cur.parsed.annotations[i];
+								if (!a || !a.visible) continue;
+								const k = this.resolveClassName(a.internalName || descToInternalName(a.type));
+								if (!map.has(k) && this._isInheritedAnnotation(k)) {
+									map.set(k, this._createAnnotationProxy(a));
+								}
+							}
+						}
+						cur = cur.superName ? this._resolveClassNoInit(cur.superName) : null;
+					}
+				}
+				const vals = Array.from(map.values());
+				const arr = this._newObjectArray("java/lang/annotation/Annotation", vals.length);
+				for (let i = 0; i < vals.length; i++) arr[i] = vals[i];
+				return arr;
+			},
+
+			_getOrCreateProxyClass(ifaceNames) {
+				const key = ifaceNames.join(",");
+				let pCls = proxyClassByKey.get(key);
+				if (!pCls) {
+					const name = "com/sun/proxy/$Proxy" + (nextProxyId++);
+					pCls = {
+						name,
+						superName: "java/lang/reflect/Proxy",
+						interfaces: ifaceNames.slice(),
+						isInterface: false,
+						isNative: true,
+						isStub: false,
+						isProxy: true,
+						initState: 2,
+						staticFields: Object.create(null),
+						fields: Object.create(null),
+						methods: Object.create(null),
+						ctor: null
+					};
+					proxyClasses.set(name, pCls);
+					proxyClassByKey.set(key, pCls);
+				}
+				return pCls;
+			},
+
+			_createReflectProxy(_loader, ifacesArr, handler) {
+				if (!ifacesArr || !handler) {
+					throw this.makeException("java/lang/NullPointerException", "Proxy.newProxyInstance requires interfaces and handler");
+				}
+				const ifaceNames = [];
+				for (let i = 0; i < ifacesArr.length; i++) {
+					const c = ifacesArr[i];
+					if (c) ifaceNames.push(this.resolveClassName(classObjInternalName(c)));
+				}
+				const pCls = this._getOrCreateProxyClass(ifaceNames);
+				return {
+					__cls: pCls.name,
+					__interfaces: ifaceNames,
+					__proxyHandler: handler,
+					__proxyInterfaces: ifaceNames,
+					__methodCache: Object.create(null),
+					h: handler
+				};
+			},
+
+			_invokeReflectProxy(proxy, owner, name, desc, rawArgs) {
+				const cacheKey = name + desc;
+				let methodObj = proxy.__methodCache && proxy.__methodCache[cacheKey];
+				if (!methodObj) {
+					let declOwner = owner ? this.resolveClassName(owner) : "java/lang/Object";
+					let mDef = null;
+					if (name === "equals" && desc === "(Ljava/lang/Object;)Z") {
+						declOwner = "java/lang/Object";
+					} else if (name === "hashCode" && desc === "()I") {
+						declOwner = "java/lang/Object";
+					} else if (name === "toString" && desc === "()Ljava/lang/String;") {
+						declOwner = "java/lang/Object";
+					} else {
+						// Search proxy interfaces (and super-interfaces) for exact method declaration
+						const queue = (proxy.__proxyInterfaces || []).slice();
+						if (owner) queue.push(declOwner);
+						const visited = new Set();
+						while (queue.length > 0 && !mDef) {
+							const cn = this.resolveClassName(queue.shift());
+							if (!cn || visited.has(cn)) continue;
+							visited.add(cn);
+							const ic = this._resolveClassNoInit(cn);
+							if (ic && ic.parsed && ic.parsed.methods) {
+								for (let i = 0; i < ic.parsed.methods.length; i++) {
+									const pm = ic.parsed.methods[i];
+									if (pm.name === name && pm.descriptor === desc) {
+										declOwner = ic.name;
+										mDef = pm;
+										break;
+									}
+								}
+							}
+							if (!mDef && ic && ic.interfaces) {
+								for (let i = 0; i < ic.interfaces.length; i++) queue.push(ic.interfaces[i]);
+							}
+						}
+					}
+					methodObj = this._makeReflectMethod(declOwner, mDef || { name, descriptor: desc, accessFlags: 0x0401, annotations: [] });
+					if (proxy.__methodCache) proxy.__methodCache[cacheKey] = methodObj;
+				}
+				const pd = parseMethodDescriptor(desc);
+				let boxedArgs = null;
+				if (pd.params.length > 0) {
+					boxedArgs = this._newObjectArray("java/lang/Object", pd.params.length);
+					for (let i = 0; i < pd.params.length; i++) {
+						boxedArgs[i] = this._adaptValue(rawArgs[i], pd.params[i], "Ljava/lang/Object;");
+					}
+				}
+				const res = this.invokeInterface(
+					proxy.__proxyHandler,
+					"java/lang/reflect/InvocationHandler",
+					"invoke",
+					"(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;",
+					[proxy, methodObj, boxedArgs]
+				);
+				if (pd.ret === "V") return undefined;
+				return this._adaptValue(res, "Ljava/lang/Object;", pd.ret);
+			},
 
 			_identityHash(obj) {
 				if (obj == null) return 0;
@@ -4791,7 +8094,7 @@
 				return existing;
 			},
 
-			defineClass(parsedClass) {
+			defineClass(parsedClass, deferInvalidate) {
 				if (!parsedClass || !parsedClass.name) {
 					throw new Error("Invalid parsed ClassFile");
 				}
@@ -4849,9 +8152,12 @@
 					_trapsEpoch: 0
 				};
 
-				definedClasses.set(name, clsObj);
-				stubClasses.delete(name);
-				invalidateCaches();
+				rawMapSet.call(definedClasses, name, clsObj);
+				pendingClassBuffers.delete(name);
+				const hadStub = stubClasses.delete(name);
+				if (!deferInvalidate || hadStub) {
+					invalidateCaches();
+				}
 				return clsObj;
 			},
 
@@ -4860,7 +8166,12 @@
 				if (!canon) return this._getOrCreateStub("java/lang/Object");
 				let cls = nativeClasses.get(canon);
 				if (cls) return cls;
-				cls = definedClasses.get(canon);
+				cls = rawMapGet.call(definedClasses, canon);
+				if (cls) return cls;
+				if (pendingClassBuffers.has(canon)) {
+					return materializePendingClass(canon);
+				}
+				cls = proxyClasses.get(canon);
 				if (cls) return cls;
 				if (canon.charCodeAt(0) === 91) {
 					let arrCls = stubClasses.get(canon);
@@ -5209,7 +8520,25 @@
 				const clsName = cls.name;
 				const isStub = !!cls.isStub;
 
-				let canUseLiteral = !isStub && reservedMap.size === 0 && dynFields.length === 0 && plainMap.size <= 32;
+				// Build a cached JS prototype of bare-name native methods whenever a non-Object
+				// native class in the hierarchy defines bare-name methods (e.g. bridge.js java/io/Writer
+				// where descriptor overloads call this.write(...) / this.flush()).
+				let nativeProto = null;
+				for (let i = chain.length - 1; i >= 0; i--) {
+					const c = chain[i];
+					if (!c.isNative || c.name === "java/lang/Object" || !c.methods) continue;
+					const mKeys = Object.keys(c.methods);
+					for (let k = 0; k < mKeys.length; k++) {
+						const mk = mKeys[k];
+						if (mk === "<init>" || mk === "<clinit>" || mk.indexOf("(") >= 0) continue;
+						if (typeof c.methods[mk] === "function") {
+							if (!nativeProto) nativeProto = Object.create(Object.prototype);
+							nativeProto[mk] = c.methods[mk];
+						}
+					}
+				}
+
+				let canUseLiteral = !isStub && !nativeProto && reservedMap.size === 0 && dynFields.length === 0 && plainMap.size <= 32;
 				let props = null;
 				if (canUseLiteral) {
 					props = ['"__cls":' + JSON.stringify(clsName)];
@@ -5238,8 +8567,10 @@
 					const plainEntries = Array.from(plainMap.entries());
 					const reservedEntries = Array.from(reservedMap.entries());
 					const self = this;
+					const protoRef = nativeProto;
 					allocFn = function () {
-						const obj = { __cls: clsName };
+						const obj = protoRef ? Object.create(protoRef) : {};
+						obj.__cls = clsName;
 						if (isStub) obj.__isStub = true;
 						for (let i = 0; i < plainEntries.length; i++) {
 							obj[plainEntries[i][0]] = plainEntries[i][1];
@@ -5489,6 +8820,9 @@
 					throw this.makeException("java/lang/NullPointerException", "Cannot invoke " + name + desc + " on null");
 				}
 				const a = args || EMPTY_ARGS;
+				if (obj.__proxyHandler && name !== "getClass" && name !== "notify" && name !== "notifyAll" && name !== "wait") {
+					return this._invokeReflectProxy(obj, declaredOwner, name, desc, a);
+				}
 				if (obj.__samMethodMap) {
 					const lr = this._invokeLambdaProxy(obj, name, desc, a);
 					if (lr) return lr.value;
@@ -5568,6 +8902,9 @@
 					throw this.makeException("java/lang/NullPointerException", "Cannot invokeInterface " + owner + "." + name + desc + " on null");
 				}
 				const a = args || EMPTY_ARGS;
+				if (obj.__proxyHandler && name !== "getClass" && name !== "notify" && name !== "notifyAll" && name !== "wait") {
+					return this._invokeReflectProxy(obj, owner, name, desc, a);
+				}
 				if (obj.__samMethodMap) {
 					const lr = this._invokeLambdaProxy(obj, name, desc, a);
 					if (lr) return lr.value;
@@ -6117,15 +9454,25 @@
 				const context = ctx !== undefined ? ctx : {};
 				if (!list || list.length === 0) return context;
 				const savedSd = COMPILED_HELPERS.sd;
+				const logHookOnce = (modId, err) => {
+					const desc = err && err.__cls
+						? err.__cls + (err.detailMessage ? ": " + err.detailMessage : "")
+						: (err && err.message ? String(err.message) : String(err));
+					if (!this._loggedHookErrors) this._loggedHookErrors = Object.create(null);
+					const k = modId + "|" + hookName + "|" + desc;
+					if (this._loggedHookErrors[k]) return;
+					this._loggedHookErrors[k] = true;
+					if (typeof console !== "undefined" && console.warn) {
+						console.warn("[EaglerJvmTranslator] Hook skipped in " + modId + " (" + hookName + "): " + desc);
+					}
+				};
 				if (list.length === 1) {
 					const only = list[0];
 					try {
 						only.fn(context, this);
 					} catch (err) {
 						COMPILED_HELPERS.sd = savedSd;
-						if (typeof console !== "undefined" && console.error) {
-							console.error("[EaglerJvmTranslator] Hook error in " + only.modId + " (" + hookName + "):", err);
-						}
+						logHookOnce(only.modId, err);
 					}
 					return context;
 				}
@@ -6135,9 +9482,7 @@
 						snap[i].fn(context, this);
 					} catch (err) {
 						COMPILED_HELPERS.sd = savedSd;
-						if (typeof console !== "undefined" && console.error) {
-							console.error("[EaglerJvmTranslator] Hook error in " + snap[i].modId + " (" + hookName + "):", err);
-						}
+						logHookOnce(snap[i].modId, err);
 					}
 				}
 				return context;
@@ -6203,6 +9548,7 @@
 			if (bridge && typeof bridge.install === "function") {
 				sharedRuntime.__bridgeInstalled = true;
 				bridge.install(sharedRuntime);
+				installPostBridgeCompat(sharedRuntime);
 			}
 		}
 		return sharedRuntime;
@@ -6296,15 +9642,39 @@
 		const modId = (modJson && modJson.id) ? String(modJson.id) : safeFilename.replace(/\.jar$/i, "").replace(/[^a-zA-Z0-9_-]/g, "_");
 		const modName = (modJson && modJson.name) ? String(modJson.name) : modId;
 		const modVersion = (modJson && modJson.version) ? String(modJson.version) : "0.0.0";
+		const modDesc = (modJson && modJson.description) ? String(modJson.description) : "";
 
+		function registerServiceEntry(entryPath, data) {
+			const svcName = entryPath.slice("META-INF/services/".length).trim();
+			if (!svcName) return;
+			const text = decodeUtf8Bytes(data);
+			const lines = text.split(/\r?\n/);
+			for (let i = 0; i < lines.length; i++) {
+				const hash = lines[i].indexOf("#");
+				const clean = (hash >= 0 ? lines[i].slice(0, hash) : lines[i]).trim();
+				if (clean) {
+					rt._registerServiceProvider(svcName, clean);
+				}
+			}
+		}
+
+		const MAX_RESOURCE_BYTES = 512 * 1024;
 		// Unpack 1 level of nested META-INF/jars/*.jar (skipping huge/unsupported libraries)
-		const allClassBuffers = new Map(); // entryPath -> Uint8Array
+		const allClassBuffers = new Map(); // internalName -> Uint8Array
 		const allJsonBuffers = new Map();
 		for (const [entryPath, data] of outerEntries.entries()) {
 			if (entryPath.endsWith(".class") && !entryPath.startsWith("META-INF/versions/") && !entryPath.endsWith("module-info.class")) {
-				allClassBuffers.set(entryPath, data);
-			} else if (entryPath.endsWith(".json")) {
-				allJsonBuffers.set(entryPath, data);
+				allClassBuffers.set(entryPath.slice(0, -6), data);
+			} else {
+				if (entryPath.startsWith("META-INF/services/")) {
+					registerServiceEntry(entryPath, data);
+				}
+				if (entryPath.endsWith(".json")) {
+					allJsonBuffers.set(entryPath, data);
+				}
+				if (data.length <= MAX_RESOURCE_BYTES && !entryPath.startsWith("META-INF/jars/")) {
+					rt._registerResource(entryPath, data);
+				}
 			}
 		}
 
@@ -6316,13 +9686,38 @@
 				}
 				try {
 					const inner = unzipJar(data);
+					const innerFmj = inner.get("fabric.mod.json");
+					if (innerFmj) {
+						try {
+							const ij = JSON.parse(decodeUtf8Bytes(innerFmj));
+							if (ij && ij.id) {
+								const subInfo = {
+									id: String(ij.id),
+									name: ij.name ? String(ij.name) : String(ij.id),
+									version: ij.version ? String(ij.version) : "0.0.0",
+									description: ij.description ? String(ij.description) : ""
+								};
+								if (!rt.mods.has(subInfo.id)) rt.mods.set(subInfo.id, subInfo);
+								if (ij.entrypoints) rt._registerModEntrypoints(subInfo, ij.entrypoints);
+							}
+						} catch (_ijErr) {}
+					}
 					for (const [inPath, inData] of inner.entries()) {
 						if (inPath.endsWith(".class") && !inPath.startsWith("META-INF/versions/") && !inPath.endsWith("module-info.class")) {
-							if (!allClassBuffers.has(inPath)) {
-								allClassBuffers.set(inPath, inData);
+							const inInternal = inPath.slice(0, -6);
+							if (!allClassBuffers.has(inInternal)) {
+								allClassBuffers.set(inInternal, inData);
 							}
-						} else if (inPath.endsWith(".json") && !allJsonBuffers.has(inPath)) {
-							allJsonBuffers.set(inPath, inData);
+						} else {
+							if (inPath.startsWith("META-INF/services/")) {
+								registerServiceEntry(inPath, inData);
+							}
+							if (inPath.endsWith(".json") && !allJsonBuffers.has(inPath)) {
+								allJsonBuffers.set(inPath, inData);
+							}
+							if (inData.length <= MAX_RESOURCE_BYTES) {
+								rt._registerResource(inPath, inData);
+							}
 						}
 					}
 				} catch (err) {
@@ -6331,24 +9726,11 @@
 			}
 		}
 
-		// Parse all .class files and define them in the runtime
-		const parsedClasses = new Map();
-		for (const [entryPath, data] of allClassBuffers.entries()) {
-			if (data.length < 10 || data[0] !== 0xCA || data[1] !== 0xFE || data[2] !== 0xBA || data[3] !== 0xBE) {
-				continue;
-			}
-			try {
-				const parsed = parseClass(data);
-				parsedClasses.set(parsed.name, parsed);
-				rt.defineClass(parsed);
-				classesLoaded++;
-			} catch (err) {
-				errors.push("Class parse failed (" + entryPath + "): " + formatErrorShort(err));
-			}
-		}
-
-		// Parse mixin configs listed in fabric.mod.json
+		// Parse mixin configs listed in fabric.mod.json first so we know which classes need eager @Mixin inspection
 		const mixinConfigs = [];
+		const mixinCandidateNames = new Set();
+		const mixinPkgPrefixes = [];
+		let needFullMixinScan = false;
 		const rawMixins = (modJson && Array.isArray(modJson.mixins)) ? modJson.mixins : [];
 		for (let i = 0; i < rawMixins.length; i++) {
 			const mEntry = rawMixins[i];
@@ -6371,10 +9753,64 @@
 						try { refmapData = JSON.parse(decodeUtf8Bytes(rmBytes)); } catch (_e) {}
 					}
 				}
+				if (cfgObj && typeof cfgObj === "object") {
+					const pkg = String(cfgObj.package || "").replace(/\./g, "/").replace(/\/+$/, "");
+					if (pkg) mixinPkgPrefixes.push(pkg + "/");
+					const listed = []
+						.concat(Array.isArray(cfgObj.mixins) ? cfgObj.mixins : [])
+						.concat(Array.isArray(cfgObj.client) ? cfgObj.client : []);
+					if (listed.length === 0) {
+						needFullMixinScan = true;
+					} else {
+						for (let li = 0; li < listed.length; li++) {
+							const rel = String(listed[li] || "").replace(/\./g, "/");
+							if (rel) mixinCandidateNames.add(pkg ? (pkg + "/" + rel) : rel);
+						}
+					}
+				}
 				mixinConfigs.push({ filename: cfgFile, config: cfgObj, refmap: refmapData });
 			} catch (err) {
 				errors.push("Mixin config parse failed (" + cfgFile + "): " + formatErrorShort(err));
 			}
+		}
+
+		// Register all valid .class files lazily; eagerly parse mixin classes (or small JARs)
+		const parsedClasses = new Map();
+		const eagerAll = (mixinConfigs.length > 0 && needFullMixinScan) || allClassBuffers.size <= 32;
+		for (const [internalName, data] of allClassBuffers.entries()) {
+			if (data.length < 10 || data[0] !== 0xCA || data[1] !== 0xFE || data[2] !== 0xBA || data[3] !== 0xBE) {
+				continue;
+			}
+			let shouldParseNow = eagerAll || mixinCandidateNames.has(internalName);
+			if (!shouldParseNow && mixinPkgPrefixes.length > 0) {
+				for (let p = 0; p < mixinPkgPrefixes.length; p++) {
+					if (internalName.startsWith(mixinPkgPrefixes[p])) {
+						shouldParseNow = true;
+						break;
+					}
+				}
+			}
+			if (shouldParseNow) {
+				try {
+					const parsed = parseClass(data);
+					parsedClasses.set(parsed.name, parsed);
+					rt.defineClass(parsed, true);
+					classesLoaded++;
+				} catch (err) {
+					errors.push("Class parse failed (" + internalName + ".class): " + formatErrorShort(err));
+				}
+			} else {
+				rt._registerLazyClass(internalName, data);
+				classesLoaded++;
+			}
+		}
+		rt._invalidateCaches();
+
+		// Register mod metadata and custom entrypoints before running main/client entrypoints
+		const selfModInfo = { id: modId, name: modName, version: modVersion, description: modDesc };
+		rt.mods.set(modId, selfModInfo);
+		if (modJson && modJson.entrypoints) {
+			rt._registerModEntrypoints(selfModInfo, modJson.entrypoints);
 		}
 
 		// Unregister any previous hooks for this mod before re-running
@@ -6399,6 +9835,8 @@
 			errors,
 			summary: ""
 		};
+		loadedModsById.set(modId, modRecord);
+		loadedModsByFilename.set(safeFilename, modRecord);
 
 		try {
 			// Run main entrypoints first, then client entrypoints

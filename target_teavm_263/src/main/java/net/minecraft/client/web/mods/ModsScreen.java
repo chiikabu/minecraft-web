@@ -19,45 +19,45 @@ import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 
 /**
- * In-browser Mods Manager &amp; Modrinth Relay Browser screen:
+ * Native Minecraft 26.3 Mods Manager &amp; Modrinth Browser screen:
  * <ul>
- *   <li><b>Installed</b> tab: lists installed {@code .js}, {@code .mcmod.zip}, and {@code .jar}
- *       mods stored in {@code /config/mods} with offline JVM-to-JS translation status, optional
- *       local auto-builder progress, color-coded compatibility badges, enable/disable toggle,
- *       {@code Add Mod...}, 1-click {@code Reload Now} / {@code Full Bake} /
- *       {@code Extract Pack}, and {@code Remove}.</li>
- *   <li><b>Browse Modrinth</b> tab: searches Modrinth API v2 &amp; CDN strictly through the
- *       configured WISP Relays (TLS 1.3 + HTTP/1.1 keep-alive), displaying crisp {@code 32x32}
- *       thumbnails, titles, authors, descriptions, download counts, category/MC badges, live
- *       filtering, pagination, project detail view ({@link ModrinthProjectScreen}), and 1-click
- *       installation with live download progress.</li>
+ *   <li><b>Installed</b> tab: manages installed {@code .js}, {@code .mcmod.zip}, and {@code .jar}
+ *       mods with offline JVM-to-JS translation status, compatibility badges, enable/disable,
+ *       {@code Add Mod...}, {@code Extract Pack} / {@code Full Bake} / {@code Reload Now},
+ *       and {@code Remove}.</li>
+ *   <li><b>Browse Modrinth</b> tab: works seamlessly with or without Relays (auto-routing via
+ *       configured WISP Relays with transparent Direct HTTPS fallback, or user-selected Direct /
+ *       Relay mode), featuring live search with auto-relevance, 26.3 version filters, crisp
+ *       {@code 32x32} thumbnails, automatic recursive Fabric dependency installation, pagination,
+ *       and {@link ModrinthProjectScreen} version details.</li>
  * </ul>
  */
 public class ModsScreen extends Screen {
 	private static final Component TITLE = Component.literal("Mods");
 	private static final String EMPTY_HINT =
-		"Drag & drop any .jar, .js, or .mcmod.zip mod anywhere in this window (or use Browse Modrinth)";
+		"Drag & drop any .jar, .js, or .mcmod.zip mod here, or switch to Browse Modrinth";
 	private static final String EMPTY_HINT_LINE_1 = "Drag & drop any .jar, .js, or .mcmod.zip mod";
 	private static final String EMPTY_HINT_LINE_2 = "or switch to Browse Modrinth above";
 
 	private static final int TAB_INSTALLED = 0;
 	private static final int TAB_MODRINTH = 1;
 
-	private static final int HEADER_H = 32;
+	private static final int HEADER_H = 30;
 	private static final int TOOLBAR_H = 26;
-	private static final int FOOTER_H_INSTALLED = 56;
+	private static final int FOOTER_H_INSTALLED = 54;
 	private static final int FOOTER_H_MODRINTH = 54;
 	private static final int PAGE_SIZE = 20;
 
-	private static final int COLOR_ENABLED = 0xFF55FF55;
-	private static final int COLOR_DISABLED = 0xFFA0A0A0;
-	private static final int COLOR_MUTED = 0xFFA0A0A0;
-	private static final int COLOR_LIGHT = 0xFFC8C8C8;
-	private static final int COLOR_DIM = 0xFF848484;
+	// Refined authentic Minecraft palette
+	private static final int COLOR_SUCCESS = 0xFF7CE88C;
+	private static final int COLOR_DISABLED = 0xFF9E9E9E;
+	private static final int COLOR_MUTED = 0xFFA4A4A4;
+	private static final int COLOR_LIGHT = 0xFFD0D0D0;
+	private static final int COLOR_DIM = 0xFF828282;
 	private static final int COLOR_WHITE = -1;
-	private static final int COLOR_ERROR = 0xFFFF5555;
-	private static final int COLOR_BUILDING = 0xFFFFAA00;
-	private static final int COLOR_READY = 0xFF55FFFF;
+	private static final int COLOR_ERROR = 0xFFFF6B6B;
+	private static final int COLOR_AMBER = 0xFFF5C156;
+	private static final int COLOR_SKY = 0xFF7AD7F0;
 
 	private static final String[] TYPE_KEYS = { "mod", "shader", "resourcepack", "datapack", "all" };
 	private static final String[] TYPE_LABELS = { "Mods", "Shaders", "Resources", "Data Packs", "All" };
@@ -65,16 +65,16 @@ public class ModsScreen extends Screen {
 	private static final String[] SORT_KEYS = { "downloads", "relevance", "updated", "newest" };
 	private static final String[] SORT_LABELS = { "Downloads", "Relevance", "Updated", "Newest" };
 
-	private static final String[] MC_KEYS = { "any", "26.3", "1.21" };
-	private static final String[] MC_LABELS = { "MC: Any", "MC: 26.3", "MC: 1.21" };
+	private static final String[] MC_KEYS = { "26.3", "26.x", "any" };
+	private static final String[] MC_LABELS = { "MC: 26.3", "MC: 26.x", "MC: Any" };
 
 	private final Screen lastScreen;
 
-	// Tab & shared header controls
+	// Shared top header controls (authentic Minecraft tab buttons, zero extra color bar)
 	private int activeTab = TAB_INSTALLED;
 	private @Nullable Button installedTabButton;
 	private @Nullable Button modrinthTabButton;
-	private @Nullable Button relayStatusButton;
+	private @Nullable Button routeButton;
 
 	// Installed tab state
 	private @Nullable ModList modList;
@@ -86,8 +86,9 @@ public class ModsScreen extends Screen {
 	private int lastModListCount = -1;
 	private String lastModListSignature = "";
 
-	// Modrinth Browse tab state (persists across resizes, RelaysScreen, and ModrinthProjectScreen)
+	// Modrinth Browse tab state (persisted across resizes & sub-screens)
 	private @Nullable EditBox searchBox;
+	private @Nullable Button clearSearchButton;
 	private @Nullable Button typeFilterButton;
 	private @Nullable Button sortFilterButton;
 	private @Nullable Button mcFilterButton;
@@ -99,7 +100,8 @@ public class ModsScreen extends Screen {
 	private String searchQuery = "";
 	private int typeIdx;
 	private int sortIdx;
-	private int mcIdx;
+	private boolean userPinnedSort;
+	private int mcIdx; // 0 = MC: 26.3
 	private final List<ModrinthClient.ProjectHit> browseHits = new ArrayList<>();
 	private int browseTotalHits;
 	private boolean browseHasMore;
@@ -127,9 +129,8 @@ public class ModsScreen extends Screen {
 
 	@Override
 	protected void init() {
-		// Top header bar: centered tab buttons + right-aligned relay pill
 		int tabGap = 6;
-		int tab1W = 102;
+		int tab1W = 104;
 		int tab2W = 114;
 		int tabsTotalW = tab1W + tabGap + tab2W;
 		int tabsLeft = Math.max(8, (this.width - tabsTotalW) / 2);
@@ -142,14 +143,14 @@ public class ModsScreen extends Screen {
 			Button.builder(Component.literal("Browse Modrinth"), b -> this.switchTab(TAB_MODRINTH))
 				.bounds(tabsLeft + tab1W + tabGap, 6, tab2W, 20).build());
 
-		int relayW = 86;
-		int relayX = Math.max(tabsLeft + tabsTotalW + 6, this.width - relayW - 8);
-		if (relayX + relayW <= this.width - 2) {
-			this.relayStatusButton = this.addRenderableWidget(
-				Button.builder(relayButtonText(), b -> this.minecraft.gui.setScreen(new RelaysScreen(this)))
-					.bounds(relayX, 6, relayW, 20).build());
+		int routeW = 88;
+		int routeX = Math.max(tabsLeft + tabsTotalW + 8, this.width - routeW - 8);
+		if (routeX + routeW <= this.width - 2) {
+			this.routeButton = this.addRenderableWidget(
+				Button.builder(routeButtonText(), b -> this.onRouteButtonClicked())
+					.bounds(routeX, 6, routeW, 20).build());
 		} else {
-			this.relayStatusButton = null;
+			this.routeButton = null;
 		}
 
 		// Clear stale tab widget pointers before constructing active tab
@@ -158,6 +159,7 @@ public class ModsScreen extends Screen {
 		this.actionButton = null;
 		this.removeButton = null;
 		this.searchBox = null;
+		this.clearSearchButton = null;
 		this.typeFilterButton = null;
 		this.sortFilterButton = null;
 		this.mcFilterButton = null;
@@ -181,46 +183,53 @@ public class ModsScreen extends Screen {
 		this.addRenderableWidget(this.modList);
 
 		int btnY = this.height - 26;
-		int totalW = 64 + 4 + 54 + 4 + 84 + 4 + 54 + 4 + 52;
+		int totalW = 68 + 4 + 56 + 4 + 84 + 4 + 54 + 4 + 52;
 		int x = (this.width - totalW) / 2;
 		this.addRenderableWidget(
 			Button.builder(Component.literal("Add Mod..."), b -> WebMods.chooseMod(this::onModAdded))
-				.bounds(x, btnY, 64, 20).build());
+				.bounds(x, btnY, 68, 20).build());
 		this.toggleButton = this.addRenderableWidget(
 			Button.builder(Component.literal("Enable"), b -> this.toggleSelected())
-				.bounds(x + 68, btnY, 54, 20).build());
+				.bounds(x + 72, btnY, 56, 20).build());
 		this.actionButton = this.addRenderableWidget(
 			Button.builder(Component.literal("Extract Pack"), b -> this.onActionButton())
-				.bounds(x + 126, btnY, 84, 20).build());
+				.bounds(x + 132, btnY, 84, 20).build());
 		this.removeButton = this.addRenderableWidget(
 			Button.builder(Component.literal("Remove"), b -> this.removeSelected())
-				.bounds(x + 214, btnY, 54, 20).build());
+				.bounds(x + 220, btnY, 54, 20).build());
 		this.addRenderableWidget(
 			Button.builder(CommonComponents.GUI_DONE, b -> this.onClose())
-				.bounds(x + 272, btnY, 52, 20).build());
+				.bounds(x + 278, btnY, 52, 20).build());
 
 		this.updateButtons();
 	}
 
 	private void initModrinthTab() {
-		int barW = Math.min(this.width - 16, 444);
+		int barW = Math.min(this.width - 16, 448);
 		int barL = (this.width - barW) / 2;
 		int barY = HEADER_H + 3;
 
-		int typeW = 68;
+		int clearW = 18;
+		int typeW = 66;
 		int sortW = 68;
 		int mcW = 58;
 		int gap = 4;
-		int searchW = Math.max(80, barW - (typeW + sortW + mcW + gap * 3));
+		int searchW = Math.max(80, barW - (clearW + typeW + sortW + mcW + gap * 4));
 
 		this.searchBox = new EditBox(this.font, barL, barY, searchW, 20, Component.literal("Search Modrinth"));
 		this.searchBox.setMaxLength(120);
 		this.searchBox.setValue(this.searchQuery);
-		this.searchBox.setHint(Component.literal("Search Modrinth mods, shaders...").withColor(COLOR_DIM));
+		this.searchBox.setHint(Component.literal("Search Modrinth (Ctrl+F)...").withColor(COLOR_DIM));
 		this.searchBox.setResponder(this::onSearchInputChanged);
 		this.addRenderableWidget(this.searchBox);
 
 		int bx = barL + searchW + gap;
+		this.clearSearchButton = this.addRenderableWidget(
+			Button.builder(Component.literal("X"), b -> this.clearSearch())
+				.bounds(bx, barY, clearW, 20).build());
+		this.clearSearchButton.active = !this.searchQuery.isEmpty();
+		bx += clearW + gap;
+
 		this.typeFilterButton = this.addRenderableWidget(
 			Button.builder(Component.literal(TYPE_LABELS[this.typeIdx]), b -> this.cycleType())
 				.bounds(bx, barY, typeW, 20).build());
@@ -239,25 +248,28 @@ public class ModsScreen extends Screen {
 		this.addRenderableWidget(this.modrinthList);
 
 		int btnY = this.height - 26;
-		int totalW = 78 + 4 + 76 + 4 + 64 + 4 + 60;
+		int totalW = 80 + 4 + 78 + 4 + 64 + 4 + 60;
 		int x = (this.width - totalW) / 2;
 		this.mrInstallButton = this.addRenderableWidget(
 			Button.builder(Component.literal("Install"), b -> this.quickInstallSelected())
-				.bounds(x, btnY, 78, 20).build());
+				.bounds(x, btnY, 80, 20).build());
 		this.mrDetailsButton = this.addRenderableWidget(
 			Button.builder(Component.literal("Details..."), b -> this.openSelectedDetails())
-				.bounds(x + 82, btnY, 76, 20).build());
+				.bounds(x + 84, btnY, 78, 20).build());
 		this.mrRefreshButton = this.addRenderableWidget(
-			Button.builder(Component.literal("Refresh"), b -> this.startModrinthSearch(false))
-				.bounds(x + 162, btnY, 64, 20).build());
+			Button.builder(Component.literal("Refresh"), b -> {
+				ModrinthClient.clearFailedThumbnails();
+				this.startModrinthSearch(false);
+			})
+				.bounds(x + 166, btnY, 64, 20).build());
 		this.addRenderableWidget(
 			Button.builder(CommonComponents.GUI_DONE, b -> this.onClose())
-				.bounds(x + 230, btnY, 60, 20).build());
+				.bounds(x + 234, btnY, 60, 20).build());
 
 		if (!this.browseInitialized) {
 			this.browseInitialized = true;
 			this.startModrinthSearch(false);
-		} else if (this.browseHadNoRelayError && ModrinthClient.relayInfo().relayCount > 0) {
+		} else if (this.browseHadNoRelayError && !ModrinthClient.relayInfo().needsRelaySetup()) {
 			this.browseHadNoRelayError = false;
 			this.startModrinthSearch(false);
 		} else {
@@ -274,31 +286,50 @@ public class ModsScreen extends Screen {
 		this.rebuildWidgets();
 	}
 
-	private void updateTabStyles() {
-		int count = WebMods.listMods().size();
-		if (this.installedTabButton != null) {
-			Component label = Component.literal("Installed (" + count + ")");
-			this.installedTabButton.setMessage(this.activeTab == TAB_INSTALLED ? label.copy().withColor(COLOR_ENABLED) : label);
+	private void onRouteButtonClicked() {
+		ModrinthClient.RelayInfo ri = ModrinthClient.relayInfo();
+		if (ri.needsRelaySetup()) {
+			this.minecraft.gui.setScreen(new RelaysScreen(this));
+			return;
 		}
-		if (this.modrinthTabButton != null) {
-			Component label = Component.literal("Browse Modrinth");
-			this.modrinthTabButton.setMessage(this.activeTab == TAB_MODRINTH ? label.copy().withColor(COLOR_ENABLED) : label);
-		}
-		if (this.relayStatusButton != null) {
-			this.relayStatusButton.setMessage(relayButtonText());
+		String next = ModrinthClient.cycleRouteMode();
+		this.updateTabStyles();
+		if (this.activeTab == TAB_MODRINTH) {
+			if ("relay".equals(next) && ModrinthClient.relayInfo().needsRelaySetup()) {
+				this.browseHadNoRelayError = true;
+				this.browseStatus = "Relay mode selected with no relays - click 'Add Relay...' or switch back to Direct/Auto";
+				this.browseStatusColor = COLOR_AMBER;
+				if (this.modrinthList != null) {
+					this.modrinthList.rebuildFromState();
+				}
+			} else {
+				this.startModrinthSearch(false);
+			}
 		}
 	}
 
-	private static Component relayButtonText() {
+	private void updateTabStyles() {
+		int count = WebMods.listMods().size();
+		if (this.installedTabButton != null) {
+			this.installedTabButton.setMessage(Component.literal("Installed (" + count + ")"));
+			this.installedTabButton.active = this.activeTab != TAB_INSTALLED;
+		}
+		if (this.modrinthTabButton != null) {
+			this.modrinthTabButton.setMessage(Component.literal("Browse Modrinth"));
+			this.modrinthTabButton.active = this.activeTab != TAB_MODRINTH;
+		}
+		if (this.routeButton != null) {
+			this.routeButton.setMessage(routeButtonText());
+		}
+	}
+
+	private static Component routeButtonText() {
 		ModrinthClient.RelayInfo ri = ModrinthClient.relayInfo();
-		if (ri.relayCount <= 0) {
-			return Component.literal("No Relay").withColor(COLOR_BUILDING);
+		String label = ri.routeButtonLabel();
+		if (ri.needsRelaySetup()) {
+			return Component.literal(label).withColor(COLOR_AMBER);
 		}
-		String label = ri.badgeText();
-		if (label.length() > 13) {
-			label = ri.relayLabel.isEmpty() ? "Relay" : ri.relayLabel;
-		}
-		return Component.literal(label).withColor(COLOR_ENABLED);
+		return Component.literal(label);
 	}
 
 	@Override
@@ -310,7 +341,7 @@ public class ModsScreen extends Screen {
 		if (this.activeTab == TAB_INSTALLED) {
 			this.updateButtons();
 		} else {
-			if (this.browseHadNoRelayError && ModrinthClient.relayInfo().relayCount > 0) {
+			if (this.browseHadNoRelayError && !ModrinthClient.relayInfo().needsRelaySetup()) {
 				this.browseHadNoRelayError = false;
 				this.startModrinthSearch(false);
 			}
@@ -338,10 +369,26 @@ public class ModsScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(final KeyEvent event) {
-		if (this.activeTab == TAB_MODRINTH && this.searchBox != null && this.getFocused() == this.searchBox && event.isConfirmation()) {
-			this.searchDebounceTicks = -1;
-			this.startModrinthSearch(false);
-			return true;
+		if (this.activeTab == TAB_MODRINTH) {
+			// Ctrl+F focuses the Modrinth search bar
+			if (event.hasControlDown() && event.key() == 70 && this.searchBox != null) {
+				this.setFocused(this.searchBox);
+				return true;
+			}
+			// Esc clears search text first when focused & non-empty
+			if (event.isEscape() && this.searchBox != null && this.getFocused() == this.searchBox && !this.searchQuery.isEmpty()) {
+				this.clearSearch();
+				return true;
+			}
+			if (this.searchBox != null && this.getFocused() == this.searchBox && event.isConfirmation()) {
+				this.searchDebounceTicks = -1;
+				this.startModrinthSearch(false);
+				return true;
+			}
+			if (event.isConfirmation() && !this.mrInstalling && (this.searchBox == null || this.getFocused() != this.searchBox) && this.selectedHit() != null) {
+				this.openSelectedDetails();
+				return true;
+			}
 		}
 		return super.keyPressed(event);
 	}
@@ -356,22 +403,13 @@ public class ModsScreen extends Screen {
 	public void extractRenderState(final GuiGraphicsExtractor graphics, final int mouseX, final int mouseY, final float a) {
 		super.extractRenderState(graphics, mouseX, mouseY, a);
 
-		// Crisp Minecraft active-tab underline highlight
-		Button activeTabBtn = this.activeTab == TAB_INSTALLED ? this.installedTabButton : this.modrinthTabButton;
-		if (activeTabBtn != null) {
-			int ux = activeTabBtn.getX() + 2;
-			int uy = activeTabBtn.getY() + activeTabBtn.getHeight() + 1;
-			int uw = activeTabBtn.getWidth() - 4;
-			graphics.fill(ux, uy, ux + uw, uy + 2, COLOR_ENABLED);
-		}
-
-		// Footer status / progress rendering
-		int maxStatusW = Math.min(this.width - 20, 444);
+		// Footer status / progress rendering (no extra color lines under tabs)
+		int maxStatusW = Math.max(40, Math.min(this.width - 16, 444));
 		if (this.activeTab == TAB_INSTALLED) {
 			Component st = this.statusText();
 			String raw = st.getString();
 			int color = st.getStyle().getColor() != null ? (0xFF000000 | st.getStyle().getColor().getValue()) : COLOR_MUTED;
-			graphics.centeredText(this.font, fitText(raw, maxStatusW), this.width / 2, this.height - 44, color);
+			graphics.centeredText(this.font, fitText(raw, maxStatusW), this.width / 2, this.height - 43, color);
 		} else {
 			if (this.mrInstalling) {
 				int barW = Math.min(maxStatusW - 24, 300);
@@ -382,12 +420,12 @@ public class ModsScreen extends Screen {
 				if (this.mrProgressTotal > 0) {
 					int fillW = (int) Math.min(barW - 2, ((long) this.mrProgressLoaded * (barW - 2)) / this.mrProgressTotal);
 					if (fillW > 0) {
-						graphics.fill(barX + 1, barY + 1, barX + 1 + fillW, barY + 4, COLOR_ENABLED);
+						graphics.fill(barX + 1, barY + 1, barX + 1 + fillW, barY + 4, COLOR_SUCCESS);
 					}
 				} else {
 					int pulse = (int) ((System.currentTimeMillis() / 12L) % Math.max(1, barW - 40));
 					int segW = Math.min(barW - 2, 36);
-					graphics.fill(barX + 1 + pulse, barY + 1, Math.min(barX + barW - 1, barX + 1 + pulse + segW), barY + 4, COLOR_ENABLED);
+					graphics.fill(barX + 1 + pulse, barY + 1, Math.min(barX + barW - 1, barX + 1 + pulse + segW), barY + 4, COLOR_SUCCESS);
 				}
 				graphics.centeredText(this.font, fitText(this.browseStatus, maxStatusW), this.width / 2, this.height - 47, this.browseStatusColor);
 			} else if (!this.browseStatus.isEmpty()) {
@@ -399,14 +437,56 @@ public class ModsScreen extends Screen {
 	// ---- Modrinth Browse Actions ----
 
 	private void onSearchInputChanged(final String value) {
-		String trimmed = value == null ? "" : value;
-		if (trimmed.equals(this.searchQuery)) {
+		String next = value == null ? "" : value;
+		if (next.equals(this.searchQuery)) {
 			return;
 		}
-		this.searchQuery = trimmed;
-		// When user types a query and sort is still Downloads, auto-bias to Relevance only if empty -> non-empty?
-		// Keep explicit user sort control predictable; just debounce 9 ticks (~450ms).
-		this.searchDebounceTicks = 9;
+		boolean wasEmpty = this.searchQuery.trim().isEmpty();
+		boolean nowEmpty = next.trim().isEmpty();
+		this.searchQuery = next;
+		if (this.clearSearchButton != null) {
+			this.clearSearchButton.active = !next.isEmpty();
+		}
+		// Auto-switch sort to Relevance when typing a query, and back to Downloads when cleared
+		if (!this.userPinnedSort) {
+			if (wasEmpty && !nowEmpty && this.sortIdx == 0) {
+				this.sortIdx = 1; // Relevance
+				if (this.sortFilterButton != null) {
+					this.sortFilterButton.setMessage(Component.literal(SORT_LABELS[this.sortIdx]));
+				}
+			} else if (!wasEmpty && nowEmpty && this.sortIdx == 1) {
+				this.sortIdx = 0; // Downloads
+				if (this.sortFilterButton != null) {
+					this.sortFilterButton.setMessage(Component.literal(SORT_LABELS[this.sortIdx]));
+				}
+			}
+		}
+		if (nowEmpty) {
+			this.userPinnedSort = false;
+		}
+		this.searchDebounceTicks = 8;
+	}
+
+	private void clearSearch() {
+		if (this.searchQuery.isEmpty()) {
+			return;
+		}
+		this.searchQuery = "";
+		this.userPinnedSort = false;
+		if (this.sortIdx == 1) {
+			this.sortIdx = 0;
+			if (this.sortFilterButton != null) {
+				this.sortFilterButton.setMessage(Component.literal(SORT_LABELS[this.sortIdx]));
+			}
+		}
+		if (this.searchBox != null) {
+			this.searchBox.setValue("");
+		}
+		if (this.clearSearchButton != null) {
+			this.clearSearchButton.active = false;
+		}
+		this.searchDebounceTicks = -1;
+		this.startModrinthSearch(false);
 	}
 
 	private void cycleType() {
@@ -419,6 +499,7 @@ public class ModsScreen extends Screen {
 
 	private void cycleSort() {
 		this.sortIdx = (this.sortIdx + 1) % SORT_KEYS.length;
+		this.userPinnedSort = true;
 		if (this.sortFilterButton != null) {
 			this.sortFilterButton.setMessage(Component.literal(SORT_LABELS[this.sortIdx]));
 		}
@@ -444,7 +525,7 @@ public class ModsScreen extends Screen {
 
 		if (loadMore) {
 			this.browseLoadingMore = true;
-			this.browseStatus = "Loading more results via Relay...";
+			this.browseStatus = "Loading more results...";
 			this.browseStatusColor = COLOR_MUTED;
 		} else {
 			this.browseLoading = true;
@@ -452,7 +533,7 @@ public class ModsScreen extends Screen {
 			this.browseHits.clear();
 			this.browseTotalHits = 0;
 			this.browseHasMore = false;
-			this.browseStatus = "Searching Modrinth via Relay...";
+			this.browseStatus = "Searching Modrinth...";
 			this.browseStatusColor = COLOR_MUTED;
 			if (this.modrinthList != null) {
 				this.modrinthList.rebuildFromState();
@@ -462,7 +543,6 @@ public class ModsScreen extends Screen {
 
 		String q = this.searchQuery.trim();
 		String sortKey = SORT_KEYS[this.sortIdx];
-		// When user types a query while sort is default Downloads, Relevance still makes sense if chosen; honor chosen sort.
 		ModrinthClient.search(
 			gen,
 			q,
@@ -481,12 +561,17 @@ public class ModsScreen extends Screen {
 				this.browseTotalHits = res.totalHits;
 				this.browseHasMore = res.hasMore();
 
-				String via = res.relayLabel.isEmpty()
-					? "Relay"
-					: (res.relayLabel + ("websocket".equals(res.transport) ? " (WS)" : ("webrtc".equals(res.transport) ? " (RTC)" : "")));
+				String via;
+				if ("direct".equals(res.transport) || "Direct".equals(res.relayLabel)) {
+					via = "Direct HTTPS";
+				} else if (res.relayLabel.isEmpty()) {
+					via = "Modrinth";
+				} else {
+					via = res.relayLabel + ("websocket".equals(res.transport) ? " (WS)" : ("webrtc".equals(res.transport) ? " (RTC)" : ""));
+				}
 				if (this.browseHits.isEmpty()) {
-					this.browseStatus = "No Modrinth results matched your filter (" + via + ")";
-					this.browseStatusColor = COLOR_BUILDING;
+					this.browseStatus = "No results matched (" + MC_LABELS[this.mcIdx] + ") via " + via;
+					this.browseStatusColor = COLOR_AMBER;
 				} else {
 					this.browseStatus = "Showing " + this.browseHits.size() + " of "
 						+ ModrinthClient.formatCount(this.browseTotalHits) + " results via " + via;
@@ -503,7 +588,7 @@ public class ModsScreen extends Screen {
 				this.browseLoadingMore = false;
 				this.browseHadNoRelayError = err.contains("No Relay");
 				this.browseStatus = err;
-				this.browseStatusColor = this.browseHadNoRelayError ? COLOR_BUILDING : COLOR_ERROR;
+				this.browseStatusColor = this.browseHadNoRelayError ? COLOR_AMBER : COLOR_ERROR;
 				if (this.modrinthList != null) {
 					this.modrinthList.rebuildFromState();
 				}
@@ -539,8 +624,8 @@ public class ModsScreen extends Screen {
 		this.mrProgressLoaded = 0;
 		this.mrProgressTotal = 0;
 		this.mrInstallingTitle = hit.title.isEmpty() ? hit.slug : hit.title;
-		this.browseStatus = "Resolving latest version for " + this.mrInstallingTitle + " via Relay...";
-		this.browseStatusColor = COLOR_READY;
+		this.browseStatus = "Resolving dependencies for " + this.mrInstallingTitle + "...";
+		this.browseStatusColor = COLOR_SKY;
 		this.updateModrinthButtons();
 
 		ModrinthClient.quickInstall(
@@ -563,7 +648,7 @@ public class ModsScreen extends Screen {
 				this.mrProgressLoaded = 0;
 				this.mrProgressTotal = 0;
 				this.browseStatus = msg;
-				this.browseStatusColor = ok ? COLOR_ENABLED : COLOR_ERROR;
+				this.browseStatusColor = ok ? COLOR_SUCCESS : COLOR_ERROR;
 				this.updateTabStyles();
 				this.updateModrinthButtons();
 			});
@@ -573,13 +658,11 @@ public class ModsScreen extends Screen {
 		ModrinthClient.ProjectHit hit = this.selectedHit();
 		if (this.mrInstallButton != null) {
 			if (this.mrInstalling) {
-				this.mrInstallButton.setMessage(Component.literal("Installing...").withColor(COLOR_BUILDING));
+				this.mrInstallButton.setMessage(Component.literal("Installing..."));
 				this.mrInstallButton.active = false;
 			} else if (hit != null) {
 				boolean installed = ModrinthClient.isInstalled(hit);
-				this.mrInstallButton.setMessage(installed
-					? Component.literal("Reinstall").withColor(COLOR_READY)
-					: Component.literal("Install").withColor(COLOR_ENABLED));
+				this.mrInstallButton.setMessage(Component.literal(installed ? "Reinstall" : "Install"));
 				this.mrInstallButton.active = true;
 			} else {
 				this.mrInstallButton.setMessage(Component.literal("Install"));
@@ -594,7 +677,7 @@ public class ModsScreen extends Screen {
 		}
 	}
 
-	// ---- Installed Mods Actions (preserved from original ModsScreen) ----
+	// ---- Installed Mods Actions ----
 
 	private WebMods.@Nullable InstalledMod selectedMod() {
 		if (this.modList == null || this.modList.getSelected() == null) {
@@ -727,10 +810,10 @@ public class ModsScreen extends Screen {
 			if (WebMods.buildReadyForReload() || WebMods.profileNeedsReload()) {
 				boolean inWorld = this.minecraft != null && this.minecraft.level != null;
 				String label = inWorld ? "Save & Reload" : "Reload Now";
-				this.actionButton.setMessage(Component.literal(label).withColor(COLOR_ENABLED));
+				this.actionButton.setMessage(Component.literal(label).withColor(COLOR_SUCCESS));
 				this.actionButton.active = true;
 			} else if (WebMods.isBuilding()) {
-				this.actionButton.setMessage(Component.literal("Building...").withColor(COLOR_BUILDING));
+				this.actionButton.setMessage(Component.literal("Building...").withColor(COLOR_AMBER));
 				this.actionButton.active = false;
 			} else if (mod != null && mod.canRunViaTranslator()) {
 				if (WebMods.isBuilderConnected()) {
@@ -763,7 +846,7 @@ public class ModsScreen extends Screen {
 		String liveBuild = WebMods.buildStatus();
 		if (WebMods.isBuilding()) {
 			return Component.literal(liveBuild.isEmpty() ? "Building Fabric mods..." : liveBuild)
-				.withColor(COLOR_BUILDING);
+				.withColor(COLOR_AMBER);
 		}
 		if (WebMods.buildReadyForReload() || WebMods.profileNeedsReload()) {
 			String readyMsg = !liveBuild.isEmpty()
@@ -771,7 +854,7 @@ public class ModsScreen extends Screen {
 				: (WebMods.selectedProfile().isEmpty()
 					? "Switched to Vanilla - click Reload Now to apply"
 					: "Baked WASM profile '" + WebMods.selectedProfile() + "' ready - click Reload Now");
-			return Component.literal(readyMsg).withColor(COLOR_ENABLED);
+			return Component.literal(readyMsg).withColor(COLOR_SUCCESS);
 		}
 		if (this.transientStatus != null && !this.transientStatus.isEmpty()) {
 			return Component.literal(this.transientStatus).withColor(COLOR_MUTED);
@@ -794,16 +877,16 @@ public class ModsScreen extends Screen {
 					sb.append("Disabled - click Enable to run offline");
 				} else if (WebMods.isModInBootedProfile(mod.file, mod.info.id)) {
 					sb.append("Active in running WASM profile '").append(WebMods.bootedProfile()).append('\'');
-					textColor = COLOR_ENABLED;
+					textColor = COLOR_SUCCESS;
 				} else if (mod.jvmTranslated) {
 					sb.append("Translated offline: ").append(mod.jvmSummary);
 					if (mod.jvmHasUnsupportedMixins) {
-						textColor = COLOR_BUILDING;
+						textColor = COLOR_AMBER;
 						if (WebMods.isBuilderConnected()) {
 							sb.append(" (click Full Bake for deep mixins)");
 						}
 					} else {
-						textColor = COLOR_ENABLED;
+						textColor = COLOR_SUCCESS;
 					}
 				} else {
 					sb.append(mod.info.compatibilitySummary);
@@ -868,28 +951,28 @@ public class ModsScreen extends Screen {
 		}
 		String st = WebMods.modBuildState(mod.file);
 		if ("building".equals(st)) {
-			return COLOR_BUILDING;
+			return COLOR_AMBER;
 		}
 		if ("ready".equals(st)) {
-			return COLOR_READY;
+			return COLOR_SKY;
 		}
 		if (!mod.enabled) {
 			return COLOR_DISABLED;
 		}
 		if (WebMods.isModInBootedProfile(mod.file, mod.info.id)) {
-			return COLOR_ENABLED;
+			return COLOR_SUCCESS;
 		}
 		if (mod.jvmTranslated) {
-			return mod.jvmHasUnsupportedMixins ? COLOR_BUILDING : COLOR_ENABLED;
+			return mod.jvmHasUnsupportedMixins ? COLOR_AMBER : COLOR_SUCCESS;
 		}
 		if ("blocked".equals(st) || "conflict".equals(st) || "failed".equals(st) || !mod.runtimeError.isEmpty()) {
 			return COLOR_ERROR;
 		}
-		return COLOR_BUILDING;
+		return COLOR_AMBER;
 	}
 
 	private String fitText(final String text, final int maxWidth) {
-		if (text == null || text.isEmpty()) {
+		if (text == null || text.isEmpty() || maxWidth <= 0) {
 			return "";
 		}
 		if (this.font.width(text) <= maxWidth) {
@@ -897,7 +980,7 @@ public class ModsScreen extends Screen {
 		}
 		int ellipsisW = this.font.width("...");
 		if (maxWidth <= ellipsisW) {
-			return "";
+			return this.font.plainSubstrByWidth(text, maxWidth);
 		}
 		return this.font.plainSubstrByWidth(text, maxWidth - ellipsisW) + "...";
 	}
@@ -910,7 +993,7 @@ public class ModsScreen extends Screen {
 		return Math.max(1, bytes / 1024) + " KB";
 	}
 
-	// ---- Modrinth Results List (32x32 thumbnails, titles, authors, descriptions, badges, Load More) ----
+	// ---- Modrinth Results List ----
 
 	private final class ModrinthList extends ObjectSelectionList<ModrinthList.Entry> {
 		ModrinthList(final Minecraft minecraft, final int width, final int height, final int y) {
@@ -924,17 +1007,17 @@ public class ModsScreen extends Screen {
 			this.clearEntries();
 
 			if (ModsScreen.this.browseLoading && ModsScreen.this.browseHits.isEmpty()) {
-				this.addEntry(new Entry(null, "Connecting to Modrinth through Relay...", COLOR_MUTED, false));
+				this.addEntry(new Entry(null, "Loading Modrinth catalog...", COLOR_MUTED, false));
 				this.setSelected(null);
 				return;
 			}
 			if (ModsScreen.this.browseHits.isEmpty()) {
 				if (ModsScreen.this.browseHadNoRelayError) {
-					this.addEntry(new Entry(null, "No Relay configured - click 'No Relay' in the top-right to add one", COLOR_BUILDING, false));
+					this.addEntry(new Entry(null, "Relay-only mode needs a relay - click 'Add Relay...' above or switch to Direct", COLOR_AMBER, false));
 				} else if (!ModsScreen.this.browseStatus.isEmpty()) {
 					this.addEntry(new Entry(null, ModsScreen.this.browseStatus, ModsScreen.this.browseStatusColor, false));
 				} else {
-					this.addEntry(new Entry(null, "No projects found. Try another search term or filter.", COLOR_MUTED, false));
+					this.addEntry(new Entry(null, "No projects found. Try another search term or MC version filter.", COLOR_MUTED, false));
 				}
 				this.setSelected(null);
 				return;
@@ -950,10 +1033,10 @@ public class ModsScreen extends Screen {
 			}
 			if (ModsScreen.this.browseHasMore) {
 				String moreLabel = ModsScreen.this.browseLoadingMore
-					? "Loading more results via Relay..."
+					? "Loading more results..."
 					: ("Load More Results (" + ModsScreen.this.browseHits.size() + " / "
 						+ ModrinthClient.formatCount(ModsScreen.this.browseTotalHits) + ")");
-				this.addEntry(new Entry(null, moreLabel, COLOR_READY, true));
+				this.addEntry(new Entry(null, moreLabel, COLOR_SKY, true));
 			}
 			this.setSelected(pick != null ? pick : this.children().get(0));
 			if (prevScroll > 0.0) {
@@ -973,7 +1056,7 @@ public class ModsScreen extends Screen {
 
 		@Override
 		public int getRowWidth() {
-			return Math.min(ModsScreen.this.width - 20, 444);
+			return Math.min(Math.max(180, ModsScreen.this.width - 28), 444);
 		}
 
 		final class Entry extends ObjectSelectionList.Entry<Entry> {
@@ -995,28 +1078,29 @@ public class ModsScreen extends Screen {
 				int y = this.getContentY();
 				int w = this.getContentWidth();
 				int h = this.getContentHeight();
+				int clampedRight = Math.min(x + w - 4, ModsScreen.this.width - 14);
+				int clampedW = Math.max(0, clampedRight - x);
 
 				if (this.hit == null) {
 					if (this.isLoadMore) {
-						graphics.fill(x + 2, y + 4, x + w - 2, y + h - 4, hovered ? 0x55336644 : 0x441A2A20);
-						graphics.outline(x + 2, y + 4, w - 4, h - 8, hovered ? COLOR_ENABLED : 0xFF3A5A40);
+						graphics.fill(x + 2, y + 4, Math.max(x + 2, clampedRight), y + h - 4, hovered ? 0x3AFFFFFF : 0x33000000);
+						graphics.outline(x + 2, y + 4, Math.max(0, clampedRight - (x + 2)), h - 8, hovered ? 0xFFAAAAAA : 0xFF4A4A4A);
 					}
 					graphics.centeredText(
 						ModsScreen.this.font,
-						ModsScreen.this.fitText(this.message == null ? "" : this.message, w - 12),
-						x + w / 2,
+						ModsScreen.this.fitText(this.message == null ? "" : this.message, Math.max(0, clampedW - 8)),
+						x + clampedW / 2,
 						this.getContentYMiddle() - 4,
 						this.messageColor);
 					return;
 				}
 
-				// Subtle Minecraft card backing
-				graphics.fill(x, y, x + w, y + h, hovered ? 0x36FFFFFF : 0x26000000);
+				boolean isSelected = ModrinthList.this.getSelected() == this;
+				graphics.fill(x, y, Math.min(x + w, ModsScreen.this.width - 10), y + h, hovered ? 0x26FFFFFF : (isSelected ? 0x32000000 : 0x20000000));
 
-				// Left 32x32 thumbnail slot with crisp 1px border
-				int thumbX = x + 3;
+				int thumbX = x + 4;
 				int thumbY = y + Math.max(2, (h - 32) / 2);
-				int borderColor = (hovered || ModrinthList.this.getSelected() == this) ? 0xFF707070 : 0xFF383838;
+				int borderColor = (hovered || isSelected) ? 0xFF7A7A7A : 0xFF3E3E3E;
 				graphics.fill(thumbX - 1, thumbY - 1, thumbX + 33, thumbY + 33, borderColor);
 				graphics.fill(thumbX, thumbY, thumbX + 32, thumbY + 32, 0xFF181818);
 
@@ -1034,26 +1118,31 @@ public class ModsScreen extends Screen {
 					graphics.centeredText(ModsScreen.this.font, this.hit.monogram(), thumbX + 16, thumbY + 12, COLOR_WHITE);
 				}
 
-				// Content columns to the right of the thumbnail
 				int tx = thumbX + 38;
-				int rightEdge = x + w - 4;
-				int textW = Math.max(40, rightEdge - tx);
+				int rightEdge = clampedRight;
+				int textW = Math.max(0, rightEdge - tx);
+				if (textW <= 0) {
+					return;
+				}
 
-				// Line 1 right side: [Installed] [Type] <downloads> DL
 				int rx = rightEdge;
 				boolean installed = ModrinthClient.isInstalled(this.hit);
 				if (installed) {
-					String inst = "[Installed]";
+					String inst = ModsScreen.this.fitText("[Installed]", Math.max(0, rx - tx));
 					int iw = ModsScreen.this.font.width(inst);
-					rx -= iw;
-					graphics.text(ModsScreen.this.font, inst, rx, y + 3, COLOR_ENABLED);
-					rx -= 4;
+					if (iw > 0 && rx - iw >= tx) {
+						rx -= iw;
+						graphics.text(ModsScreen.this.font, inst, rx, y + 3, COLOR_SUCCESS);
+						rx -= 4;
+					}
 				}
-				String typeBadge = this.hit.typeBadge();
+				String typeBadge = ModsScreen.this.fitText(this.hit.typeBadge(), Math.max(0, rx - tx));
 				int tbw = ModsScreen.this.font.width(typeBadge);
-				rx -= tbw;
-				graphics.text(ModsScreen.this.font, typeBadge, rx, y + 3, this.hit.typeBadgeColor());
-				rx -= 5;
+				if (tbw > 0 && rx - tbw >= tx) {
+					rx -= tbw;
+					graphics.text(ModsScreen.this.font, typeBadge, rx, y + 3, this.hit.typeBadgeColor());
+					rx -= 5;
+				}
 
 				String dlStr = this.hit.formattedDownloads() + " DL";
 				int dlw = ModsScreen.this.font.width(dlStr);
@@ -1063,25 +1152,24 @@ public class ModsScreen extends Screen {
 					rx -= 6;
 				}
 
-				// Line 1 left side: bright title + muted "by <author>"
-				int maxTitleW = Math.max(24, rx - tx);
-				String titleStr = this.hit.title.isEmpty() ? this.hit.slug : this.hit.title;
-				int tw = ModsScreen.this.font.width(titleStr);
-				if (tw <= maxTitleW) {
-					graphics.text(ModsScreen.this.font, titleStr, tx, y + 3, COLOR_WHITE);
-					if (!this.hit.author.isEmpty() && maxTitleW - tw > 26) {
-						String by = " by " + this.hit.author;
-						graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(by, maxTitleW - tw), tx + tw, y + 3, COLOR_MUTED);
+				int maxTitleW = Math.max(0, rx - tx);
+				if (maxTitleW > 0) {
+					String titleStr = this.hit.title.isEmpty() ? this.hit.slug : this.hit.title;
+					int tw = ModsScreen.this.font.width(titleStr);
+					if (tw <= maxTitleW) {
+						graphics.text(ModsScreen.this.font, titleStr, tx, y + 3, COLOR_WHITE);
+						if (!this.hit.author.isEmpty() && maxTitleW - tw > 26) {
+							String by = " by " + this.hit.author;
+							graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(by, maxTitleW - tw), tx + tw, y + 3, COLOR_MUTED);
+						}
+					} else {
+						graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(titleStr, maxTitleW), tx, y + 3, COLOR_WHITE);
 					}
-				} else {
-					graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(titleStr, maxTitleW), tx, y + 3, COLOR_WHITE);
 				}
 
-				// Line 2: concise single-line description
 				String desc = this.hit.description.replace('\r', ' ').replace('\n', ' ').trim();
 				graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(desc, textW), tx, y + 15, COLOR_LIGHT);
 
-				// Line 3: categories + latest MC version + client tag
 				String meta = this.hit.metaSummary();
 				if (!meta.isEmpty()) {
 					graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(meta, textW), tx, y + 27, COLOR_DIM);
@@ -1098,7 +1186,7 @@ public class ModsScreen extends Screen {
 					return false;
 				}
 				ModrinthList.this.setSelected(this);
-				if (doubleClick) {
+				if (doubleClick && !ModsScreen.this.mrInstalling) {
 					ModsScreen.this.openSelectedDetails();
 				}
 				return super.mouseClicked(event, doubleClick);
@@ -1114,7 +1202,7 @@ public class ModsScreen extends Screen {
 		}
 	}
 
-	// ---- Installed Mods List (preserved) ----
+	// ---- Installed Mods List ----
 
 	private final class ModList extends ObjectSelectionList<ModList.Entry> {
 		ModList(final Minecraft minecraft, final int width, final int height, final int y) {
@@ -1152,7 +1240,7 @@ public class ModsScreen extends Screen {
 
 		@Override
 		public int getRowWidth() {
-			return Math.min(ModsScreen.this.width - 20, 444);
+			return Math.min(Math.max(180, ModsScreen.this.width - 28), 444);
 		}
 
 		final class Entry extends ObjectSelectionList.Entry<Entry> {
@@ -1167,26 +1255,33 @@ public class ModsScreen extends Screen {
 				int x = this.getContentX();
 				int y = this.getContentY();
 				int w = this.getContentWidth();
+				int contentLeft = x + 2;
+				int contentRight = Math.min(x + w - 4, ModsScreen.this.width - 14);
+				int availW = Math.max(0, contentRight - contentLeft);
+				if (availW <= 0) {
+					return;
+				}
 
 				if (this.mod == null) {
-					if (ModsScreen.this.font.width(EMPTY_HINT) <= w - 4) {
+					int centerX = contentLeft + availW / 2;
+					if (ModsScreen.this.font.width(EMPTY_HINT) <= availW) {
 						graphics.centeredText(
 							ModsScreen.this.font,
 							Component.literal(EMPTY_HINT).withColor(COLOR_MUTED),
-							x + w / 2,
+							centerX,
 							this.getContentYMiddle() - 4,
 							COLOR_MUTED);
 					} else {
 						graphics.centeredText(
 							ModsScreen.this.font,
-							Component.literal(EMPTY_HINT_LINE_1).withColor(COLOR_MUTED),
-							x + w / 2,
+							Component.literal(ModsScreen.this.fitText(EMPTY_HINT_LINE_1, availW)).withColor(COLOR_MUTED),
+							centerX,
 							y + 2,
 							COLOR_MUTED);
 						graphics.centeredText(
 							ModsScreen.this.font,
-							Component.literal(EMPTY_HINT_LINE_2).withColor(COLOR_MUTED),
-							x + w / 2,
+							Component.literal(ModsScreen.this.fitText(EMPTY_HINT_LINE_2, availW)).withColor(COLOR_MUTED),
+							centerX,
 							y + 14,
 							COLOR_MUTED);
 					}
@@ -1194,30 +1289,25 @@ public class ModsScreen extends Screen {
 				}
 
 				ModJarInspector.ModInfo info = this.mod.info;
-				String badge = resolveBadge(this.mod);
-				int badgeColor = resolveBadgeColor(this.mod);
-				int badgeW = ModsScreen.this.font.width(badge);
-				int badgeX = x + w - badgeW - 2;
-
 				String stateTag;
 				int stateColor;
 				if (this.mod.canRunViaTranslator()) {
 					String st = WebMods.modBuildState(this.mod.file);
 					if ("building".equals(st)) {
 						stateTag = "[..] ";
-						stateColor = COLOR_BUILDING;
+						stateColor = COLOR_AMBER;
 					} else if ("ready".equals(st)) {
 						stateTag = "[OK] ";
-						stateColor = COLOR_READY;
+						stateColor = COLOR_SKY;
 					} else if (!this.mod.enabled) {
 						stateTag = "[OFF] ";
 						stateColor = COLOR_DISABLED;
 					} else if (WebMods.isModInBootedProfile(this.mod.file, info.id)) {
 						stateTag = "[ON] ";
-						stateColor = COLOR_ENABLED;
+						stateColor = COLOR_SUCCESS;
 					} else if (this.mod.jvmTranslated) {
 						stateTag = "[ON] ";
-						stateColor = this.mod.jvmHasUnsupportedMixins ? COLOR_BUILDING : COLOR_ENABLED;
+						stateColor = this.mod.jvmHasUnsupportedMixins ? COLOR_AMBER : COLOR_SUCCESS;
 					} else if ("blocked".equals(st) || "conflict".equals(st) || "failed".equals(st) || !this.mod.runtimeError.isEmpty()) {
 						stateTag = "[ERR] ";
 						stateColor = COLOR_ERROR;
@@ -1233,25 +1323,35 @@ public class ModsScreen extends Screen {
 					stateColor = COLOR_ERROR;
 				} else if (this.mod.enabled) {
 					stateTag = "[ON] ";
-					stateColor = COLOR_ENABLED;
+					stateColor = COLOR_SUCCESS;
 				} else {
 					stateTag = "[OFF] ";
 					stateColor = COLOR_DISABLED;
 				}
+				stateTag = ModsScreen.this.fitText(stateTag, availW);
 				int stateW = ModsScreen.this.font.width(stateTag);
-				graphics.text(ModsScreen.this.font, stateTag, x + 2, y + 2, stateColor);
+				graphics.text(ModsScreen.this.font, stateTag, contentLeft, y + 2, stateColor);
 
-				int maxTitleW = Math.max(24, badgeX - (x + 2 + stateW) - 6);
-				String title = ModsScreen.this.fitText(info.displayTitle(), maxTitleW);
-				graphics.text(ModsScreen.this.font, title, x + 2 + stateW, y + 2, this.mod.enabled ? COLOR_WHITE : COLOR_DISABLED);
+				int maxBadgeW = Math.max(0, Math.min(availW / 2, availW - stateW - 8));
+				String badge = ModsScreen.this.fitText(resolveBadge(this.mod), maxBadgeW);
+				int badgeColor = resolveBadgeColor(this.mod);
+				int badgeW = ModsScreen.this.font.width(badge);
+				int badgeX = contentRight - badgeW;
 
-				graphics.text(ModsScreen.this.font, badge, badgeX, y + 2, badgeColor);
+				int maxTitleW = Math.max(0, badgeX - (contentLeft + stateW) - 4);
+				if (maxTitleW > 0) {
+					String title = ModsScreen.this.fitText(info.displayTitle(), maxTitleW);
+					graphics.text(ModsScreen.this.font, title, contentLeft + stateW, y + 2, this.mod.enabled ? COLOR_WHITE : COLOR_DISABLED);
+				}
+				if (badgeW > 0 && badgeX >= contentLeft + stateW) {
+					graphics.text(ModsScreen.this.font, badge, badgeX, y + 2, badgeColor);
+				}
 
 				String subtitle = buildSubtitle(this.mod);
 				boolean hasErr = (!this.mod.runtimeError.isEmpty() && !this.mod.jvmTranslated)
 					|| (!WebMods.modBuildError(this.mod.file).isEmpty() && !this.mod.jvmTranslated);
 				int subColor = hasErr ? COLOR_ERROR : COLOR_MUTED;
-				graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(subtitle, Math.max(24, w - 4)), x + 2, y + 14, subColor);
+				graphics.text(ModsScreen.this.font, ModsScreen.this.fitText(subtitle, availW), contentLeft, y + 14, subColor);
 			}
 
 			@Override

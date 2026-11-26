@@ -184,6 +184,106 @@
 		return hkdfExpandLabel(secret, label, transcriptHash, 32);
 	}
 
+	var SHA1_W = new Int32Array(80);
+
+	function sha1(data) {
+		var len = data.length;
+		var bitLenHi = Math.floor(len / 0x20000000);
+		var bitLenLo = (len << 3) >>> 0;
+		var padLen = ((len + 9 + 63) & ~63);
+		var buf = new Uint8Array(padLen);
+		buf.set(data, 0);
+		buf[len] = 0x80;
+		var dv = new DataView(buf.buffer);
+		dv.setUint32(padLen - 8, bitLenHi, false);
+		dv.setUint32(padLen - 4, bitLenLo, false);
+
+		var h0 = 0x67452301 | 0, h1 = 0xefcdab89 | 0, h2 = 0x98badcfe | 0, h3 = 0x10325476 | 0, h4 = 0xc3d2e1f0 | 0;
+		var W = SHA1_W;
+		for (var off = 0; off < padLen; off += 64) {
+			for (var i = 0; i < 16; i++) {
+				W[i] = dv.getInt32(off + (i << 2), false);
+			}
+			for (var j = 16; j < 80; j++) {
+				var x = W[j - 3] ^ W[j - 8] ^ W[j - 14] ^ W[j - 16];
+				W[j] = (x << 1) | (x >>> 31);
+			}
+			var a = h0, b = h1, c = h2, d = h3, e = h4;
+			for (var r = 0; r < 80; r++) {
+				var f, k;
+				if (r < 20) {
+					f = (b & c) | ((~b) & d);
+					k = 0x5a827999 | 0;
+				} else if (r < 40) {
+					f = b ^ c ^ d;
+					k = 0x6ed9eba1 | 0;
+				} else if (r < 60) {
+					f = (b & c) | (b & d) | (c & d);
+					k = 0x8f1bbcdc | 0;
+				} else {
+					f = b ^ c ^ d;
+					k = 0xca62c1d6 | 0;
+				}
+				var temp = (((a << 5) | (a >>> 27)) + f + e + k + W[r]) | 0;
+				e = d; d = c; c = (b << 30) | (b >>> 2); b = a; a = temp;
+			}
+			h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0; h4 = (h4 + e) | 0;
+		}
+		var out = new Uint8Array(20);
+		var odv = new DataView(out.buffer);
+		odv.setInt32(0, h0, false); odv.setInt32(4, h1, false);
+		odv.setInt32(8, h2, false); odv.setInt32(12, h3, false);
+		odv.setInt32(16, h4, false);
+		return out;
+	}
+
+	function bytesToHex(u8) {
+		var hex = "";
+		for (var i = 0; i < u8.length; i++) {
+			var b = u8[i];
+			hex += (b < 16 ? "0" : "") + b.toString(16);
+		}
+		return hex;
+	}
+
+	function computeSha1Hex(u8) {
+		var subtle = (G.crypto && G.crypto.subtle && typeof G.crypto.subtle.digest === "function") ? G.crypto.subtle : null;
+		if (subtle) {
+			return subtle.digest("SHA-1", u8).then(function (ab) {
+				return bytesToHex(new Uint8Array(ab));
+			}, function () {
+				return bytesToHex(sha1(u8));
+			});
+		}
+		return Promise.resolve(bytesToHex(sha1(u8)));
+	}
+
+	function verifyArtifactHash(u8, expectedSha1, expectedSha512) {
+		var want1 = String(expectedSha1 || "").trim().toLowerCase();
+		var want512 = String(expectedSha512 || "").trim().toLowerCase();
+		var chain = Promise.resolve();
+		if (want1) {
+			chain = chain.then(function () {
+				return computeSha1Hex(u8).then(function (actual) {
+					if (actual !== want1) {
+						throw new Error("Artifact SHA-1 mismatch (expected " + want1.slice(0, 12) + ", got " + actual.slice(0, 12) + ")");
+					}
+				});
+			});
+		}
+		if (want512 && G.crypto && G.crypto.subtle && typeof G.crypto.subtle.digest === "function") {
+			chain = chain.then(function () {
+				return G.crypto.subtle.digest("SHA-512", u8).then(function (ab) {
+					var actual512 = bytesToHex(new Uint8Array(ab));
+					if (actual512 !== want512) {
+						throw new Error("Artifact SHA-512 mismatch");
+					}
+				});
+			});
+		}
+		return chain;
+	}
+
 	// =========================================================================
 	// 3. Pure-JS X25519 (RFC 7748) using BigInt Montgomery Ladder
 	// =========================================================================
@@ -497,10 +597,34 @@
 	var KEY_LEGACY = "minecraft_web:relays";
 	var KEY_TOKEN = "minecraft_web:relay.token";
 	var KEY_TRANSPORT = "minecraft_web:relay.transport";
+	var KEY_ROUTE = "minecraft_web:modrinth.route";
 
 	function lsGet(k) {
 		try { return (typeof window !== "undefined" && window.localStorage) ? (window.localStorage.getItem(k) || "") : ""; }
 		catch (e) { return ""; }
+	}
+
+	function lsSet(k, v) {
+		try { if (typeof window !== "undefined" && window.localStorage) { window.localStorage.setItem(k, v); } }
+		catch (e) {}
+	}
+
+	function getRouteMode() {
+		var r = lsGet(KEY_ROUTE);
+		if (r === "direct" || r === "relay" || r === "auto") { return r; }
+		return "auto";
+	}
+
+	function setRouteMode(mode) {
+		var m = (mode === "direct" || mode === "relay") ? mode : "auto";
+		lsSet(KEY_ROUTE, m);
+		relayCooldownUntil = 0;
+		return m;
+	}
+
+	function cycleRouteMode() {
+		var cur = getRouteMode();
+		return setRouteMode(cur === "auto" ? "direct" : (cur === "direct" ? "relay" : "auto"));
 	}
 
 	function normalizeRelay(url) {
@@ -790,7 +914,7 @@
 			ws.binaryType = "arraybuffer";
 			var connectTimeout = setTimeout(function () {
 				if (carrier.readyState === 0) { failAll("relay WebSocket connect timeout"); }
-			}, 12000);
+			}, 6000);
 			ws.onopen = function () { clearTimeout(connectTimeout); onOpen("websocket"); };
 			ws.onmessage = function (ev) {
 				if (typeof ev.data !== "string") { onBinaryMessage(ev.data); }
@@ -820,7 +944,17 @@
 			dc.binaryType = "arraybuffer";
 			dc.bufferedAmountLowThreshold = 131072;
 			dc.onbufferedamountlow = pumpRtc;
-			carrier.fallbackTimer = setTimeout(fallbackToWs, 6500);
+			carrier.fallbackTimer = setTimeout(fallbackToWs, 3000);
+			pc.oniceconnectionstatechange = function () {
+				if (carrier.readyState === 0 && (pc.iceConnectionState === "failed" || pc.iceConnectionState === "closed")) {
+					fallbackToWs();
+				}
+			};
+			pc.onconnectionstatechange = function () {
+				if (carrier.readyState === 0 && (pc.connectionState === "failed" || pc.connectionState === "closed")) {
+					fallbackToWs();
+				}
+			};
 			dc.onopen = function () {
 				if (carrier.closed || carrier.link !== dc) { try { dc.close(); } catch (e) {} return; }
 				onOpen("webrtc");
@@ -850,8 +984,8 @@
 			dc.onclose = function () { if (carrier.readyState === 1) { failAll("RTC closed"); } else { fallbackToWs(); } };
 			var gatherIce = function () {
 				if (pc.iceGatheringState === "complete") { return Promise.resolve(); }
-				return new Promise(function (ok, no) {
-					var t = setTimeout(function () { no(new Error("ICE timeout")); }, 4000);
+				return new Promise(function (ok) {
+					var t = setTimeout(function () { ok(); }, 1800);
 					pc.onicegatheringstatechange = function () {
 						if (pc.iceGatheringState === "complete") { clearTimeout(t); ok(); }
 					};
@@ -886,46 +1020,342 @@
 	}
 
 	var activeCarrier = null;
+	var carrierOpenPromise = null;
 	var overrideTestRelayUrl = null;
+	var deadRelays = Object.create(null);
+	var relayCooldownUntil = 0;
 
 	function getCarrier() {
 		if (overrideTestRelayUrl) {
 			if (activeCarrier && !activeCarrier.closed && activeCarrier.relayUrl === overrideTestRelayUrl) {
 				return activeCarrier.waitOpen();
 			}
-			activeCarrier = createWispCarrier({ url: overrideTestRelayUrl, label: "Relay 1" }, overrideTestRelayUrl);
-			return activeCarrier.waitOpen();
+			if (carrierOpenPromise) {
+				return carrierOpenPromise;
+			}
+			var tc = createWispCarrier({ url: overrideTestRelayUrl, label: "Relay 1" }, overrideTestRelayUrl);
+			activeCarrier = tc;
+			carrierOpenPromise = tc.waitOpen().then(function (opened) {
+				carrierOpenPromise = null;
+				return opened;
+			}, function (err) {
+				if (activeCarrier === tc) { activeCarrier = null; }
+				carrierOpenPromise = null;
+				throw err;
+			});
+			return carrierOpenPromise;
 		}
 		var list = orderedRelays();
 		if (!list.length) {
 			return Promise.reject(new Error("NO_RELAY"));
 		}
-		var preferred = list[0];
-		if (activeCarrier && !activeCarrier.closed && activeCarrier.relayUrl === preferred.url) {
-			return activeCarrier.waitOpen();
-		}
-		if (activeCarrier && !activeCarrier.closed) {
-			// Only switch if user changed explicit relay
-			var sel = normalizeRelay(lsGet(KEY_SELECTED));
+		var now = Date.now();
+		// Prefer relays not in brief failure cooldown
+		var healthy = list.filter(function (r) { return !(deadRelays[r.url] && deadRelays[r.url] > now); });
+		var candidates = healthy.length ? healthy : list;
+		var sel = normalizeRelay(lsGet(KEY_SELECTED));
+		if (activeCarrier && !activeCarrier.closed && activeCarrier.readyState === 1) {
 			if (!sel || activeCarrier.relayUrl === sel) {
-				return activeCarrier.waitOpen();
+				return Promise.resolve(activeCarrier);
 			}
 			activeCarrier.close();
 			activeCarrier = null;
 		}
-		// Try relays in ranked order until one opens
+		if (carrierOpenPromise) {
+			return carrierOpenPromise;
+		}
+		if (activeCarrier && !activeCarrier.closed && sel && activeCarrier.relayUrl !== sel) {
+			activeCarrier.close();
+			activeCarrier = null;
+		}
 		function tryIdx(idx, lastErr) {
-			if (idx >= list.length) {
+			if (idx >= candidates.length) {
 				return Promise.reject(lastErr || new Error("All configured relays failed"));
 			}
-			var c = createWispCarrier(list[idx]);
+			var entry = candidates[idx];
+			var c = createWispCarrier(entry);
 			activeCarrier = c;
 			return c.waitOpen().catch(function (err) {
+				deadRelays[entry.url] = Date.now() + 30000;
 				if (activeCarrier === c) { activeCarrier = null; }
 				return tryIdx(idx + 1, err);
 			});
 		}
-		return tryIdx(0, null);
+		var openP = tryIdx(0, null).then(function (opened) {
+			if (carrierOpenPromise === openP) { carrierOpenPromise = null; }
+			return opened;
+		}, function (err) {
+			if (carrierOpenPromise === openP) { carrierOpenPromise = null; }
+			throw err;
+		});
+		carrierOpenPromise = openP;
+		return openP;
+	}
+
+	// =========================================================================
+	// 5b. Minimal ASN.1 DER / X.509 Parser & TLS 1.3 CertificateVerify
+	// =========================================================================
+
+	function asn1Read(buf, off, end) {
+		if (off >= end) { throw new Error("ASN.1 truncated"); }
+		var start = off;
+		var tag = buf[off++];
+		if (off >= end) { throw new Error("ASN.1 missing length"); }
+		var lb = buf[off++];
+		var len = 0;
+		if (lb < 0x80) {
+			len = lb;
+		} else {
+			var nb = lb & 0x7f;
+			if (nb === 0 || nb > 4 || off + nb > end) {
+				throw new Error("ASN.1 invalid length");
+			}
+			for (var i = 0; i < nb; i++) {
+				len = (len * 256) + buf[off++];
+			}
+		}
+		if (off + len > end) { throw new Error("ASN.1 element exceeds bounds"); }
+		return {
+			tag: tag,
+			start: start,
+			contentStart: off,
+			end: off + len,
+			bytes: buf.subarray(start, off + len),
+			content: buf.subarray(off, off + len)
+		};
+	}
+
+	function asn1Children(buf, start, end) {
+		var out = [];
+		var pos = start;
+		while (pos < end) {
+			var el = asn1Read(buf, pos, end);
+			out.push(el);
+			pos = el.end;
+		}
+		return out;
+	}
+
+	function asn1Oid(bytes) {
+		if (!bytes || !bytes.length) { return ""; }
+		var b0 = bytes[0];
+		var first = Math.floor(b0 / 40);
+		if (first > 2) { first = 2; }
+		var parts = [first, b0 - first * 40];
+		var val = 0;
+		var inArc = false;
+		for (var i = 1; i < bytes.length; i++) {
+			var b = bytes[i];
+			val = (val * 128) + (b & 0x7f);
+			inArc = true;
+			if ((b & 0x80) === 0) {
+				parts.push(val);
+				val = 0;
+				inArc = false;
+			}
+		}
+		if (inArc) { throw new Error("ASN.1 truncated OID"); }
+		return parts.join(".");
+	}
+
+	function asn1Time(el) {
+		var s = utf8ToStr(el.content);
+		var m, yr;
+		if (el.tag === 0x17) { // UTCTime
+			m = /^(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?Z$/.exec(s);
+			if (!m) { throw new Error("Invalid X.509 UTCTime: " + s); }
+			yr = parseInt(m[1], 10);
+			yr = yr >= 50 ? (1900 + yr) : (2000 + yr);
+		} else if (el.tag === 0x18) { // GeneralizedTime
+			m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?(?:\.\d+)?Z$/.exec(s);
+			if (!m) { throw new Error("Invalid X.509 GeneralizedTime: " + s); }
+			yr = parseInt(m[1], 10);
+		} else {
+			throw new Error("Unexpected X.509 time tag 0x" + el.tag.toString(16));
+		}
+		var ms = Date.UTC(
+			yr,
+			parseInt(m[2], 10) - 1,
+			parseInt(m[3], 10),
+			parseInt(m[4], 10),
+			parseInt(m[5], 10),
+			m[6] ? parseInt(m[6], 10) : 0
+		);
+		if (isNaN(ms)) { throw new Error("Invalid X.509 timestamp: " + s); }
+		return ms;
+	}
+
+	function parseX509Cert(certDer) {
+		var u8 = certDer instanceof Uint8Array ? certDer : new Uint8Array(certDer);
+		var root = asn1Read(u8, 0, u8.length);
+		if (root.tag !== 0x30) { throw new Error("X.509 root not SEQUENCE"); }
+		var top = asn1Children(u8, root.contentStart, root.end);
+		if (top.length < 3 || top[0].tag !== 0x30) { throw new Error("X.509 malformed structure"); }
+		var tbs = top[0];
+		var fields = asn1Children(u8, tbs.contentStart, tbs.end);
+		var idx = (fields.length > 0 && fields[0].tag === 0xa0) ? 1 : 0;
+		if (fields.length < idx + 6) { throw new Error("X.509 tbsCertificate too short"); }
+
+		var validityEl = fields[idx + 3];
+		var subjectEl = fields[idx + 4];
+		var spkiEl = fields[idx + 5];
+		if (validityEl.tag !== 0x30 || spkiEl.tag !== 0x30) {
+			throw new Error("X.509 missing validity or SubjectPublicKeyInfo");
+		}
+		var valPair = asn1Children(u8, validityEl.contentStart, validityEl.end);
+		if (valPair.length < 2) { throw new Error("X.509 malformed validity"); }
+		var notBefore = asn1Time(valPair[0]);
+		var notAfter = asn1Time(valPair[1]);
+
+		// Extract subject CN (2.5.4.3) as fallback if no SAN extension exists
+		var commonName = "";
+		if (subjectEl.tag === 0x30) {
+			var rdns = asn1Children(u8, subjectEl.contentStart, subjectEl.end);
+			for (var ri = 0; ri < rdns.length; ri++) {
+				if (rdns[ri].tag !== 0x31) { continue; }
+				var atvs = asn1Children(u8, rdns[ri].contentStart, rdns[ri].end);
+				for (var ai = 0; ai < atvs.length; ai++) {
+					if (atvs[ai].tag !== 0x30) { continue; }
+					var kv = asn1Children(u8, atvs[ai].contentStart, atvs[ai].end);
+					if (kv.length >= 2 && kv[0].tag === 0x06 && asn1Oid(kv[0].content) === "2.5.4.3") {
+						commonName = utf8ToStr(kv[1].content);
+					}
+				}
+			}
+		}
+
+		// Extract SAN dNSName entries from extension 2.5.29.17 inside [3] EXPLICIT extensions (0xa3)
+		var sanDnsNames = [];
+		for (var fi = idx + 6; fi < fields.length; fi++) {
+			if (fields[fi].tag !== 0xa3) { continue; }
+			var extWrapper = asn1Children(u8, fields[fi].contentStart, fields[fi].end);
+			if (!extWrapper.length || extWrapper[0].tag !== 0x30) { continue; }
+			var exts = asn1Children(u8, extWrapper[0].contentStart, extWrapper[0].end);
+			for (var ei = 0; ei < exts.length; ei++) {
+				if (exts[ei].tag !== 0x30) { continue; }
+				var extParts = asn1Children(u8, exts[ei].contentStart, exts[ei].end);
+				if (extParts.length < 2 || extParts[0].tag !== 0x06) { continue; }
+				if (asn1Oid(extParts[0].content) !== "2.5.29.17") { continue; }
+				var oct = extParts[extParts.length - 1];
+				if (oct.tag !== 0x04) { continue; }
+				var sanSeq = asn1Read(oct.content, 0, oct.content.length);
+				if (sanSeq.tag !== 0x30) { continue; }
+				var names = asn1Children(oct.content, sanSeq.contentStart, sanSeq.end);
+				for (var ni = 0; ni < names.length; ni++) {
+					if (names[ni].tag === 0x82) {
+						sanDnsNames.push(utf8ToStr(names[ni].content).toLowerCase());
+					}
+				}
+			}
+		}
+
+		return {
+			notBefore: notBefore,
+			notAfter: notAfter,
+			commonName: commonName.toLowerCase(),
+			sanDnsNames: sanDnsNames,
+			spkiDer: new Uint8Array(spkiEl.bytes)
+		};
+	}
+
+	function matchTlsHostname(host, cert) {
+		var h = String(host || "").toLowerCase().replace(/\.$/, "");
+		if (!h || !cert) { return false; }
+		var patterns = (cert.sanDnsNames && cert.sanDnsNames.length > 0)
+			? cert.sanDnsNames
+			: (cert.commonName ? [cert.commonName] : []);
+		for (var i = 0; i < patterns.length; i++) {
+			var p = String(patterns[i] || "").toLowerCase().replace(/\.$/, "");
+			if (!p) { continue; }
+			if (p === h) { return true; }
+			if (p.indexOf("*.") === 0) {
+				var suffix = p.slice(1); // ".modrinth.com"
+				// Require at least two dots in wildcard pattern (e.g. "*.modrinth.com")
+				if (suffix.indexOf(".", 1) < 0) { continue; }
+				if (h.length > suffix.length && h.slice(h.length - suffix.length) === suffix) {
+					var label = h.slice(0, h.length - suffix.length);
+					if (label.length > 0 && label.indexOf(".") < 0) { return true; }
+				}
+			}
+		}
+		return false;
+	}
+
+	function ecdsaDerToRaw(derSig, coordLen) {
+		var u8 = derSig instanceof Uint8Array ? derSig : new Uint8Array(derSig);
+		var seq = asn1Read(u8, 0, u8.length);
+		if (seq.tag !== 0x30) { throw new Error("ECDSA signature not ASN.1 SEQUENCE"); }
+		var parts = asn1Children(u8, seq.contentStart, seq.end);
+		if (parts.length !== 2 || parts[0].tag !== 0x02 || parts[1].tag !== 0x02) {
+			throw new Error("ECDSA signature missing r/s integers");
+		}
+		var out = new Uint8Array(coordLen * 2);
+		for (var idx = 0; idx < 2; idx++) {
+			var v = parts[idx].content;
+			var off = 0;
+			while (off < v.length && v[off] === 0 && (v.length - off) > coordLen) { off++; }
+			var slice = v.subarray(off);
+			if (slice.length > coordLen) { throw new Error("ECDSA integer exceeds curve size"); }
+			out.set(slice, idx * coordLen + (coordLen - slice.length));
+		}
+		return out;
+	}
+
+	var TLS13_CV_PREFIX = (function () {
+		var out = new Uint8Array(64 + 34);
+		for (var i = 0; i < 64; i++) { out[i] = 0x20; }
+		var label = strToUtf8("TLS 1.3, server CertificateVerify");
+		out.set(label, 64);
+		out[64 + label.length] = 0x00;
+		return out;
+	})();
+
+	function verifyCertSignature(spkiDer, sigScheme, transcriptHash, sigBytes) {
+		var signedMsg = concatBytes([TLS13_CV_PREFIX, transcriptHash]);
+		var importAlg, verifyAlg, rawSig = sigBytes;
+		if (sigScheme === 0x0804) {
+			importAlg = { name: "RSA-PSS", hash: "SHA-256" };
+			verifyAlg = { name: "RSA-PSS", saltLength: 32 };
+		} else if (sigScheme === 0x0805) {
+			importAlg = { name: "RSA-PSS", hash: "SHA-384" };
+			verifyAlg = { name: "RSA-PSS", saltLength: 48 };
+		} else if (sigScheme === 0x0806) {
+			importAlg = { name: "RSA-PSS", hash: "SHA-512" };
+			verifyAlg = { name: "RSA-PSS", saltLength: 64 };
+		} else if (sigScheme === 0x0403) {
+			importAlg = { name: "ECDSA", namedCurve: "P-256" };
+			verifyAlg = { name: "ECDSA", hash: "SHA-256" };
+			rawSig = ecdsaDerToRaw(sigBytes, 32);
+		} else if (sigScheme === 0x0503) {
+			importAlg = { name: "ECDSA", namedCurve: "P-384" };
+			verifyAlg = { name: "ECDSA", hash: "SHA-384" };
+			rawSig = ecdsaDerToRaw(sigBytes, 48);
+		} else if (sigScheme === 0x0807) {
+			importAlg = { name: "Ed25519" };
+			verifyAlg = { name: "Ed25519" };
+		} else {
+			return Promise.reject(new Error("Unsupported TLS 1.3 CertificateVerify signature scheme 0x" + sigScheme.toString(16)));
+		}
+
+		var subtle = (G.crypto && G.crypto.subtle && typeof G.crypto.subtle.importKey === "function"
+			&& typeof G.crypto.subtle.verify === "function") ? G.crypto.subtle : null;
+		if (!subtle) {
+			// Insecure file:// context without crypto.subtle: SAN + validity already enforced above
+			if (!rawSig || rawSig.length < 32) {
+				return Promise.reject(new Error("TLS 1.3 CertificateVerify signature too short"));
+			}
+			return Promise.resolve({ verified: false, skippedSubtle: true });
+		}
+		var spkiCopy = new Uint8Array(spkiDer);
+		var sigCopy = new Uint8Array(rawSig);
+		return subtle.importKey("spki", spkiCopy, importAlg, false, ["verify"]).then(function (pubKey) {
+			return subtle.verify(verifyAlg, pubKey, sigCopy, signedMsg);
+		}).then(function (ok) {
+			if (!ok) {
+				throw new Error("TLS 1.3 CertificateVerify signature verification failed");
+			}
+			return { verified: true, skippedSubtle: false };
+		});
 	}
 
 	// =========================================================================
@@ -956,15 +1386,14 @@
 		var sniExt = buildTlsExtension(0x0000, concatBytes([u16be(sniList.length), sniList]));
 		// supported_groups (0x000a): x25519 (0x001d)
 		var groupsExt = buildTlsExtension(0x000a, new Uint8Array([0x00, 0x02, 0x00, 0x1d]));
-		// signature_algorithms (0x000d)
+		// signature_algorithms (0x000d): WebCrypto-verified TLS 1.3 schemes
 		var sigAlgsExt = buildTlsExtension(0x000d, new Uint8Array([
-			0x00, 0x0c,
+			0x00, 0x0a,
 			0x04, 0x03, // ecdsa_secp256r1_sha256
 			0x05, 0x03, // ecdsa_secp384r1_sha384
 			0x08, 0x04, // rsa_pss_rsae_sha256
 			0x08, 0x05, // rsa_pss_rsae_sha384
-			0x08, 0x07, // ed25519
-			0x04, 0x01  // rsa_pkcs1_sha256
+			0x08, 0x06  // rsa_pss_rsae_sha512
 		]));
 		// supported_versions (0x002b): TLS 1.3 (0x0304)
 		var versionsExt = buildTlsExtension(0x002b, new Uint8Array([0x02, 0x03, 0x04]));
@@ -1064,6 +1493,10 @@
 				var writeCipher = null, writeIv = null, writeSeq = 0;
 				var appWriteCipher = null, appWriteIv = null;
 				var appReadCipher = null, appReadIv = null;
+				var serverLeafCert = null;
+				var certVerified = false;
+				var certRequested = false;
+				var certRequestCtx = new Uint8Array(0);
 
 				var processing = Promise.resolve();
 				var appDataListeners = [];
@@ -1082,7 +1515,7 @@
 					wispStream.close();
 					if (!handshakeSettled) {
 						handshakeSettled = true;
-						rejectConn(err);
+						rejectConn(err || new Error("TLS connection closed before handshake completed (" + host + ")"));
 					}
 					var cl = closeListeners; closeListeners = [];
 					for (var i = 0; i < cl.length; i++) {
@@ -1145,7 +1578,66 @@
 						});
 					}
 					if (state === "wait_hs") {
+						if (hsType === 0x0b) { // Certificate (11)
+							if (body.length < 4) { throw new Error("TLS Certificate message too short"); }
+							var cpos = 0;
+							var reqCtxLen = body[cpos++];
+							cpos += reqCtxLen;
+							if (cpos + 3 > body.length) { throw new Error("TLS Certificate list truncated"); }
+							var listLen = (body[cpos] << 16) | (body[cpos + 1] << 8) | body[cpos + 2];
+							cpos += 3;
+							if (listLen < 5 || cpos + listLen > body.length) {
+								throw new Error("TLS Certificate list empty or truncated");
+							}
+							var certLen = (body[cpos] << 16) | (body[cpos + 1] << 8) | body[cpos + 2];
+							cpos += 3;
+							if (certLen <= 0 || cpos + certLen > body.length) {
+								throw new Error("TLS leaf certificate truncated");
+							}
+							var leafDer = body.subarray(cpos, cpos + certLen);
+							var leaf = parseX509Cert(leafDer);
+							var nowMs = Date.now();
+							if (nowMs < leaf.notBefore || nowMs > leaf.notAfter) {
+								throw new Error("TLS certificate expired or not yet valid (" + host + ")");
+							}
+							if (!matchTlsHostname(host, leaf)) {
+								throw new Error("TLS certificate hostname mismatch for " + host);
+							}
+							serverLeafCert = leaf;
+							transcript.push(hsMsg);
+							return Promise.resolve();
+						}
+						if (hsType === 0x0d) { // CertificateRequest (13)
+							certRequested = true;
+							if (body.length >= 1 && 1 + body[0] <= body.length) {
+								certRequestCtx = new Uint8Array(body.subarray(1, 1 + body[0]));
+							} else {
+								certRequestCtx = new Uint8Array(0);
+							}
+							transcript.push(hsMsg);
+							return Promise.resolve();
+						}
+						if (hsType === 0x0f) { // CertificateVerify (15)
+							if (!serverLeafCert) {
+								throw new Error("TLS CertificateVerify received before Certificate");
+							}
+							if (body.length < 4) { throw new Error("TLS CertificateVerify too short"); }
+							var sigScheme = (body[0] << 8) | body[1];
+							var sigLen = (body[2] << 8) | body[3];
+							if (4 + sigLen > body.length) {
+								throw new Error("TLS CertificateVerify signature truncated");
+							}
+							var sigBytes = body.subarray(4, 4 + sigLen);
+							var cvTranscriptHash = sha256(concatBytes(transcript));
+							transcript.push(hsMsg);
+							return verifyCertSignature(serverLeafCert.spkiDer, sigScheme, cvTranscriptHash, sigBytes).then(function () {
+								certVerified = true;
+							});
+						}
 						if (hsType === 0x14) { // Server Finished
+							if (!serverLeafCert || !certVerified) {
+								throw new Error("TLS 1.3 server skipped Certificate or CertificateVerify");
+							}
 							var beforeFinHash = sha256(concatBytes(transcript));
 							var finishedKey = hkdfExpandLabel(serverHsSecret, "finished", null, 32);
 							var expectedVerify = hmacSha256(finishedKey, beforeFinHash);
@@ -1164,16 +1656,41 @@
 							var sAppKey = hkdfExpandLabel(sAppSecret, "key", null, 16);
 							var sAppIv = hkdfExpandLabel(sAppSecret, "iv", null, 12);
 
-							// Build client Finished message using clientHsSecret
-							var cFinKey = hkdfExpandLabel(clientHsSecret, "finished", null, 32);
-							var cFinVerify = hmacSha256(cFinKey, fullHash);
-							var cFinMsg = new Uint8Array(4 + 32);
-							cFinMsg[0] = 0x14; cFinMsg[3] = 32;
-							cFinMsg.set(cFinVerify, 4);
-
-							// Send dummy ChangeCipherSpec for middlebox compatibility, then encrypted Client Finished
+							// Send dummy ChangeCipherSpec for middlebox compatibility
 							wispStream.send(wrapTlsRecord(0x14, 0x03, new Uint8Array([0x01])));
-							return encryptAndSend(0x16, cFinMsg).then(function () {
+
+							var sendClientFlight;
+							var clientFinTranscriptHash = fullHash;
+							if (certRequested) {
+								// RFC 8446 §4.4.2: send empty client Certificate message before Client Finished
+								var certBodyLen = 1 + certRequestCtx.length + 3;
+								var emptyClientCert = new Uint8Array(4 + certBodyLen);
+								emptyClientCert[0] = 0x0b;
+								emptyClientCert[1] = (certBodyLen >>> 16) & 0xff;
+								emptyClientCert[2] = (certBodyLen >>> 8) & 0xff;
+								emptyClientCert[3] = certBodyLen & 0xff;
+								emptyClientCert[4] = certRequestCtx.length & 0xff;
+								if (certRequestCtx.length > 0) { emptyClientCert.set(certRequestCtx, 5); }
+								transcript.push(emptyClientCert);
+								clientFinTranscriptHash = sha256(concatBytes(transcript));
+								var cFinKeyReq = hkdfExpandLabel(clientHsSecret, "finished", null, 32);
+								var cFinVerifyReq = hmacSha256(cFinKeyReq, clientFinTranscriptHash);
+								var cFinMsgReq = new Uint8Array(4 + 32);
+								cFinMsgReq[0] = 0x14; cFinMsgReq[3] = 32;
+								cFinMsgReq.set(cFinVerifyReq, 4);
+								sendClientFlight = encryptAndSend(0x16, emptyClientCert).then(function () {
+									return encryptAndSend(0x16, cFinMsgReq);
+								});
+							} else {
+								var cFinKey = hkdfExpandLabel(clientHsSecret, "finished", null, 32);
+								var cFinVerify = hmacSha256(cFinKey, clientFinTranscriptHash);
+								var cFinMsg = new Uint8Array(4 + 32);
+								cFinMsg[0] = 0x14; cFinMsg[3] = 32;
+								cFinMsg.set(cFinVerify, 4);
+								sendClientFlight = encryptAndSend(0x16, cFinMsg);
+							}
+
+							return sendClientFlight.then(function () {
 								return Promise.all([
 									makeAes128Gcm(sAppKey, forcePureAes),
 									makeAes128Gcm(cAppKey, forcePureAes)
@@ -1192,7 +1709,7 @@
 								}
 							});
 						} else {
-							// EncryptedExtensions (8), Certificate (11), CertificateVerify (15), CertificateRequest (13)
+							// EncryptedExtensions (8) or other handshake messages
 							transcript.push(hsMsg);
 							return Promise.resolve();
 						}
@@ -1305,6 +1822,7 @@
 					port: port,
 					carrier: carrier,
 					isOpen: function () { return state === "open"; },
+					hasUnreadData: function () { return appDataQueue.length > 0; },
 					write: function (bytes) {
 						if (state !== "open") { return Promise.reject(new Error("TLS connection not open")); }
 						sendChain = sendChain.then(function () {
@@ -1400,7 +1918,7 @@
 		var pool = getPool(host);
 		conn.setConsumer(null, null);
 		pool.active = Math.max(0, pool.active - 1);
-		if (reusable && conn.isOpen() && !conn.carrier.closed) {
+		if (reusable && conn.isOpen() && !conn.carrier.closed && (!conn.hasUnreadData || !conn.hasUnreadData())) {
 			if (pool.queue.length) {
 				var next = pool.queue.shift();
 				pool.active++;
@@ -1436,20 +1954,30 @@
 		}
 	}
 
-	function gunzip(u8) {
+	function gunzip(u8, maxBytes) {
 		if (typeof DecompressionStream !== "function") {
 			return Promise.reject(new Error("DecompressionStream unavailable"));
 		}
+		var limit = maxBytes || MAX_API_BYTES;
 		var ds = new DecompressionStream("gzip");
 		var w = ds.writable.getWriter();
 		var r = ds.readable.getReader();
-		w.write(u8);
-		w.close();
+		w.write(u8).catch(function () {});
+		w.close().catch(function () {});
 		var chunks = [];
+		var total = 0;
 		function pump() {
 			return r.read().then(function (res) {
 				if (res.done) { return concatBytes(chunks); }
-				chunks.push(res.value);
+				if (res.value && res.value.length) {
+					total += res.value.length;
+					if (total > limit) {
+						try { r.cancel().catch(function () {}); } catch (e) {}
+						try { w.abort().catch(function () {}); } catch (e2) {}
+						throw new Error("Decompressed response exceeded max size (" + limit + " bytes)");
+					}
+					chunks.push(res.value);
+				}
 				return pump();
 			});
 		}
@@ -1506,6 +2034,7 @@
 				var bodyParts = [];
 				var bodyBytes = 0;
 				var chunkNeed = -1; // -1 = reading size line, >=0 = reading chunk payload + CRLF
+				var chunkTrailer = false;
 
 				var timer = setTimeout(function () {
 					finish(new Error("Relay HTTP request timed out"), null, false);
@@ -1522,7 +2051,7 @@
 					if (settled) { return; }
 					settled = true;
 					clearTimeout(timer);
-					releaseTls(host, conn, reusable && !err && !connClose);
+					releaseTls(host, conn, reusable && !err && !connClose && buf.length === 0);
 					if (err) { reject(err); return; }
 					var ce = headers["content-encoding"] || "";
 					var resMeta = {
@@ -1532,7 +2061,7 @@
 						transport: conn.carrier.kind
 					};
 					if (ce.toLowerCase() === "gzip" && body.length > 0) {
-						gunzip(body).then(function (plain) {
+						gunzip(body, maxBytes).then(function (plain) {
 							resMeta.body = plain;
 							resolve(resMeta);
 						}, reject);
@@ -1586,12 +2115,30 @@
 						connClose = (headers["connection"] || "").toLowerCase().indexOf("close") >= 0;
 						headersParsed = true;
 						if (status === 204 || status === 304) {
-							finish(null, new Uint8Array(0), !connClose);
+							finish(null, new Uint8Array(0), !connClose && buf.length === 0);
 							return;
 						}
 					}
 					if (chunked) {
 						while (!settled) {
+							if (chunkTrailer) {
+								if (buf.length >= 2 && buf[0] === 13 && buf[1] === 10) {
+									buf = buf.subarray(2);
+									finish(null, concatBytes(bodyParts), !connClose && buf.length === 0);
+									return;
+								}
+								var trEnd = findCrlfCrlf(buf);
+								if (trEnd >= 0) {
+									buf = buf.subarray(trEnd + 4);
+									finish(null, concatBytes(bodyParts), !connClose && buf.length === 0);
+									return;
+								}
+								if (buf.length > 32768) {
+									finish(new Error("HTTP chunk trailers too large"), null, false);
+									return;
+								}
+								return;
+							}
 							if (chunkNeed < 0) {
 								var nl = findCrlf(buf, 0);
 								if (nl < 0) { return; }
@@ -1600,13 +2147,17 @@
 								if (!(sz >= 0)) { finish(new Error("Invalid HTTP chunk size"), null, false); return; }
 								buf = buf.subarray(nl + 2);
 								if (sz === 0) {
-									// Wait for final CRLF after trailers (if present), or complete immediately
-									finish(null, concatBytes(bodyParts), !connClose);
-									return;
+									// Drain mandatory trailing CRLF (or trailers ending in CRLFCRLF) before releasing socket
+									chunkTrailer = true;
+									continue;
 								}
 								chunkNeed = sz;
 							}
 							if (buf.length < chunkNeed + 2) { return; }
+							if (buf[chunkNeed] !== 13 || buf[chunkNeed + 1] !== 10) {
+								finish(new Error("Malformed HTTP chunk terminator"), null, false);
+								return;
+							}
 							appendBody(buf.subarray(0, chunkNeed));
 							buf = buf.subarray(chunkNeed + 2);
 							chunkNeed = -1;
@@ -1619,7 +2170,7 @@
 							buf = buf.subarray(take);
 						}
 						if (bodyBytes >= contentLength) {
-							finish(null, concatBytes(bodyParts), !connClose);
+							finish(null, concatBytes(bodyParts), !connClose && buf.length === 0);
 						}
 					} else {
 						if (buf.length > 0) {
@@ -1661,7 +2212,90 @@
 		});
 	}
 
-	function relayHttpGet(urlStr, opts, redirectsLeft) {
+	function directHttpGet(urlStr, opts) {
+		if (!isAllowedUrl(urlStr)) {
+			return Promise.reject(new Error("Blocked non-Modrinth host: " + urlStr));
+		}
+		if (typeof fetch !== "function") {
+			return Promise.reject(new Error("Direct fetch unavailable"));
+		}
+		var timeoutMs = (opts && opts.timeoutMs) || REQUEST_TIMEOUT_MS;
+		var maxBytes = (opts && opts.maxBytes) || MAX_API_BYTES;
+		var onProgress = opts && opts.onProgress;
+		var ctrl = typeof AbortController === "function" ? new AbortController() : null;
+		var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, timeoutMs) : 0;
+
+		function attempt(retriesLeft) {
+			var fetchOpts = {
+				method: "GET",
+				mode: "cors",
+				credentials: "omit",
+				headers: (opts && opts.accept) ? { "Accept": opts.accept } : undefined
+			};
+			if (ctrl) { fetchOpts.signal = ctrl.signal; }
+			return fetch(urlStr, fetchOpts).then(function (resp) {
+				if (resp.status >= 500 && retriesLeft > 0) {
+					return attempt(retriesLeft - 1);
+				}
+				var hdrs = Object.create(null);
+				try {
+					resp.headers.forEach(function (v, k) { hdrs[String(k).toLowerCase()] = v; });
+				} catch (e) {}
+				var total = parseInt(hdrs["content-length"] || "0", 10) || 0;
+				if (resp.body && typeof resp.body.getReader === "function") {
+					var reader = resp.body.getReader();
+					var chunks = [];
+					var loaded = 0;
+					function pump() {
+						return reader.read().then(function (step) {
+							if (step.done) {
+								if (timer) { clearTimeout(timer); timer = 0; }
+								return {
+									status: resp.status,
+									headers: hdrs,
+									body: concatBytes(chunks),
+									relayLabel: "Direct",
+									transport: "direct"
+								};
+							}
+							var val = step.value;
+							loaded += val.length;
+							if (loaded > maxBytes) {
+								try { reader.cancel(); } catch (e) {}
+								throw new Error("Modrinth direct response too large");
+							}
+							chunks.push(val);
+							if (onProgress) { try { onProgress(loaded, total); } catch (e) {} }
+							return pump();
+						});
+					}
+					return pump();
+				}
+				return resp.arrayBuffer().then(function (ab) {
+					if (timer) { clearTimeout(timer); timer = 0; }
+					var u8 = new Uint8Array(ab);
+					if (u8.length > maxBytes) { throw new Error("Modrinth direct response too large"); }
+					if (onProgress) { try { onProgress(u8.length, total || u8.length); } catch (e) {} }
+					return {
+						status: resp.status,
+						headers: hdrs,
+						body: u8,
+						relayLabel: "Direct",
+						transport: "direct"
+					};
+				});
+			}, function (err) {
+				if (retriesLeft > 0 && !(ctrl && ctrl.signal && ctrl.signal.aborted)) {
+					return attempt(retriesLeft - 1);
+				}
+				if (timer) { clearTimeout(timer); timer = 0; }
+				throw err;
+			});
+		}
+		return attempt(1);
+	}
+
+	function relayOnlyHttpGet(urlStr, opts, redirectsLeft) {
 		var left = redirectsLeft === undefined ? 4 : redirectsLeft;
 		if (!isAllowedUrl(urlStr)) {
 			return Promise.reject(new Error("Blocked non-Modrinth host: " + urlStr));
@@ -1677,9 +2311,39 @@
 			if ((res.status === 301 || res.status === 302 || res.status === 303 || res.status === 307 || res.status === 308)
 					&& res.headers.location && left > 0) {
 				var nextUrl = new URL(res.headers.location, urlStr).toString();
-				return relayHttpGet(nextUrl, opts, left - 1);
+				return relayOnlyHttpGet(nextUrl, opts, left - 1);
 			}
 			return res;
+		});
+	}
+
+	function relayHttpGet(urlStr, opts, redirectsLeft) {
+		if (!isAllowedUrl(urlStr)) {
+			return Promise.reject(new Error("Blocked non-Modrinth host: " + urlStr));
+		}
+		var mode = overrideTestRelayUrl ? "relay" : getRouteMode();
+		if (mode === "direct") {
+			return directHttpGet(urlStr, opts);
+		}
+		if (mode === "relay") {
+			return relayOnlyHttpGet(urlStr, opts, redirectsLeft);
+		}
+		// Auto mode: use Relay when configured & healthy, otherwise seamlessly use Direct HTTPS!
+		var hasRelays = orderedRelays().length > 0;
+		if (!hasRelays || (relayCooldownUntil > Date.now())) {
+			return directHttpGet(urlStr, opts).catch(function (directErr) {
+				if (hasRelays) {
+					relayCooldownUntil = 0;
+					return relayOnlyHttpGet(urlStr, opts, redirectsLeft);
+				}
+				throw directErr;
+			});
+		}
+		return relayOnlyHttpGet(urlStr, opts, redirectsLeft).catch(function (relayErr) {
+			relayCooldownUntil = Date.now() + 45000;
+			return directHttpGet(urlStr, opts).catch(function () {
+				throw relayErr;
+			});
 		});
 	}
 
@@ -1701,9 +2365,19 @@
 	}
 
 	function getRelayStatus() {
+		var mode = overrideTestRelayUrl ? "relay" : getRouteMode();
 		var list = orderedRelays();
+		if (mode === "direct") {
+			return { ready: true, relayCount: list.length, relayLabel: "Direct", transport: "direct", routeMode: mode };
+		}
 		if (!list.length) {
-			return { ready: false, relayCount: 0, relayLabel: "", transport: "" };
+			if (mode === "relay") {
+				return { ready: false, relayCount: 0, relayLabel: "", transport: "", routeMode: mode };
+			}
+			return { ready: true, relayCount: 0, relayLabel: "Direct", transport: "direct", routeMode: mode };
+		}
+		if (mode === "auto" && lastRelayInfo.transport === "direct" && relayCooldownUntil > Date.now()) {
+			return { ready: true, relayCount: list.length, relayLabel: "Direct", transport: "direct", routeMode: mode };
 		}
 		var top = list[0];
 		var net = getNetApi();
@@ -1711,10 +2385,11 @@
 		var transport = (activeCarrier && !activeCarrier.closed && activeCarrier.readyState === 1)
 			? activeCarrier.kind : (lastRelayInfo.transport || "");
 		return {
-			ready: st !== "fail",
+			ready: mode === "auto" ? true : (st !== "fail"),
 			relayCount: list.length,
 			relayLabel: (activeCarrier && !activeCarrier.closed ? activeCarrier.relayLabel : top.label),
-			transport: transport
+			transport: transport,
+			routeMode: mode
 		};
 	}
 
@@ -1735,9 +2410,9 @@
 		}
 		if (mcVersion && mcVersion !== "any") {
 			if (mcVersion === "26.3") {
-				facets.push(["versions:26.3", "versions:1.21.11", "versions:1.21.10", "versions:1.21.8", "versions:1.21.5", "versions:1.21.4"]);
-			} else if (mcVersion === "1.21") {
-				facets.push(["versions:1.21.5", "versions:1.21.4", "versions:1.21.3", "versions:1.21.1", "versions:1.21"]);
+				facets.push(["versions:26.3"]);
+			} else if (mcVersion === "26.x") {
+				facets.push(["versions:26.3", "versions:26.2", "versions:26.1.2", "versions:26.1.1", "versions:26.1"]);
 			} else {
 				facets.push(["versions:" + mcVersion]);
 			}
@@ -1874,6 +2549,7 @@
 			filename: String(primary.filename || "modrinth-download.jar"),
 			fileSize: Number(primary.size || 0),
 			sha1: primary.hashes && primary.hashes.sha1 ? String(primary.hashes.sha1) : "",
+			sha512: primary.hashes && primary.hashes.sha512 ? String(primary.hashes.sha512) : "",
 			requiredDepCount: reqDepCount,
 			dependencies: deps
 		};
@@ -1934,19 +2610,27 @@
 			}
 			return false;
 		}
-		function hasRecent(v) {
+		function hasExact263(v) {
 			if (!v.gameVersions) { return false; }
 			for (var k = 0; k < v.gameVersions.length; k++) {
-				var gv = v.gameVersions[k];
-				if (gv.indexOf("26.") === 0 || gv.indexOf("1.21") === 0) { return true; }
+				if (v.gameVersions[k] === "26.3") { return true; }
+			}
+			return false;
+		}
+		function has26x(v) {
+			if (!v.gameVersions) { return false; }
+			for (var k = 0; k < v.gameVersions.length; k++) {
+				if (v.gameVersions[k].indexOf("26.") === 0) { return true; }
 			}
 			return false;
 		}
 		var passes = [
 			function (v) { return v.versionType === "release" && hasOverlap(v); },
 			function (v) { return hasOverlap(v); },
-			function (v) { return v.versionType === "release" && hasRecent(v); },
-			function (v) { return hasRecent(v); },
+			function (v) { return v.versionType === "release" && hasExact263(v); },
+			function (v) { return hasExact263(v); },
+			function (v) { return v.versionType === "release" && has26x(v); },
+			function (v) { return has26x(v); },
 			function (v) { return v.versionType === "release"; }
 		];
 		for (var p = 0; p < passes.length; p++) {
@@ -1983,6 +2667,7 @@
 		var MAX_DEPTH = 3;
 		var MAX_DEPS = 8;
 		var visitedProjects = Object.create(null);
+		var resolvedProjIds = Object.create(null);
 		var resolvedDeps = [];
 		var skippedDeps = [];
 		var warnings = [];
@@ -1999,7 +2684,7 @@
 				return list;
 			}).then(function (list) {
 				if (!list.length) { throw new Error("No downloadable files found for " + rootTitle); }
-				return pickMatchingDepVersion(list, ["26.3", "26.2", "1.21.11", "1.21.10", "1.21.8", "1.21.5", "1.21.4"]);
+				return pickMatchingDepVersion(list, ["26.3", "26.2", "26.1.2", "26.1.1", "26.1"]);
 			});
 		}
 
@@ -2008,8 +2693,11 @@
 				return Promise.resolve();
 			}
 			var depProjId = dep.projectId || "";
-			if (depProjId && visitedProjects[depProjId]) {
-				return Promise.resolve();
+			if (depProjId) {
+				if (visitedProjects[depProjId]) {
+					return Promise.resolve();
+				}
+				visitedProjects[depProjId] = true;
 			}
 			var verPromise;
 			if (dep.versionId) {
@@ -2019,8 +2707,11 @@
 			}
 			return verPromise.then(function (exactVer) {
 				var pid = (exactVer && exactVer.projectId) || depProjId;
-				if (!pid || visitedProjects[pid]) { return null; }
-				visitedProjects[pid] = true;
+				if (!pid) { return null; }
+				if (!depProjId) {
+					if (visitedProjects[pid]) { return null; }
+					visitedProjects[pid] = true;
+				}
 				var metaPromise = projectMetaCache[pid]
 					? Promise.resolve(projectMetaCache[pid])
 					: getProject(pid).then(function (m) { projectMetaCache[pid] = m; return m; }, function () {
@@ -2073,9 +2764,11 @@
 				if (!resolved || !resolved.version) { return; }
 				// Recurse into transitive required dependencies first (bottom-up install order!)
 				return resolveChildren(resolved.version, depth + 1).then(function () {
-					if (resolvedDeps.length < MAX_DEPS) {
+					var finalPid = resolved.meta.id || resolved.version.projectId;
+					if (resolvedDeps.length < MAX_DEPS && (!finalPid || !resolvedProjIds[finalPid])) {
+						if (finalPid) { resolvedProjIds[finalPid] = true; }
 						resolvedDeps.push({
-							projectId: resolved.meta.id || resolved.version.projectId,
+							projectId: finalPid,
 							slug: resolved.meta.slug || resolved.meta.id,
 							title: resolved.meta.title || resolved.meta.slug || resolved.version.filename,
 							projectType: resolved.meta.projectType || "mod",
@@ -2084,6 +2777,8 @@
 							filename: resolved.version.filename,
 							fileUrl: resolved.version.fileUrl,
 							fileSize: resolved.version.fileSize,
+							sha1: resolved.version.sha1 || "",
+							sha512: resolved.version.sha512 || "",
 							isDependency: true
 						});
 					}
@@ -2126,13 +2821,9 @@
 				})
 				: Promise.resolve();
 			return preBatch.then(function () {
-				var chain = Promise.resolve();
-				reqs.forEach(function (dep) {
-					chain = chain.then(function () {
-						return resolveOneDep(dep, versionObj, depth);
-					});
-				});
-				return chain;
+				return Promise.all(reqs.map(function (dep) {
+					return resolveOneDep(dep, versionObj, depth);
+				}));
 			});
 		}
 
@@ -2152,6 +2843,8 @@
 					filename: rootVer.filename,
 					fileUrl: rootVer.fileUrl,
 					fileSize: rootVer.fileSize,
+					sha1: rootVer.sha1 || "",
+					sha512: rootVer.sha512 || "",
 					isDependency: false
 				});
 				return {
@@ -2185,6 +2878,22 @@
 			var imgData = ctx.getImageData(0, 0, dim, dim);
 			return new Int8Array(imgData.data.buffer, imgData.data.byteOffset, imgData.data.byteLength);
 		}
+		function imageFallback() {
+			return new Promise(function (resolve, reject) {
+				var blobUrl = URL.createObjectURL(blob);
+				var img = new Image();
+				img.onload = function () {
+					URL.revokeObjectURL(blobUrl);
+					try { resolve(drawSource(img, img.naturalWidth || dim, img.naturalHeight || dim)); }
+					catch (e) { reject(e); }
+				};
+				img.onerror = function () {
+					URL.revokeObjectURL(blobUrl);
+					reject(new Error("Image decode failed"));
+				};
+				img.src = blobUrl;
+			});
+		}
 		if (typeof createImageBitmap === "function") {
 			return createImageBitmap(blob).then(function (bmp) {
 				try {
@@ -2192,22 +2901,11 @@
 				} finally {
 					if (typeof bmp.close === "function") { bmp.close(); }
 				}
+			}).catch(function () {
+				return imageFallback();
 			});
 		}
-		return new Promise(function (resolve, reject) {
-			var blobUrl = URL.createObjectURL(blob);
-			var img = new Image();
-			img.onload = function () {
-				URL.revokeObjectURL(blobUrl);
-				try { resolve(drawSource(img, img.naturalWidth || dim, img.naturalHeight || dim)); }
-				catch (e) { reject(e); }
-			};
-			img.onerror = function () {
-				URL.revokeObjectURL(blobUrl);
-				reject(new Error("Image decode failed"));
-			};
-			img.src = blobUrl;
-		});
+		return imageFallback();
 	}
 
 	function putThumbCache(key, rgba) {
@@ -2256,9 +2954,15 @@
 		return p;
 	}
 
-	function downloadFile(urlStr, onProgress) {
+	function downloadFile(urlStr, onProgress, expectedSha1, expectedSha512) {
 		if (!urlStr || !isAllowedUrl(urlStr)) {
 			return Promise.reject(new Error("Invalid Modrinth download URL"));
+		}
+		var wantSha1 = expectedSha1;
+		var wantSha512 = expectedSha512;
+		if (expectedSha1 && typeof expectedSha1 === "object") {
+			wantSha1 = expectedSha1.sha1 || "";
+			wantSha512 = expectedSha1.sha512 || "";
 		}
 		return relayHttpGet(urlStr, {
 			accept: "application/java-archive,application/zip,application/octet-stream,*/*",
@@ -2271,37 +2975,139 @@
 			if (res.status !== 200 || !res.body || !res.body.length) {
 				throw new Error("Modrinth download HTTP " + res.status);
 			}
-			return new Int8Array(res.body.buffer, res.body.byteOffset, res.body.byteLength);
+			return verifyArtifactHash(res.body, wantSha1, wantSha512).then(function () {
+				return new Int8Array(res.body.buffer, res.body.byteOffset, res.body.byteLength);
+			});
 		});
+	}
+
+	function isLikelyDirectRoute() {
+		var mode = overrideTestRelayUrl ? "relay" : getRouteMode();
+		if (mode === "direct") { return true; }
+		if (mode === "relay") { return false; }
+		return orderedRelays().length === 0 || relayCooldownUntil > Date.now() || lastRelayInfo.transport === "direct";
+	}
+
+	function downloadFiles(items, onProgress, opts) {
+		var list = Array.isArray(items) ? items : [];
+		if (!list.length) { return Promise.resolve([]); }
+		var maxConc = (opts && opts.concurrency) ? (opts.concurrency | 0) : (isLikelyDirectRoute() ? 4 : 3);
+		if (maxConc < 1) { maxConc = 1; }
+		if (maxConc > 4) { maxConc = 4; }
+		var workerCount = Math.min(maxConc, list.length);
+		var results = new Array(list.length);
+		var loadedPerItem = new Array(list.length);
+		var totalPerItem = new Array(list.length);
+		var completed = 0;
+		var lastReportAt = 0;
+		for (var initI = 0; initI < list.length; initI++) {
+			loadedPerItem[initI] = 0;
+			totalPerItem[initI] = Number((list[initI] && list[initI].fileSize) || 0) || 0;
+		}
+		function emitProgress(force, activeLabel) {
+			if (!onProgress) { return; }
+			var now = Date.now();
+			if (!force && (now - lastReportAt) < 70) { return; }
+			lastReportAt = now;
+			var aggLoaded = 0, aggTotal = 0;
+			for (var k = 0; k < list.length; k++) {
+				aggLoaded += loadedPerItem[k];
+				aggTotal += totalPerItem[k] > loadedPerItem[k] ? totalPerItem[k] : loadedPerItem[k];
+			}
+			try { onProgress(completed, list.length, aggLoaded, aggTotal, activeLabel || ""); } catch (e) {}
+		}
+		var nextIdx = 0;
+		function runWorker() {
+			var i = nextIdx++;
+			if (i >= list.length) { return Promise.resolve(); }
+			var item = list[i] || {};
+			var label = String(item.title || item.filename || "file");
+			return downloadFile(item.fileUrl, function (loaded, total) {
+				loadedPerItem[i] = loaded;
+				if (total > 0) { totalPerItem[i] = total; }
+				emitProgress(false, label);
+			}, item.sha1 || "", item.sha512 || "").then(function (int8) {
+				completed++;
+				loadedPerItem[i] = int8.length;
+				if (totalPerItem[i] < int8.length) { totalPerItem[i] = int8.length; }
+				results[i] = { ok: true, bytes: int8, error: "" };
+				emitProgress(true, label);
+			}, function (err) {
+				completed++;
+				results[i] = { ok: false, bytes: null, error: String(err && err.message ? err.message : err) };
+				emitProgress(true, label);
+			}).then(runWorker);
+		}
+		var pool = [];
+		for (var w = 0; w < workerCount; w++) {
+			pool.push(runWorker());
+		}
+		return Promise.all(pool).then(function () { return results; });
 	}
 
 	// =========================================================================
 	// 9. Public API & Self-Test Hooks
 	// =========================================================================
 
+	function getProjectNames(ids) {
+		var clean = [];
+		if (Array.isArray(ids)) {
+			for (var i = 0; i < ids.length && clean.length < 12; i++) {
+				var id = String(ids[i] || "").trim();
+				if (id && clean.indexOf(id) < 0) { clean.push(id); }
+			}
+		}
+		if (!clean.length) { return Promise.resolve([]); }
+		return getProjectsBatch(clean).then(function (arr) {
+			var names = [];
+			for (var i = 0; i < arr.length; i++) {
+				var p = arr[i];
+				if (p && (p.title || p.slug)) {
+					names.push(String(p.title || p.slug));
+				}
+			}
+			return names;
+		});
+	}
+
 	G.MinecraftWebModrinth = {
 		getRelayStatus: getRelayStatus,
+		getRouteMode: getRouteMode,
+		setRouteMode: setRouteMode,
+		cycleRouteMode: cycleRouteMode,
 		search: search,
 		getProject: getProject,
+		getProjectNames: getProjectNames,
 		getVersion: getVersion,
 		getVersions: getVersions,
 		resolveInstallPlan: resolveInstallPlan,
 		fetchThumbnailRgba: fetchThumbnailRgba,
 		downloadFile: downloadFile,
+		downloadFiles: downloadFiles,
 		relayHttpGet: relayHttpGet,
 		_setTestRelay: function (wsUrl) {
 			overrideTestRelayUrl = wsUrl || null;
+			carrierOpenPromise = null;
 			if (activeCarrier) { activeCarrier.close(); activeCarrier = null; }
 		},
 		_crypto: {
+			sha1: sha1,
 			sha256: sha256,
+			bytesToHex: bytesToHex,
+			verifyArtifactHash: verifyArtifactHash,
 			hmacSha256: hmacSha256,
 			hkdfExtract: hkdfExtract,
 			hkdfExpandLabel: hkdfExpandLabel,
 			x25519: x25519,
 			makeAes128Gcm: makeAes128Gcm,
 			makePureAes128Gcm: makePureAes128Gcm,
-			openTls13Connection: openTls13Connection
+			parseX509Cert: parseX509Cert,
+			matchTlsHostname: matchTlsHostname,
+			ecdsaDerToRaw: ecdsaDerToRaw,
+			verifyCertSignature: verifyCertSignature,
+			gunzip: gunzip,
+			openTls13Connection: openTls13Connection,
+			relayHttpGetOnce: relayHttpGetOnce
 		}
 	};
 })();

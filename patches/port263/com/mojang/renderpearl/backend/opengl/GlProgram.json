@@ -1,1 +1,64 @@
-[{"start":724,"delete":31,"insert":""},{"start":2968,"delete":5,"insert":"GlApi"},{"start":3123,"delete":5,"insert":"GlApi"},{"start":3599,"delete":5,"insert":"GlApi"},{"start":3817,"delete":5,"insert":"GlApi"},{"start":4255,"delete":5,"insert":"GlApi"},{"start":4740,"delete":5,"insert":"GlApi"}]
+[
+  {
+    "start": 724,
+    "delete": 31,
+    "insert": ""
+  },
+  {
+    "start": 1882,
+    "delete": 84,
+    "insert": ""
+  },
+  {
+    "start": 1985,
+    "delete": 54,
+    "insert": ""
+  },
+  {
+    "start": 2043,
+    "delete": 190,
+    "insert": ""
+  },
+  {
+    "start": 2308,
+    "delete": 0,
+    "insert": [
+      "            ",
+      {
+        "copy": 1882,
+        "length": 74
+      },
+      "\n"
+    ]
+  },
+  {
+    "start": 2968,
+    "delete": 5,
+    "insert": "GlApi"
+  },
+  {
+    "start": 3123,
+    "delete": 5,
+    "insert": "GlApi"
+  },
+  {
+    "start": 3599,
+    "delete": 5,
+    "insert": "GlApi"
+  },
+  {
+    "start": 3817,
+    "delete": 5,
+    "insert": "GlApi"
+  },
+  {
+    "start": 4255,
+    "delete": 5,
+    "insert": "GlApi"
+  },
+  {
+    "start": 4740,
+    "delete": 5,
+    "insert": "GlApi"
+  }
+]

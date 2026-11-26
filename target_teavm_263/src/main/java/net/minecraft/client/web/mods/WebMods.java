@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -77,6 +78,13 @@ public final class WebMods {
 	private static int lastBuilderRev = -1;
 	private static boolean pendingReloadAfterSave;
 	private static long pendingReloadDeadlineMs;
+
+	// Reference-counted batching so multi-mod imports perform AT MOST ONE resource reload & save flush
+	private static int batchDepth;
+	private static final Set<String> batchAddedPacks = new LinkedHashSet<>();
+	private static final Set<String> batchRemovedPacks = new LinkedHashSet<>();
+	private static boolean batchSavesDirty;
+	private static boolean batchNotifyDirty;
 
 	// Fast static active-mod & hook flags (zero overhead in Camera / LightmapRenderStateExtractor / onFrame when false)
 	private static boolean hasActiveJsMods;
@@ -188,7 +196,7 @@ public final class WebMods {
 		}
 		installed = true;
 		bootedProfile = readBootedProfile();
-		installFileInput(WebMods::accept);
+		installFileInput(WebMods::accept, WebMods::beginBatch, WebMods::endBatch);
 		installRuntimeBridge(
 			WebMods::toast,
 			WebMods::chatLocal,
@@ -530,6 +538,45 @@ public final class WebMods {
 		return status;
 	}
 
+	/**
+	 * Begin a reference-counted multi-mod batch so resource-pack reloads, IndexedDB flushes,
+	 * and UI change notifications are deferred until the outermost {@link #endBatch()} finishes.
+	 */
+	public static void beginBatch() {
+		batchDepth++;
+	}
+
+	/**
+	 * End a multi-mod batch started by {@link #beginBatch()}. When the outermost batch exits,
+	 * applies all deferred mod asset overlay pack changes in a single {@code reloadResourcePacks()}
+	 * (or zero reloads if no asset overlays changed), flushes saves once, and notifies UI once.
+	 */
+	public static void endBatch() {
+		if (batchDepth <= 0) {
+			batchDepth = 0;
+			return;
+		}
+		batchDepth--;
+		if (batchDepth > 0) {
+			return;
+		}
+		if (!batchAddedPacks.isEmpty() || !batchRemovedPacks.isEmpty()) {
+			List<String> added = new ArrayList<>(batchAddedPacks);
+			List<String> removed = new ArrayList<>(batchRemovedPacks);
+			batchAddedPacks.clear();
+			batchRemovedPacks.clear();
+			applyBatchResourcePackChanges(added, removed);
+		}
+		if (batchSavesDirty) {
+			batchSavesDirty = false;
+			WebSaves.flush();
+		}
+		if (batchNotifyDirty) {
+			batchNotifyDirty = false;
+			notifyChanged();
+		}
+	}
+
 	/** Accept a picked or dropped mod file from JS. Returns null on success or an error sentence. */
 	public static String accept(final String filename, final Int8Array data) {
 		return accept(filename, data.copyToJavaArray());
@@ -626,9 +673,14 @@ public final class WebMods {
 			toast("Stored mod archive", info.compatibilitySummary);
 		}
 
-		WebSaves.flush();
+		if (batchDepth > 0) {
+			batchSavesDirty = true;
+			batchNotifyDirty = true;
+		} else {
+			WebSaves.flush();
+			notifyChanged();
+		}
 		System.out.println("[webmods] added " + storedName + " kind=" + info.kind + " (" + bytes.length + " bytes)");
-		notifyChanged();
 		return null;
 	}
 
@@ -726,6 +778,7 @@ public final class WebMods {
 		if (mod != null) {
 			unloadModRuntime(mod, true);
 		}
+		ModrinthClient.forgetInstalled(modId, filename);
 		disabledFiles.remove(filename);
 		new File(DIR + "/" + filename).delete();
 		savePersistedState();
@@ -1152,8 +1205,31 @@ public final class WebMods {
 				&& !disabledFiles.contains(name);
 			InstalledMod mod = new InstalledMod(name, info, bytes.length, enabled);
 			String rpName = resourcePackFileName(name);
-			if (new File(RESOURCEPACKS_DIR + "/" + rpName).exists()) {
+			String legacyRpName = legacyResourcePackFileName(name);
+			File rpFile = new File(RESOURCEPACKS_DIR + "/" + rpName);
+			File legacyRpFile = new File(RESOURCEPACKS_DIR + "/" + legacyRpName);
+			if (rpFile.exists()) {
 				mod.extractedResourcePack = rpName;
+				if (legacyRpFile.exists()) {
+					legacyRpFile.delete();
+					removeResourcePackFromRepo("file/" + legacyRpName);
+				}
+			} else if (legacyRpFile.exists()) {
+				// Migrate legacy visible mod_*_assets.zip to hidden __mcweb_mod_*_assets.zip
+				byte[] legacyBytes = WebSaves.readFile(RESOURCEPACKS_DIR + "/" + legacyRpName);
+				if (legacyBytes != null && legacyBytes.length > 0) {
+					try {
+						WebSaves.mkdirs(RESOURCEPACKS_DIR);
+						WebSaves.writeFile(RESOURCEPACKS_DIR + "/" + rpName, legacyBytes);
+						legacyRpFile.delete();
+						mod.extractedResourcePack = rpName;
+						removeResourcePackFromRepo("file/" + legacyRpName);
+					} catch (Throwable ignored) {
+						mod.extractedResourcePack = legacyRpName;
+					}
+				} else {
+					mod.extractedResourcePack = legacyRpName;
+				}
 			}
 			String dpName = dataPackFileName(name);
 			if (new File(DATAPACKS_DIR + "/" + dpName).exists()) {
@@ -1326,6 +1402,14 @@ public final class WebMods {
 				removeResourcePackFromRepo(rpId);
 			}
 		}
+		String legacyRpName = legacyResourcePackFileName(mod.file);
+		File legacyRpFile = new File(RESOURCEPACKS_DIR + "/" + legacyRpName);
+		if (legacyRpFile.exists()) {
+			legacyRpFile.delete();
+			if (reloadResourcePacks) {
+				removeResourcePackFromRepo("file/" + legacyRpName);
+			}
+		}
 		if (mod.extractedDataPack != null) {
 			new File(DATAPACKS_DIR + "/" + mod.extractedDataPack).delete();
 			mod.extractedDataPack = null;
@@ -1346,11 +1430,17 @@ public final class WebMods {
 			byte[] rpZip = ModJarInspector.buildResourcePackZip(bytes, mod.info, resourceMajor);
 			if (rpZip != null) {
 				String rpName = resourcePackFileName(mod.file);
+				String legacyRpName = legacyResourcePackFileName(mod.file);
 				try {
 					WebSaves.mkdirs(RESOURCEPACKS_DIR);
 					WebSaves.writeFile(RESOURCEPACKS_DIR + "/" + rpName, rpZip);
 					mod.extractedResourcePack = rpName;
 					extractedAssets = true;
+					File legacyFile = new File(RESOURCEPACKS_DIR + "/" + legacyRpName);
+					if (legacyFile.exists()) {
+						legacyFile.delete();
+						removeResourcePackFromRepo("file/" + legacyRpName);
+					}
 					System.out.println("[webmods] extracted resource pack " + rpName + " (" + rpZip.length + " bytes)");
 				} catch (Throwable e) {
 					System.out.println("[webmods] failed to write resource pack " + rpName + ": " + e);
@@ -1391,6 +1481,11 @@ public final class WebMods {
 	}
 
 	private static void activateResourcePackInRepo(final String packId) {
+		if (batchDepth > 0) {
+			batchRemovedPacks.remove(packId);
+			batchAddedPacks.add(packId);
+			return;
+		}
 		Minecraft mc = Minecraft.getInstance();
 		if (mc == null) {
 			return;
@@ -1409,6 +1504,41 @@ public final class WebMods {
 		List<String> previous = List.copyOf(mc.options.resourcePacks);
 		mc.options.updateResourcePacks(repo);
 		if (previous.equals(mc.options.resourcePacks)) {
+			mc.reloadResourcePacks();
+		}
+	}
+
+	private static void applyBatchResourcePackChanges(final List<String> added, final List<String> removed) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc == null) {
+			return;
+		}
+		PackRepository repo = mc.getResourcePackRepository();
+		List<String> selected = new ArrayList<>(repo.getSelectedIds());
+		boolean changed = false;
+		for (String id : removed) {
+			if (selected.remove(id)) {
+				changed = true;
+			}
+		}
+		repo.reload();
+		boolean anyAddedAvailable = false;
+		for (String id : added) {
+			if (repo.getAvailableIds().contains(id)) {
+				anyAddedAvailable = true;
+				if (!selected.contains(id)) {
+					selected.add(id);
+					changed = true;
+				}
+			}
+		}
+		if (!changed && !anyAddedAvailable) {
+			return;
+		}
+		repo.setSelected(selected);
+		List<String> previous = List.copyOf(mc.options.resourcePacks);
+		mc.options.updateResourcePacks(repo);
+		if (anyAddedAvailable && previous.equals(mc.options.resourcePacks)) {
 			mc.reloadResourcePacks();
 		}
 	}
@@ -1438,6 +1568,11 @@ public final class WebMods {
 	}
 
 	private static void removeResourcePackFromRepo(final String packId) {
+		if (batchDepth > 0) {
+			batchAddedPacks.remove(packId);
+			batchRemovedPacks.add(packId);
+			return;
+		}
 		Minecraft mc = Minecraft.getInstance();
 		if (mc == null) {
 			return;
@@ -1462,6 +1597,10 @@ public final class WebMods {
 	}
 
 	private static String resourcePackFileName(final String modFile) {
+		return "__mcweb_mod_" + ModJarInspector.stemForPack(modFile) + "_assets.zip";
+	}
+
+	private static String legacyResourcePackFileName(final String modFile) {
 		return "mod_" + ModJarInspector.stemForPack(modFile) + "_assets.zip";
 	}
 
@@ -2010,8 +2149,10 @@ public final class WebMods {
 		+ "} catch (e) { return ''; }")
 	private static native String readAvailableProfilesCsv();
 
-	@JSBody(params = {"onFile"}, script = ""
+	@JSBody(params = {"onFile", "onBeginBatch", "onEndBatch"}, script = ""
 		+ "if (document.getElementById('minecraft-mod-file')) { return; }"
+		+ "window.__mcWebModsBeginBatch = function() { onBeginBatch(); };"
+		+ "window.__mcWebModsEndBatch = function() { onEndBatch(); };"
 		+ "var input = document.createElement('input');"
 		+ "input.type = 'file';"
 		+ "input.accept = '.js,.mjs,.jar,.zip,application/java-archive,application/javascript,application/zip';"
@@ -2021,16 +2162,36 @@ public final class WebMods {
 		+ "input.onchange = function() {"
 		+ "  var files = input.files;"
 		+ "  if (files && files.length) {"
-		+ "    Array.prototype.forEach.call(files, function(f) {"
+		+ "    var total = files.length;"
+		+ "    var loaded = new Array(total);"
+		+ "    var remaining = total;"
+		+ "    var finishAll = function() {"
+		+ "      if (total > 1) { onBeginBatch(); }"
+		+ "      try {"
+		+ "        for (var j = 0; j < total; j++) {"
+		+ "          if (loaded[j]) { onFile(loaded[j].name, loaded[j].data); }"
+		+ "        }"
+		+ "      } finally {"
+		+ "        if (total > 1) { onEndBatch(); }"
+		+ "      }"
+		+ "    };"
+		+ "    var loadOne = function(idx, f) {"
 		+ "      var fr = new FileReader();"
-		+ "      fr.onload = function() { onFile(f.name, new Int8Array(fr.result)); };"
+		+ "      fr.onload = function() {"
+		+ "        loaded[idx] = { name: f.name, data: new Int8Array(fr.result) };"
+		+ "        if (--remaining === 0) { finishAll(); }"
+		+ "      };"
+		+ "      fr.onerror = function() {"
+		+ "        if (--remaining === 0) { finishAll(); }"
+		+ "      };"
 		+ "      fr.readAsArrayBuffer(f);"
-		+ "    });"
+		+ "    };"
+		+ "    for (var i = 0; i < total; i++) { loadOne(i, files[i]); }"
 		+ "  }"
 		+ "  input.value = '';"
 		+ "};"
 		+ "document.body.appendChild(input);")
-	private static native void installFileInput(FileHandler onFile);
+	private static native void installFileInput(FileHandler onFile, VoidAction onBeginBatch, VoidAction onEndBatch);
 
 	@JSBody(script = ""
 		+ "var input = document.getElementById('minecraft-mod-file');"
@@ -2375,6 +2536,7 @@ public final class WebMods {
 		+ "    list: function() { return Object.keys(hudItems); }"
 		+ "  }"
 		+ "};"
+		+ "window.__mcWebModsDrivesJvm = true;"
 		+ "window.__eaglerModsInternal = internal;"
 		+ "window.EaglerMods = api;")
 	private static native void installRuntimeBridge(
@@ -2672,6 +2834,10 @@ public final class WebMods {
 	@JSBody(params = {"tick", "hasPlayer", "doStart", "doPlayer", "doEnd"}, script = ""
 		+ "var rt = window.__eaglerModsInternal;"
 		+ "if (rt && rt.liveState) { rt.liveState.tick = tick; }"
+		+ "var bridge = window.EaglerJvmBridge;"
+		+ "if (bridge && typeof bridge.prepareTick === 'function') {"
+		+ "  try { bridge.prepareTick(tick, rt ? rt.liveState : null); } catch (e) {}"
+		+ "}"
 		+ "var t = window.EaglerJvmTranslator;"
 		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
 		+ "var ctx = window.__eaglerJvmTickCtx;"
@@ -2689,22 +2855,25 @@ public final class WebMods {
 	private static native void jsEmitJvmTick(double tick, boolean hasPlayer, boolean doStart, boolean doPlayer, boolean doEnd);
 
 	@JSBody(params = {"guiWidth", "guiHeight", "guiScale", "partialTick", "screenOpen", "inWorld", "paused"}, script = ""
+		+ "var rt = window.__eaglerModsInternal;"
 		+ "var ctx = window.__eaglerJvmHudCtx;"
-		+ "if (!ctx) { ctx = { guiWidth: 0, guiHeight: 0, guiScale: 1, partialTick: 1, tickDelta: 1, screenOpen: false, inWorld: false, paused: false, guiGraphics: null }; window.__eaglerJvmHudCtx = ctx; }"
+		+ "if (!ctx) { ctx = { rt: null, state: null, guiWidth: 0, guiHeight: 0, guiScale: 1, partialTick: 1, tickDelta: 1, screenOpen: false, inWorld: false, paused: false, guiGraphics: null }; window.__eaglerJvmHudCtx = ctx; }"
 		+ "ctx.guiWidth = guiWidth; ctx.guiHeight = guiHeight; ctx.guiScale = guiScale;"
 		+ "ctx.partialTick = partialTick; ctx.tickDelta = partialTick;"
 		+ "ctx.screenOpen = !!screenOpen; ctx.inWorld = !!inWorld; ctx.paused = !!paused;"
+		+ "ctx.state = rt ? rt.liveState : null;"
 		+ "var bridge = window.EaglerJvmBridge;"
 		+ "var t = window.EaglerJvmTranslator;"
+		+ "ctx.rt = (t && typeof t.getSharedRuntime === 'function') ? t.getSharedRuntime() : null;"
+		+ "if (bridge && typeof bridge.renderHudOverlay === 'function' && bridge.renderHudOverlayDispatchesHud) {"
+		+ "  try { bridge.renderHudOverlay(ctx); } catch (e) { console.error('[webmods] renderHudOverlay error:', e); }"
+		+ "  return;"
+		+ "}"
 		+ "if (bridge && typeof bridge.beginHudFrame === 'function') {"
 		+ "  try { bridge.beginHudFrame(ctx); } catch (e) { console.error('[webmods] beginHudFrame error:', e); }"
 		+ "}"
 		+ "if (bridge && typeof bridge.createGuiGraphics === 'function') {"
 		+ "  try { ctx.guiGraphics = bridge.createGuiGraphics(ctx); } catch (e) {}"
-		+ "}"
-		+ "if (bridge && typeof bridge.renderHudOverlay === 'function' && bridge.renderHudOverlayDispatchesHud) {"
-		+ "  try { bridge.renderHudOverlay(ctx); } catch (e) { console.error('[webmods] renderHudOverlay error:', e); }"
-		+ "  return;"
 		+ "}"
 		+ "if (t && typeof t.dispatchHook === 'function') {"
 		+ "  try { t.dispatchHook('hudRender', ctx); } catch (e) { console.error('[webmods] JVM hudRender error:', e); }"
@@ -2715,13 +2884,18 @@ public final class WebMods {
 	private static native void jsEmitJvmHudRender(int guiWidth, int guiHeight, int guiScale, float partialTick, boolean screenOpen, boolean inWorld, boolean paused);
 
 	@JSBody(params = {"screen", "prev", "title"}, script = ""
+		+ "var bridge = window.EaglerJvmBridge;"
+		+ "if (bridge && typeof bridge.invalidateStateCache === 'function') { try { bridge.invalidateStateCache(); } catch (e) {} }"
 		+ "var t = window.EaglerJvmTranslator;"
 		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
-		+ "try { t.dispatchHook('screenInit', { screen: screen || null, screenName: screen || '', prevScreen: prev || null, title: title || '' }); }"
+		+ "var screenObj = (bridge && typeof bridge.makeScreenObj === 'function') ? bridge.makeScreenObj(screen || null, title || '') : null;"
+		+ "try { t.dispatchHook('screenInit', { screen: screen || null, screenName: screen || '', prev: prev || null, prevScreen: prev || null, title: title || '', screenObj: screenObj }); }"
 		+ "catch (e) { console.error('[webmods] JVM screenInit error:', e); }")
 	private static native void jsDispatchJvmScreenInit(String screen, String prev, String title);
 
 	@JSBody(params = {"dim"}, script = ""
+		+ "var bridge = window.EaglerJvmBridge;"
+		+ "if (bridge && typeof bridge.invalidateStateCache === 'function') { try { bridge.invalidateStateCache(); } catch (e) {} }"
 		+ "var t = window.EaglerJvmTranslator;"
 		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
 		+ "try { t.dispatchHook('worldJoin', { dimension: dim || '' }); }"
@@ -2729,6 +2903,8 @@ public final class WebMods {
 	private static native void jsDispatchJvmWorldJoin(String dim);
 
 	@JSBody(script = ""
+		+ "var bridge = window.EaglerJvmBridge;"
+		+ "if (bridge && typeof bridge.invalidateStateCache === 'function') { try { bridge.invalidateStateCache(); } catch (e) {} }"
 		+ "var t = window.EaglerJvmTranslator;"
 		+ "if (!t || typeof t.dispatchHook !== 'function') { return; }"
 		+ "try { t.dispatchHook('worldLeave', {}); }"
@@ -2768,6 +2944,8 @@ public final class WebMods {
 		+ "if (!api) { return; }"
 		+ "api.reloadMods = api.reload;"
 		+ "api.reload = function() { fnReloadNow(); };"
+		+ "api.beginBatch = function() { if (window.__mcWebModsBeginBatch) { window.__mcWebModsBeginBatch(); } };"
+		+ "api.endBatch = function() { if (window.__mcWebModsEndBatch) { window.__mcWebModsEndBatch(); } };"
 		+ "api.getGamma = function() { return fnGetGamma(); };"
 		+ "api.setGamma = function(val) { var n = Number(val); return isNaN(n) ? fnGetGamma() : fnSetGamma(n); };"
 		+ "api.getFov = function() { return fnGetFov(); };"

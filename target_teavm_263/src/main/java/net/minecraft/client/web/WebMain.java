@@ -52,6 +52,24 @@ public class WebMain {
 	}
 
 	private static int savesReconcileFrames;
+	private static boolean workerStarted;
+
+	private static void ensureWorkerStarted() {
+		if (workerStarted) {
+			return;
+		}
+		workerStarted = true;
+		if (WebWorkerTransport.supported()) {
+			try {
+				WebWorkerNet.startPage();
+				System.out.println("[26.3-web] worker: waiting for server realm READY");
+			} catch (Throwable t) {
+				System.out.println("[26.3-web] worker spawn failed; singleplayer is unavailable: " + t);
+			}
+		} else {
+			System.out.println("[26.3-web] Web Workers are unavailable; singleplayer is unavailable");
+		}
+	}
 
 	public static void main(String[] args) {
 		if (WebWorkerTransport.inWorker()) {
@@ -97,6 +115,12 @@ public class WebMain {
 		if (locationSearch().contains("readback")) {
 			System.setProperty("web263.readback", "true");
 		}
+		HTMLCanvasElement canvas = canvas();
+		if (canvas == null) {
+			System.out.println("[26.3-web] no #game_frame canvas; cannot boot");
+			return;
+		}
+		ensureWorkerStarted();
 		SharedConstants.CHECK_DATA_FIXER_SCHEMA = false;
 		SharedConstants.tryDetectVersion();
 		long bootstrapStart = System.currentTimeMillis();
@@ -106,11 +130,6 @@ public class WebMain {
 		GameLoadTimesEvent.INSTANCE.beginStep(TelemetryProperty.LOAD_TIME_TOTAL_TIME_MS);
 		GameLoadTimesEvent.INSTANCE.beginStep(TelemetryProperty.LOAD_TIME_PRE_WINDOW_MS);
 
-		HTMLCanvasElement canvas = canvas();
-		if (canvas == null) {
-			System.out.println("[26.3-web] no #game_frame canvas; cannot boot");
-			return;
-		}
 		if (tryWebGpu) {
 			com.mojang.blaze3d.webgpu.WebGpuBackend.whenReady(() -> chooseBackend(canvas, true));
 			return;
@@ -135,16 +154,7 @@ public class WebMain {
 		net.minecraft.client.Screenshot.saveHandler = WebScreenshot::save;
 
 		net.minecraft.client.Minecraft.workerWorldHost = WebWorkerLifecycle.HOST;
-		if (WebWorkerTransport.supported()) {
-			try {
-				WebWorkerNet.startPage();
-				System.out.println("[26.3-web] worker: waiting for server realm READY");
-			} catch (Throwable t) {
-				System.out.println("[26.3-web] worker spawn failed; singleplayer is unavailable: " + t);
-			}
-		} else {
-			System.out.println("[26.3-web] Web Workers are unavailable; singleplayer is unavailable");
-		}
+		ensureWorkerStarted();
 
 		net.minecraft.TracingExecutor.namedExecutorOverride = WebYieldingExecutor::forName;
 		net.minecraft.client.ClientPhaseProbe.enabled = true;
@@ -544,6 +554,10 @@ public class WebMain {
 		}
 		reportStatus();
 		if (com.mojang.blaze3d.webgpu.WebGpuBackend.live() && !com.mojang.blaze3d.webgpu.WebGpuBackend.startupHealthy(frames)) {
+			org.lwjgl.glfw.GLFW.setUnloadPrompt(false);
+			if (minecraft.isRunning() && !com.mojang.blaze3d.webgpu.WebGpuBackend.deviceLost()) {
+				setTimeoutRaw(guardedPump(), 500);
+			}
 			return;
 		}
 		org.lwjgl.glfw.GLFW.setUnloadPrompt(minecraft.level != null);

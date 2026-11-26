@@ -53,6 +53,8 @@ final class WebGpuDevice implements GpuDeviceBackend {
 	private final JsonObject manifest;
 	final Map<String, Integer> bindingOf = new HashMap<>();
 	final int uniformAlignment;
+	final boolean indirectEnabled;
+	final boolean useNativeIndirect;
 	final WebGpuBuffer dummyUniform;
 	final WebGpuTextureView dummyView;
 	final WebGpuTextureView dummyCubeView;
@@ -71,10 +73,15 @@ final class WebGpuDevice implements GpuDeviceBackend {
 		}
 		String ident = WebGpuNatives.adapterIdentity();
 		String[] parts = ident.split("\\|", 3);
-		int maxTex = (int) WebGpuNatives.limit("maxTextureDimension2D", 8192);
-		uniformAlignment = (int) WebGpuNatives.limit("minUniformBufferOffsetAlignment", 256);
+		int maxTex = Math.max(2048, (int) WebGpuNatives.limit("maxTextureDimension2D", 8192));
+		uniformAlignment = Math.max(32, (int) WebGpuNatives.limit("minUniformBufferOffsetAlignment", 256));
 		long maxAlloc = Math.max((long) WebGpuNatives.limit("maxBufferSize", 1L << 28), 1L << 28);
 		int maxColor = (int) WebGpuNatives.limit("maxColorAttachments", 8);
+		String indirectOverride = WebGpuNatives.indirectModeOverride();
+		boolean indirectOff = "off".equals(indirectOverride) || "0".equals(indirectOverride) || "false".equals(indirectOverride);
+		boolean indirectCore = "core".equals(indirectOverride);
+		indirectEnabled = !indirectOff;
+		useNativeIndirect = indirectEnabled && !indirectCore && WebGpuNatives.hasIndirectFirstInstance();
 		String vendor = parts.length > 0 && !parts[0].isEmpty() ? parts[0] : "unknown";
 		String name = parts.length > 1 && !parts[1].isEmpty() ? parts[1] : "WebGPU";
 		info = new DeviceInfo(
@@ -84,8 +91,8 @@ final class WebGpuDevice implements GpuDeviceBackend {
 			true,
 			"WebGPU",
 			1.0f,
-			new DeviceLimits(16, uniformAlignment, maxTex, maxAlloc, 1, Math.min(8, maxColor), 1),
-			new DeviceFeatures(true, false, false, false, false, false, false, false),
+			new DeviceLimits(16, uniformAlignment, maxTex, maxAlloc, 1, Math.min(8, maxColor), indirectEnabled ? 65536 : 0),
+			new DeviceFeatures(true, false, false, false, indirectEnabled, indirectEnabled, indirectEnabled, false),
 			Set.of(),
 			new HintsAndWorkarounds(false, false, false, false),
 			name.toLowerCase().contains("swiftshader") ? DeviceType.CPU : DeviceType.INTEGRATED
@@ -101,7 +108,9 @@ final class WebGpuDevice implements GpuDeviceBackend {
 		dummySampler = new WebGpuSampler(AddressMode.CLAMP_TO_EDGE, AddressMode.CLAMP_TO_EDGE, FilterMode.NEAREST, FilterMode.NEAREST, 1, OptionalDouble.empty());
 		encoder = new WebGpuCommandEncoder(this);
 		System.out.println("[26.3-web] webgpu: device up - " + info.name() + " (" + info.vendorName() + "), uniform align " + uniformAlignment
-			+ ", max texture " + maxTex + ", WGSL pipelines in bundle: " + (m == null ? 0 : m.getAsJsonObject("pipelines").size()));
+			+ ", max texture " + maxTex + ", max buffer " + (maxAlloc >> 20) + "MB, indirect "
+			+ (!indirectEnabled ? "off" : (useNativeIndirect ? "native" : "core"))
+			+ ", WGSL pipelines in bundle: " + (m == null ? 0 : m.getAsJsonObject("pipelines").size()));
 	}
 
 	private static boolean manifestLoaded;
@@ -172,7 +181,7 @@ final class WebGpuDevice implements GpuDeviceBackend {
 		int bytes = (int) Math.min(Math.max(4, size), Integer.MAX_VALUE);
 		bytes = (usage & GpuBuffer.USAGE_UNIFORM) != 0 ? (bytes + 15) & ~15 : (bytes + 3) & ~3;
 		JSObject handle = WebGpuNatives.createBuffer(bytes, bufUsage(usage), label == null ? "" : label.get());
-		boolean mirrored = (usage & (GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_MAP_READ)) != 0;
+		boolean mirrored = (usage & (GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_INDIRECT_PARAMETERS)) != 0;
 		WebGpuBuffer buf = new WebGpuBuffer(usage, size, handle, true, mirrored && !MemoryUtil.LINEAR ? new byte[bytes] : null);
 		if (mirrored && MemoryUtil.LINEAR) {
 			buf.cpu = MemoryUtil.nmemCalloc(bytes, 1);
@@ -563,13 +572,10 @@ final class WebGpuDevice implements GpuDeviceBackend {
 			out |= WebGpuNatives.TEX_BINDING;
 		}
 		if ((usage & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0) {
-			out |= WebGpuNatives.TEX_RENDER;
+			out |= WebGpuNatives.TEX_RENDER | WebGpuNatives.TEX_COPY_DST | WebGpuNatives.TEX_COPY_SRC;
 		}
 		if (out == 0) {
 			out = WebGpuNatives.TEX_BINDING | WebGpuNatives.TEX_COPY_DST;
-		}
-		if ((usage & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0 || (usage & GpuTexture.USAGE_COPY_DST) != 0) {
-			out |= WebGpuNatives.TEX_RENDER | WebGpuNatives.TEX_COPY_DST | WebGpuNatives.TEX_COPY_SRC;
 		}
 		return out;
 	}

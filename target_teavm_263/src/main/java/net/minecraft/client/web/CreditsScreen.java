@@ -6,6 +6,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.PlainTextButton;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.CommonComponents;
@@ -13,6 +14,7 @@ import net.minecraft.network.chat.Component;
 
 public class CreditsScreen extends Screen {
 	private static final Component TITLE = Component.literal(Credits.BUTTON);
+	private static final String PREFIX = Credits.PROJECT + " by ";
 	private static final int GREY = -6250336;
 	private static int lineFrames;
 
@@ -29,18 +31,36 @@ public class CreditsScreen extends Screen {
 			.build();
 	}
 
+	/**
+	 * Mojang-style hover-underlined clickable author link ({@code chiikabu}) positioned
+	 * directly after {@code minecraft-web by } in the bottom-left of the Title Screen.
+	 */
+	public static PlainTextButton authorButton(final Screen parent, final Font font, final int height) {
+		Component label = Component.literal(Credits.AUTHOR);
+		int x = 2 + font.width(PREFIX);
+		int width = font.width(label);
+		return new PlainTextButton(
+			x,
+			height - 20,
+			width,
+			10,
+			label,
+			button -> Minecraft.getInstance().gui.setScreen(new CreditsScreen(parent)),
+			font
+		);
+	}
+
 	public static void line(final GuiGraphicsExtractor graphics, final Font font, final int height, final int color) {
-		graphics.text(font, Credits.LINE, 2, height - 20, color);
+		graphics.text(font, PREFIX, 2, height - 20, color);
 		lineFrames++;
 	}
 
 	public static void install() {
-		net.minecraft.client.gui.screens.options.OptionsScreen.creditsScreen = CreditsScreen::new;
 	}
 
 	public static Button.OnPress guard(final Screen screen, final Button.OnPress action) {
 		return button -> {
-			if (lineFrames > 0 && (net.minecraft.client.gui.screens.options.OptionsScreen.creditsScreen != null || hasButton(screen))) {
+			if (lineFrames > 0 && hasButton(screen)) {
 				action.onPress(button);
 			}
 		};
@@ -48,8 +68,11 @@ public class CreditsScreen extends Screen {
 
 	private static boolean hasButton(final Screen screen) {
 		for (GuiEventListener child : screen.children()) {
-			if (child instanceof Button button && Credits.BUTTON.equals(button.getMessage().getString())) {
-				return true;
+			if (child instanceof Button button) {
+				String text = button.getMessage().getString();
+				if (Credits.AUTHOR.equals(text) || Credits.BUTTON.equals(text)) {
+					return true;
+				}
 			}
 		}
 		return false;

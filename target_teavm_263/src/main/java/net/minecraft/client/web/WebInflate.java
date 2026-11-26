@@ -64,29 +64,32 @@ public final class WebInflate {
 			var d = state;
 			d.source = src;
 			d.sourceIndex = 0;
+			d.sourceLen = src.length;
 			d.tag = 0;
 			d.bitcount = 0;
 			d.dest = scratch;
 			d.destLen = 0;
 			d.maxOutput = maxOutput;
-			var bfinal, btype, res;
-			do {
-				bfinal = tinf_getbit(d);
-				btype = tinf_read_bits(d, 2, 0);
-				if (btype === 0) res = tinf_inflate_uncompressed_block(d);
-				else if (btype === 1) res = tinf_inflate_block_data(d, sltree, sdtree);
-				else if (btype === 2) {
-					tinf_decode_trees(d, d.ltree, d.dtree);
-					res = tinf_inflate_block_data(d, d.ltree, d.dtree);
-				} else {
-					throw new Error("inflate: bad block type " + btype);
-				}
-				if (res !== 0) throw new Error("inflate: data error");
-			} while (!bfinal);
-			var out = d.dest.subarray(0, d.destLen);
-			d.source = null;
-			d.dest = null;
-			return out;
+			try {
+				var bfinal, btype, res;
+				do {
+					bfinal = tinf_getbit(d);
+					btype = tinf_read_bits(d, 2, 0);
+					if (btype === 0) res = tinf_inflate_uncompressed_block(d);
+					else if (btype === 1) res = tinf_inflate_block_data(d, sltree, sdtree);
+					else if (btype === 2) {
+						tinf_decode_trees(d, d.ltree, d.dtree);
+						res = tinf_inflate_block_data(d, d.ltree, d.dtree);
+					} else {
+						throw new Error("inflate: bad block type " + btype);
+					}
+					if (res !== 0) throw new Error("inflate: data error");
+				} while (!bfinal);
+				return d.dest.subarray(0, d.destLen);
+			} finally {
+				d.source = null;
+				d.dest = null;
+			}
 		}
 
 		function inflateZlib(src, maxOutput) {
@@ -156,6 +159,7 @@ public final class WebInflate {
 		var state = {
 			source: null,
 			sourceIndex: 0,
+			sourceLen: 0,
 			tag: 0,
 			bitcount: 0,
 			dest: null,
@@ -269,7 +273,7 @@ public final class WebInflate {
 		}
 
 		function tinf_build_tree(t, lens, off, num) {
-			var i, sum, maxLen = 0, l;
+			var i, sum, maxLen = 0, l, left;
 			var table = t.table, trans = t.trans;
 			for (i = 0; i < 16; ++i) table[i] = 0;
 			for (i = 0; i < num; ++i) {
@@ -278,6 +282,12 @@ public final class WebInflate {
 				table[l]++;
 			}
 			table[0] = 0;
+			left = 1;
+			for (i = 1; i < 16; ++i) {
+				left <<= 1;
+				left -= table[i];
+				if (left < 0) throw new Error("inflate: bad tree");
+			}
 			for (sum = 0, i = 0; i < 16; ++i) {
 				offs[i] = sum;
 				sum += table[i];
@@ -291,6 +301,7 @@ public final class WebInflate {
 
 		function tinf_getbit(d) {
 			if (!d.bitcount--) {
+				if (d.sourceIndex >= d.sourceLen) throw new Error("inflate: truncated input");
 				d.tag = d.source[d.sourceIndex++];
 				d.bitcount = 7;
 			}
@@ -302,10 +313,11 @@ public final class WebInflate {
 		function tinf_read_bits(d, num, base) {
 			if (!num) return base;
 			if (d.bitcount < num) {
-				while (d.bitcount < 24) {
+				while (d.bitcount < 24 && d.sourceIndex < d.sourceLen) {
 					d.tag |= d.source[d.sourceIndex++] << d.bitcount;
 					d.bitcount += 8;
 				}
+				if (d.bitcount < num) throw new Error("inflate: truncated input");
 			}
 			var val = d.tag & ((1 << num) - 1);
 			d.tag >>>= num;
@@ -314,8 +326,9 @@ public final class WebInflate {
 		}
 
 		function tinf_decode_symbol_slow(d, t) {
-			var sum = 0, cur = 0, len = 0, tag = d.tag, table = t.table;
+			var sum = 0, cur = 0, len = 0, tag = d.tag, table = t.table, bc = d.bitcount;
 			do {
+				if (len >= bc) throw new Error("inflate: truncated input");
 				cur = 2 * cur + (tag & 1);
 				tag >>>= 1;
 				++len;
@@ -324,13 +337,13 @@ public final class WebInflate {
 				cur -= table[len];
 			} while (cur >= 0);
 			d.tag = tag;
-			d.bitcount -= len;
+			d.bitcount = bc - len;
 			return t.trans[sum + cur];
 		}
 
 		function tinf_decode_symbol(d, t) {
 			if (d.bitcount < 15) {
-				while (d.bitcount < 24) {
+				while (d.bitcount < 24 && d.sourceIndex < d.sourceLen) {
 					d.tag |= d.source[d.sourceIndex++] << d.bitcount;
 					d.bitcount += 8;
 				}
@@ -338,6 +351,7 @@ public final class WebInflate {
 			var entry = t.fast[d.tag & t.fastMask];
 			if (entry) {
 				var bits = entry & 15;
+				if (bits > d.bitcount) throw new Error("inflate: truncated input");
 				d.tag >>>= bits;
 				d.bitcount -= bits;
 				return entry >>> 4;
@@ -349,21 +363,32 @@ public final class WebInflate {
 			var hlit = tinf_read_bits(d, 5, 257);
 			var hdist = tinf_read_bits(d, 5, 1);
 			var hclen = tinf_read_bits(d, 4, 4);
+			if (hlit > 286 || hdist > 30) throw new Error("inflate: bad tree counts");
+			var total = hlit + hdist;
 			var i, num, length;
 			for (i = 0; i < 19; ++i) lengths[i] = 0;
 			for (i = 0; i < hclen; ++i) lengths[clcidx[i]] = tinf_read_bits(d, 3, 0);
 			tinf_build_tree(code_tree, lengths, 0, 19);
-			for (num = 0; num < hlit + hdist; ) {
+			for (num = 0; num < total; ) {
 				var sym = tinf_decode_symbol(d, code_tree);
 				if (sym === 16) {
+					if (num === 0) throw new Error("inflate: bad repeat code");
 					var prev = lengths[num - 1];
-					for (length = tinf_read_bits(d, 2, 3); length; --length) lengths[num++] = prev;
+					length = tinf_read_bits(d, 2, 3);
+					if (num + length > total) throw new Error("inflate: tree length overflow");
+					for (; length; --length) lengths[num++] = prev;
 				} else if (sym === 17) {
-					for (length = tinf_read_bits(d, 3, 3); length; --length) lengths[num++] = 0;
+					length = tinf_read_bits(d, 3, 3);
+					if (num + length > total) throw new Error("inflate: tree length overflow");
+					for (; length; --length) lengths[num++] = 0;
 				} else if (sym === 18) {
-					for (length = tinf_read_bits(d, 7, 11); length; --length) lengths[num++] = 0;
-				} else {
+					length = tinf_read_bits(d, 7, 11);
+					if (num + length > total) throw new Error("inflate: tree length overflow");
+					for (; length; --length) lengths[num++] = 0;
+				} else if (sym < 16) {
 					lengths[num++] = sym;
+				} else {
+					throw new Error("inflate: bad code length symbol");
 				}
 			}
 			tinf_build_tree(lt, lengths, 0, hlit);
@@ -373,6 +398,7 @@ public final class WebInflate {
 		function tinf_inflate_block_data(d, lt, dt) {
 			var src = d.source;
 			var srcIdx = d.sourceIndex;
+			var srcLen = d.sourceLen;
 			var tag = d.tag;
 			var bitcount = d.bitcount;
 			var dest = d.dest;
@@ -386,12 +412,20 @@ public final class WebInflate {
 			var sym, entry, bits, length, dist, copyOff, i, num, fillVal;
 			for (;;) {
 				if (bitcount < 15) {
-					tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
-					bitcount += 16;
+					if (srcIdx + 2 <= srcLen) {
+						tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
+						bitcount += 16;
+					} else {
+						while (bitcount < 15 && srcIdx < srcLen) {
+							tag |= src[srcIdx++] << bitcount;
+							bitcount += 8;
+						}
+					}
 				}
 				entry = ltFast[tag & ltMask];
 				if (entry) {
 					bits = entry & 15;
+					if (bits > bitcount) throw new Error("inflate: truncated input");
 					tag >>>= bits;
 					bitcount -= bits;
 					sym = entry >>> 4;
@@ -424,8 +458,16 @@ public final class WebInflate {
 					num = length_bits[sym];
 					if (num) {
 						if (bitcount < num) {
-							tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
-							bitcount += 16;
+							if (srcIdx + 2 <= srcLen) {
+								tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
+								bitcount += 16;
+							} else {
+								while (bitcount < num && srcIdx < srcLen) {
+									tag |= src[srcIdx++] << bitcount;
+									bitcount += 8;
+								}
+								if (bitcount < num) throw new Error("inflate: truncated input");
+							}
 						}
 						length = (tag & ((1 << num) - 1)) + length_base[sym];
 						tag >>>= num;
@@ -434,12 +476,20 @@ public final class WebInflate {
 						length = length_base[sym];
 					}
 					if (bitcount < 15) {
-						tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
-						bitcount += 16;
+						if (srcIdx + 2 <= srcLen) {
+							tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
+							bitcount += 16;
+						} else {
+							while (bitcount < 15 && srcIdx < srcLen) {
+								tag |= src[srcIdx++] << bitcount;
+								bitcount += 8;
+							}
+						}
 					}
 					entry = dtFast[tag & dtMask];
 					if (entry) {
 						bits = entry & 15;
+						if (bits > bitcount) throw new Error("inflate: truncated input");
 						tag >>>= bits;
 						bitcount -= bits;
 						dist = entry >>> 4;
@@ -456,8 +506,16 @@ public final class WebInflate {
 					num = dist_bits[dist];
 					if (num) {
 						if (bitcount < num) {
-							tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
-							bitcount += 16;
+							if (srcIdx + 2 <= srcLen) {
+								tag |= (src[srcIdx++] << bitcount) | (src[srcIdx++] << (bitcount + 8));
+								bitcount += 16;
+							} else {
+								while (bitcount < num && srcIdx < srcLen) {
+									tag |= src[srcIdx++] << bitcount;
+									bitcount += 8;
+								}
+								if (bitcount < num) throw new Error("inflate: truncated input");
+							}
 						}
 						dist = (tag & ((1 << num) - 1)) + dist_base[dist];
 						tag >>>= num;
@@ -496,12 +554,12 @@ public final class WebInflate {
 				d.sourceIndex--;
 				d.bitcount -= 8;
 			}
-			if (d.sourceIndex + 4 > d.source.length) return -3;
+			if (d.sourceIndex < 0 || d.sourceIndex + 4 > d.sourceLen) throw new Error("inflate: truncated input");
 			var length = d.source[d.sourceIndex] | (d.source[d.sourceIndex + 1] << 8);
 			var invlength = d.source[d.sourceIndex + 2] | (d.source[d.sourceIndex + 3] << 8);
 			if (length !== (~invlength & 0xffff)) return -3;
 			d.sourceIndex += 4;
-			if (d.sourceIndex + length > d.source.length) return -3;
+			if (d.sourceIndex + length > d.sourceLen) throw new Error("inflate: truncated input");
 			if (length > 0) {
 				grow(d, length);
 				d.dest.set(d.source.subarray(d.sourceIndex, d.sourceIndex + length), d.destLen);

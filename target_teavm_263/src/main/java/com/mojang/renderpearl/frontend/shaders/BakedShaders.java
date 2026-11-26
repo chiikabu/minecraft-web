@@ -27,7 +27,8 @@ public final class BakedShaders {
 	private final byte[] data;
 	private final Map<String, int[]> spv = new HashMap<>();
 	private final Map<String, Module> reflection = new HashMap<>();
-	private final Map<String, int[]> glsl = new HashMap<>();
+	private @Nullable Map<String, int[]> glsl;
+	private final int glslOffset;
 	private int pos;
 
 	private BakedShaders(byte[] data) {
@@ -54,13 +55,39 @@ public final class BakedShaders {
 			String key = this.moduleKey();
 			this.reflection.put(key, this.module());
 		}
+		this.glslOffset = this.pos;
+		// WebGPU mode (GlslCompiler.reflectionOnly == true) never uses baked GLSL strings;
+		// skip building the map eagerly and lazily parse only if glsl() is ever requested.
+		if (!GlslCompiler.reflectionOnly) {
+			this.glsl = this.readGlslTable(this.glslOffset);
+		}
+	}
+
+	private Map<String, int[]> readGlslTable(final int startPos) {
+		this.pos = startPos;
 		int glslCount = this.i32();
+		Map<String, int[]> table = new HashMap<>(Math.max(16, (int)(glslCount / 0.75F) + 1));
 		for (int i = 0; i < glslCount; i++) {
 			String key = this.moduleKey();
 			int len = this.i32();
-			this.glsl.put(key, new int[] {this.pos, len});
+			table.put(key, new int[] {this.pos, len});
 			this.pos += len;
 		}
+		return table;
+	}
+
+	private Map<String, int[]> glslTable() {
+		Map<String, int[]> table = this.glsl;
+		if (table == null) {
+			synchronized (this) {
+				table = this.glsl;
+				if (table == null) {
+					table = this.readGlslTable(this.glslOffset);
+					this.glsl = table;
+				}
+			}
+		}
+		return table;
 	}
 
 	public static synchronized BakedShaders get() throws ShaderCompileException {
@@ -88,7 +115,7 @@ public final class BakedShaders {
 	}
 
 	public @Nullable String glsl(long hash, ShaderType type) {
-		int[] at = this.glsl.get(moduleKey(hash, type));
+		int[] at = this.glslTable().get(moduleKey(hash, type));
 		return at == null ? null : new String(this.data, at[0], at[1], StandardCharsets.UTF_8);
 	}
 

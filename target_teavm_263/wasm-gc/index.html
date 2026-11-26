@@ -61,7 +61,54 @@
 					window.__minecraftWebGpuLimits = limits;
 					window.__minecraftWebGpuAdapterInfo = adapter.info || {};
 					if (adapter.isFallbackAdapter) { window.__minecraftWebGpuState = "software fallback adapter"; return null; }
-					return adapter.requestDevice().then(function (device) {
+					var info = window.__minecraftWebGpuAdapterInfo;
+					var gpuDesc = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ");
+					var isDiscreteRe = /NVIDIA|GeForce|RTX|GTX|Quadro|Radeon\s*(RX|Pro)|Arc\s*A\d|Apple\s*M/i;
+					var isIntegratedRe = /Intel|UHD|HD Graphics|Iris|Radeon\(TM\) Graphics|Vega|Mali|Adreno/i;
+					var forceWebGpu = false;
+					try { var sp2 = new URLSearchParams(location.search); forceWebGpu = sp2.get("webgpu") === "1"; } catch (e) {}
+					if (!forceWebGpu && gpuDesc && isIntegratedRe.test(gpuDesc) && !isDiscreteRe.test(gpuDesc)) {
+						try {
+							var probeCanvas = document.createElement("canvas");
+							var probeGl = probeCanvas.getContext("webgl2", { powerPreference: "high-performance" });
+							var dbg = probeGl && probeGl.getExtension("WEBGL_debug_renderer_info");
+							var glName = dbg ? String(probeGl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : "";
+							var loseP = probeGl && probeGl.getExtension("WEBGL_lose_context");
+							if (loseP) { loseP.loseContext(); }
+							if (glName && isDiscreteRe.test(glName)) {
+								console.info("[26.3-gpu] WebGPU selected integrated GPU (" + gpuDesc + ") while discrete GPU (" + glName + ") is available via WebGL2; preferring discrete GPU");
+								window.__minecraftWebGpuState = "discrete-webgl2-preferred: " + glName;
+								return null;
+							}
+						} catch (e) {}
+					}
+					var desc = {};
+					var reqFeatures = [];
+					var wantFeatures = ["indirect-first-instance", "timestamp-query", "float32-filterable", "depth-clip-control", "bgra8unorm-storage"];
+					if (adapter.features && typeof adapter.features.has === "function") {
+						for (var fi = 0; fi < wantFeatures.length; fi++) {
+							if (adapter.features.has(wantFeatures[fi])) { reqFeatures.push(wantFeatures[fi]); }
+						}
+					}
+					if (reqFeatures.length) { desc.requiredFeatures = reqFeatures; }
+					var reqLimits = {}, hasLimits = false;
+					var desired = {
+						maxBufferSize: 536870912, maxStorageBufferBindingSize: 268435456,
+						maxTextureDimension2D: 16384, maxUniformBufferBindingSize: 262144,
+						maxComputeWorkgroupStorageSize: 32768, maxComputeInvocationsPerWorkgroup: 1024,
+						maxColorAttachmentBytesPerSample: 64
+					};
+					if (adapter.limits) {
+						for (var lk in desired) {
+							var av = adapter.limits[lk];
+							if (typeof av === "number" && isFinite(av) && av > 0) {
+								reqLimits[lk] = Math.min(desired[lk], av);
+								hasLimits = true;
+							}
+						}
+					}
+					if (hasLimits) { desc.requiredLimits = reqLimits; }
+					return adapter.requestDevice(desc).catch(function () { return adapter.requestDevice(); }).then(function (device) {
 						if (window.__minecraftWebGpuState !== "probing") { try { device.destroy(); } catch (e) {} return null; }
 						window.__minecraftWebGpuDevice = device;
 						window.__minecraftWebGpuState = "ready";
@@ -93,8 +140,10 @@
 				].join("\n");
 				proto.shaderSource = function (shader, source) {
 					var text = String(source);
-					text = text.split("floatfloat(").join("float(");
-					text = text.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
+					if (text.indexOf("floatfloat(") >= 0) { text = text.split("floatfloat(").join("float("); }
+					if (text.indexOf("_frag_output_00") >= 0) {
+						text = text.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
+					}
 					return shaderSource.call(this, shader, text);
 				};
 			}
@@ -151,7 +200,7 @@
 					}
 					if (!glProbeReady) { return false; }
 					weakGpu = false;
-					var gl = document.createElement("canvas").getContext("webgl2");
+					var gl = document.createElement("canvas").getContext("webgl2", { powerPreference: "high-performance" });
 					var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
 					var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
 					weakGpu = WEAK_GPU_RE.test(name);

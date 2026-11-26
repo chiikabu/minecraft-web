@@ -69,13 +69,47 @@ public final class WebGpuNatives {
 		+ "    device.lost.then(function (info) { window.__minecraftWebGpuState = 'lost: ' + (info ? info.reason : 'unknown'); });\n"
 		+ "  }\n"
 		+ "}\n"
+		+ "function buildDeviceDesc(adapter) {\n"
+		+ "  var desc = {};\n"
+		+ "  var reqFeatures = [];\n"
+		+ "  var wantFeatures = ['indirect-first-instance', 'timestamp-query', 'float32-filterable', 'depth-clip-control', 'bgra8unorm-storage'];\n"
+		+ "  if (adapter.features && typeof adapter.features.has === 'function') {\n"
+		+ "    for (var fi = 0; fi < wantFeatures.length; fi++) {\n"
+		+ "      if (adapter.features.has(wantFeatures[fi])) { reqFeatures.push(wantFeatures[fi]); }\n"
+		+ "    }\n"
+		+ "  }\n"
+		+ "  if (reqFeatures.length) { desc.requiredFeatures = reqFeatures; }\n"
+		+ "  var reqLimits = {};\n"
+		+ "  var hasLimits = false;\n"
+		+ "  var desired = {\n"
+		+ "    maxBufferSize: 536870912,\n"
+		+ "    maxStorageBufferBindingSize: 268435456,\n"
+		+ "    maxTextureDimension2D: 16384,\n"
+		+ "    maxUniformBufferBindingSize: 262144,\n"
+		+ "    maxComputeWorkgroupStorageSize: 32768,\n"
+		+ "    maxComputeInvocationsPerWorkgroup: 1024,\n"
+		+ "    maxColorAttachmentBytesPerSample: 64\n"
+		+ "  };\n"
+		+ "  if (adapter.limits) {\n"
+		+ "    for (var lk in desired) {\n"
+		+ "      var av = adapter.limits[lk];\n"
+		+ "      if (typeof av === 'number' && isFinite(av) && av > 0) {\n"
+		+ "        reqLimits[lk] = Math.min(desired[lk], av);\n"
+		+ "        hasLimits = true;\n"
+		+ "      }\n"
+		+ "    }\n"
+		+ "  }\n"
+		+ "  if (hasLimits) { desc.requiredLimits = reqLimits; }\n"
+		+ "  return desc;\n"
+		+ "}\n"
 		+ "early.then(function (res) {\n"
 		+ "  if (window.__minecraftWebGpuState !== 'probing') { return; }\n"
 		+ "  if (!res) { window.__minecraftWebGpuState = window.__minecraftWebGpuDevice ? 'ready' : 'no adapter'; return; }\n"
 		+ "  if (typeof res.requestDevice === 'function') {\n"
 		+ "    applyAdapter(res);\n"
 		+ "    if (res.isFallbackAdapter) { window.__minecraftWebGpuState = 'software fallback adapter'; return; }\n"
-		+ "    return res.requestDevice().then(applyDevice);\n"
+		+ "    var desc = buildDeviceDesc(res);\n"
+		+ "    return res.requestDevice(desc).catch(function () { return res.requestDevice(); }).then(applyDevice);\n"
 		+ "  }\n"
 		+ "  if (res.device && res.device.queue) {\n"
 		+ "    if (res.adapter) {\n"
@@ -196,10 +230,24 @@ public final class WebGpuNatives {
 	static native String adapterIdentity();
 
 	@JSBody(params = {"key", "fallback"}, script =
-		"var l = window.__minecraftWebGpuDevice.limits;\n"
-		+ "var v = l[key];\n"
+		"var d = window.__minecraftWebGpuDevice;\n"
+		+ "var l = d && d.limits;\n"
+		+ "var v = l ? l[key] : undefined;\n"
 		+ "return (typeof v === 'number' && isFinite(v)) ? v : fallback;")
 	static native double limit(String key, double fallback);
+
+	@JSBody(params = {}, script =
+		"var d = window.__minecraftWebGpuDevice;\n"
+		+ "return !!(d && d.features && typeof d.features.has === 'function' && d.features.has('indirect-first-instance'));")
+	static native boolean hasIndirectFirstInstance();
+
+	@JSBody(params = {}, script =
+		"try {\n"
+		+ "  var p = new URLSearchParams(window.location.search);\n"
+		+ "  var v = p.get('indirect');\n"
+		+ "  return v ? String(v).toLowerCase() : '';\n"
+		+ "} catch (e) { return ''; }")
+	static native String indirectModeOverride();
 
 	@JSBody(params = {}, script = "return window.__mcgpu ? window.__mcgpu.errors : 0;")
 	static native int errorCount();
@@ -317,6 +365,10 @@ public final class WebGpuNatives {
 	static final int CMD_SCISSOR = 5;
 	static final int CMD_DRAW_INDEXED = 6;
 	static final int CMD_DRAW = 7;
+	static final int CMD_MULTI_DRAW_INDEXED_INDIRECT = 8;
+	static final int CMD_MULTI_DRAW_INDEXED_MEM = 9;
+	static final int CMD_MULTI_DRAW_INDIRECT = 10;
+	static final int CMD_MULTI_DRAW_MEM = 11;
 
 	@JSBody(params = {"obj"}, script = "return window.__mcgpu.put(obj);")
 	static native int put(JSObject obj);
@@ -342,7 +394,7 @@ public final class WebGpuNatives {
 	static final String HELPER = ""
 		+ "var G = window.__mcgpu = {};\n"
 		+ "G.dev = null; G.ctx = null; G.fmt = 'bgra8unorm'; G.enc = null; G.pass = null; G.bg = null; G.pc = null; G.pd = null;\n"
-		+ "G.u32 = new Uint32Array(64); G.memBuf = null; G.memI32 = null; G.errors = 0; G.lastError = ''; G.draws = 0; G.frames = 0; G.reads = []; G.blitState = null;\n"
+		+ "G.u32 = new Uint32Array(64); G.memBuf = null; G.memI32 = null; G.memU32 = null; G.errors = 0; G.lastError = ''; G.draws = 0; G.frames = 0; G.reads = []; G.blitState = null;\n"
 		+ "G.trash = []; G.blits = 0; G.passes = 0; G.lastColorTex = null;\n"
 		+ "G.traceLog = []; G.tracing = /[?&]gputrace/.test(location.search);\n"
 		+ "G.tr = function (line) { if (G.tracing && G.frames < 2 && G.traceLog.length < 600) { G.traceLog.push(G.frames + ': ' + line); } };\n"
@@ -361,8 +413,8 @@ public final class WebGpuNatives {
 		+ "G.put = function (o) { var id = G.freeIds.length ? G.freeIds.pop() : G.reg.length; G.reg[id] = o; return id; };\n"
 		+ "G.replay = function (pass, addr, n) {\n"
 		+ "  var buf = globalThis.__teavmMemory.buffer;\n"
-		+ "  if (G.memBuf !== buf) { G.memBuf = buf; G.memI32 = new Int32Array(buf); }\n"
-		+ "  var M = G.memI32, R = G.reg, u = G.u32, base = addr >>> 2, i = base, end = base + n, c, k;\n"
+		+ "  if (G.memBuf !== buf) { G.memBuf = buf; G.memI32 = new Int32Array(buf); G.memU32 = new Uint32Array(buf); }\n"
+		+ "  var M = G.memI32, U = G.memU32, R = G.reg, u = G.u32, base = addr >>> 2, i = base, end = base + n, c, k, b, off, cnt, p;\n"
 		+ "  while (i < end) {\n"
 		+ "    switch (M[i]) {\n"
 		+ "      case 1: pass.setPipeline(R[M[i + 1]]); i += 2; break;\n"
@@ -372,6 +424,10 @@ public final class WebGpuNatives {
 		+ "      case 5: pass.setScissorRect(M[i + 1], M[i + 2], M[i + 3], M[i + 4]); i += 5; break;\n"
 		+ "      case 6: pass.drawIndexed(M[i + 1], M[i + 2], M[i + 3], M[i + 4], M[i + 5]); G.draws++; i += 6; break;\n"
 		+ "      case 7: pass.draw(M[i + 1], M[i + 2], M[i + 3], M[i + 4]); G.draws++; i += 5; break;\n"
+		+ "      case 8: b = R[M[i + 1]]; off = M[i + 2] >>> 0; cnt = M[i + 3]; for (k = 0; k < cnt; k++) { pass.drawIndexedIndirect(b, off + k * 20); } G.draws += cnt; i += 4; break;\n"
+		+ "      case 9: p = M[i + 1] >>> 2; cnt = M[i + 2]; for (k = 0; k < cnt; k++, p += 5) { pass.drawIndexed(U[p], U[p + 1], U[p + 2], M[p + 3], U[p + 4]); } G.draws += cnt; i += 3; break;\n"
+		+ "      case 10: b = R[M[i + 1]]; off = M[i + 2] >>> 0; cnt = M[i + 3]; for (k = 0; k < cnt; k++) { pass.drawIndirect(b, off + k * 16); } G.draws += cnt; i += 4; break;\n"
+		+ "      case 11: p = M[i + 1] >>> 2; cnt = M[i + 2]; for (k = 0; k < cnt; k++, p += 4) { pass.draw(U[p], U[p + 1], U[p + 2], U[p + 3]); } G.draws += cnt; i += 3; break;\n"
 		+ "      default: throw new Error('webgpu: bad command ' + M[i] + ' at ' + (i - base) + '/' + n);\n"
 		+ "    }\n"
 		+ "  }\n"
@@ -382,7 +438,7 @@ public final class WebGpuNatives {
 		+ "  if (G.enc) { G.dev.queue.submit([G.enc.finish()]); G.enc = null; }\n"
 		+ "  G.frames++;\n"
 		+ "  G.clearSlot = 0;\n"
-		+ "  if (G.dropIds.length) { for (var di = 0; di < G.dropIds.length; di++) { G.reg[G.dropIds[di]] = null; G.freeIds.push(G.dropIds[di]); } G.dropIds.length = 0; }\n"
+		+ "  if (G.dropIds.length) { for (var di = 0; di < G.dropIds.length; di++) { var id = G.dropIds[di]; if (G.reg[id] !== null && G.reg[id] !== undefined) { G.reg[id] = null; G.freeIds.push(id); } } G.dropIds.length = 0; }\n"
 		+ "  if (G.trash.length) { var trash = G.trash; G.trash = []; for (var i = 0; i < trash.length; i++) { try { trash[i].destroy(); } catch (e) {} } }\n"
 		+ "  if (G.reads.length) { var reads = G.reads; G.reads = []; reads.forEach(G.finishRead); }\n"
 		+ "};\n"
@@ -392,9 +448,10 @@ public final class WebGpuNatives {
 		+ "};\n"
 		+ "G.view = function (tex, baseMip, mips, dimension) { return tex.createView({ dimension: dimension, baseMipLevel: baseMip, mipLevelCount: mips }); };\n"
 		+ "G.sampler = function (au, av, mag, min, aniso, hasMaxLod, maxLod) {\n"
-		+ "  var d = { addressModeU: au, addressModeV: av, addressModeW: 'clamp-to-edge', magFilter: mag, minFilter: min, mipmapFilter: 'linear' };\n"
+		+ "  var mip = min === 'nearest' ? 'nearest' : 'linear';\n"
+		+ "  var d = { addressModeU: au, addressModeV: av, addressModeW: 'clamp-to-edge', magFilter: mag, minFilter: min, mipmapFilter: mip };\n"
 		+ "  if (hasMaxLod) { d.lodMaxClamp = Math.max(0, maxLod); }\n"
-		+ "  if (aniso > 1 && mag === 'linear' && min === 'linear') { d.maxAnisotropy = aniso; }\n"
+		+ "  if (aniso > 1 && mag === 'linear' && min === 'linear' && mip === 'linear') { d.maxAnisotropy = aniso; }\n"
 		+ "  return G.dev.createSampler(d);\n"
 		+ "};\n"
 		+ "G.module = function (code, label) {\n"
@@ -459,6 +516,8 @@ public final class WebGpuNatives {
 		+ "  w.setScissorRect = function (x, y, ww, h) { G.tr('  scissor ' + [x, y, ww, h].join(',')); p.setScissorRect(x, y, ww, h); };\n"
 		+ "  w.drawIndexed = function (c, i, f, bv, fi) { G.tr('  drawIndexed ' + [c, i, f, bv, fi].join(',')); p.drawIndexed(c, i, f, bv, fi); };\n"
 		+ "  w.draw = function (c, i, f, fi) { G.tr('  draw ' + [c, i, f, fi].join(',')); p.draw(c, i, f, fi); };\n"
+		+ "  w.drawIndexedIndirect = function (b, o) { G.tr('  drawIndexedIndirect ' + (b.label || 'buf') + '@' + o); p.drawIndexedIndirect(b, o); };\n"
+		+ "  w.drawIndirect = function (b, o) { G.tr('  drawIndirect ' + (b.label || 'buf') + '@' + o); p.drawIndirect(b, o); };\n"
 		+ "  return w;\n"
 		+ "};\n"
 		+ "G.mipView = function (tex, m) { var c = tex.__mipViews || (tex.__mipViews = []); return c[m] || (c[m] = tex.createView({ dimension: '2d', baseMipLevel: m, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 1 })); };\n"

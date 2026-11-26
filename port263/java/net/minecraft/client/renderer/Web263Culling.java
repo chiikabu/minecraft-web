@@ -2,6 +2,7 @@
 
 package net.minecraft.client.renderer;
 
+import com.mojang.blaze3d.vertex.VertexSorting;
 import java.util.function.LongPredicate;
 import net.minecraft.client.renderer.fog.FogData;
 import net.minecraft.core.SectionPos;
@@ -11,6 +12,20 @@ import org.jspecify.annotations.Nullable;
 
 public final class Web263Culling {
    public static @Nullable BatchCullHook simdCullHook;
+   public static @Nullable DistanceSortHook simdSortHook;
+
+   @FunctionalInterface
+   public interface DistanceSortHook {
+      VertexSorting createDistanceSorting(float camX, float camY, float camZ);
+   }
+
+   public static VertexSorting createDistanceSorting(float camX, float camY, float camZ) {
+      DistanceSortHook hook = simdSortHook;
+      if (hook != null) {
+         return hook.createDistanceSorting(camX, camY, camZ);
+      }
+      return VertexSorting.byDistance(camX, camY, camZ);
+   }
 
    @FunctionalInterface
    public interface BatchCullHook {

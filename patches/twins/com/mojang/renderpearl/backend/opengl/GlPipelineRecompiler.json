@@ -1,1 +1,652 @@
-[{"start":208,"delete":0,"insert":[{"copy":261,"length":63},";\n"]},{"start":291,"delete":159,"insert":""},{"start":467,"delete":7,"insert":"BakedShaders"},{"start":717,"delete":27,"insert":""},{"start":767,"delete":25,"insert":""},{"start":971,"delete":245,"insert":""},{"start":1278,"delete":3,"insert":"\t"},{"start":1339,"delete":4,"insert":"\n\t"},{"start":1390,"delete":4,"insert":"\n\t"},{"start":1468,"delete":4,"insert":"\n\t"},{"start":1544,"delete":4,"insert":"\n\t"},{"start":1620,"delete":4,"insert":"\n\t"},{"start":1711,"delete":4,"insert":"\n\t"},{"start":1754,"delete":4,"insert":"\n\t"},{"start":1804,"delete":5,"insert":"\n\n\t"},{"start":1909,"delete":7,"insert":"\n\t\t"},{"start":1947,"delete":7,"insert":"\n\t\t"},{"start":2009,"delete":4,"insert":"\n\t"},{"start":2014,"delete":5,"insert":"\n\n\t"},{"start":2056,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":2112,"delete":7,"insert":"\n\t\t"},{"start":2167,"delete":16,"insert":"\n\t\tif"},{"start":2184,"delete":5,"insert":"(this.drawParametersSupported || SHADER_DEBUG_MODE || !\"main\".equals(shaderCreateInfo.entryPoint())) {\n\t\t\tthrow new ShaderCompileException(\"Baked GLSL assumes drawParametersSupported=false, no shader debug mode and entry point main (\"\n\t\t\t\t+ shaderCreateInfo.name() + \")\");\n\t\t}\n\t\tlong hash"},{"start":2192,"delete":0,"insert":"BakedShaders.fnv1a64("},{"start":2207,"delete":13,"insert":""},{"start":2222,"delete":11,"insert":"\n\t\tString"},{"start":2234,"delete":11,"insert":"glsl"},{"start":2248,"delete":304,"insert":"BakedShaders"},{"start":2557,"delete":1,"insert":""},{"start":2559,"delete":18,"insert":""},{"start":2578,"delete":12,"insert":"glsl"},{"start":2591,"delete":41,"insert":"hash"},{"start":2634,"delete":1198,"insert":""},{"start":3848,"delete":0,"insert":");\n\t\tif (glsl"},{"start":3852,"delete":17,"insert":"null"},{"start":3872,"delete":45,"insert":"\n\t\t\tthrow new ShaderCompileException"},{"start":3918,"delete":9,"insert":"\"No"},{"start":3928,"delete":14,"insert":"baked"},{"start":3943,"delete":2,"insert":"GLSL for"},{"start":3947,"delete":49,"insert":""},{"start":3997,"delete":10,"insert":"+ shaderCreateInfo"},{"start":4008,"delete":4,"insert":"name"},{"start":4015,"delete":98,"insert":"+"},{"start":4115,"delete":58,"insert":""},{"start":4175,"delete":17,"insert":"\""},{"start":4193,"delete":150,"insert":"+"},{"start":4361,"delete":2,"insert":"+"},{"start":4364,"delete":10,"insert":"\", spv \" + Long"},{"start":4375,"delete":8,"insert":"toHexString(hash"},{"start":4385,"delete":117,"insert":"+"},{"start":4504,"delete":24,"insert":")"},{"start":4531,"delete":10,"insert":"\n\t\t"},{"start":4542,"delete":816,"insert":"\n\t\t"},{"start":5365,"delete":5,"insert":"glsl"},{"start":5371,"delete":4,"insert":"\n\t"},{"start":5376,"delete":4010,"insert":"\n\n\t"},{"start":9487,"delete":7,"insert":"\n\t\t"},{"start":9559,"delete":7,"insert":"\n\t\t"},{"start":9614,"delete":7,"insert":"\n\t\t"},{"start":9662,"delete":7,"insert":"\n\t\t"},{"start":9725,"delete":10,"insert":"\n\t\t\t"},{"start":9821,"delete":10,"insert":"\n\t\t\t"},{"start":9927,"delete":10,"insert":"\n\t\t\t"},{"start":9974,"delete":7,"insert":"\n\t\t"},{"start":9989,"delete":10,"insert":"\n\t\t\t"},{"start":10064,"delete":10,"insert":"\n\t\t\t"},{"start":10110,"delete":10,"insert":"\n\t\t\t"},{"start":10134,"delete":7,"insert":"\n\t\t"},{"start":10142,"delete":4,"insert":"\n\t"},{"start":10147,"delete":5,"insert":"\n\n\t"},{"start":10173,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":10212,"delete":0,"insert":"BackendRenderPipeline."},{"start":10236,"delete":7,"insert":"\n\t\t"},{"start":10248,"delete":10,"insert":"\n\t\t\t"},{"start":10270,"delete":10,"insert":"\n\t\t\t"},{"start":10354,"delete":13,"insert":"\n\t\t\t\t"},{"start":10404,"delete":13,"insert":"\n\t\t\t\t"},{"start":10421,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":10493,"delete":14,"insert":"\n\n\t\t\t\t"},{"start":10512,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":10551,"delete":16,"insert":"\n\t\t\t\t\t"},{"start":10627,"delete":13,"insert":"\n\t\t\t\t"},{"start":10641,"delete":14,"insert":"\n\n\t\t\t\t"},{"start":10680,"delete":10,"insert":"\n\t\t\t"},{"start":10691,"delete":11,"insert":"\n\n\t\t\t"},{"start":10714,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":10735,"delete":7,"insert":"\n\t\t"},{"start":10781,"delete":10,"insert":"\n\t\t\t"},{"start":10873,"delete":10,"insert":"\n\t\t\t"},{"start":10895,"delete":7,"insert":"\n\t\t"},{"start":10903,"delete":4,"insert":"\n\t"},{"start":10908,"delete":5,"insert":"\n\n\t"},{"start":10955,"delete":0,"insert":"\n\t\t"},{"start":10961,"delete":0,"insert":"BackendRenderPipeline."},{"start":10994,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":11027,"delete":0,"insert":"\n\t"},{"start":11030,"delete":7,"insert":"\n\t\t"},{"start":11103,"delete":8,"insert":"\n\n\t\t"},{"start":11183,"delete":10,"insert":"\n\t\t\t"},{"start":11230,"delete":11,"insert":"\n\n\t\t\t"},{"start":11246,"delete":0,"insert":[{"copy":379,"length":33}]},{"start":11285,"delete":13,"insert":"\n\t\t\t\t"},{"start":11354,"delete":13,"insert":"\n\t\t\t\t"},{"start":11475,"delete":13,"insert":"\n\t\t\t\t"},{"start":11542,"delete":16,"insert":"\n\t\t\t\t\t"},{"start":11570,"delete":13,"insert":"\n\t\t\t\t"},{"start":11584,"delete":14,"insert":"\n\n\t\t\t\t"},{"start":11634,"delete":10,"insert":"\n\t\t\t"},{"start":11645,"delete":11,"insert":"\n\n\t\t\t"},{"start":11728,"delete":10,"insert":"\n\t\t\t"},{"start":11792,"delete":10,"insert":"\n\t\t\t"},{"start":11840,"delete":10,"insert":"\n\t\t\t"},{"start":11866,"delete":7,"insert":"\n\t\t"},{"start":11940,"delete":10,"insert":"\n\t\t\t"},{"start":12033,"delete":10,"insert":"\n\t\t\t"},{"start":12055,"delete":7,"insert":"\n\t\t"},{"start":12073,"delete":10,"insert":"\n\t\t\t"},{"start":12138,"delete":7,"insert":"\n\t\t"},{"start":12146,"delete":4,"insert":"\n\t"}]
+[
+  {
+    "start": 208,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 261,
+        "length": 63
+      },
+      ";\n"
+    ]
+  },
+  {
+    "start": 291,
+    "delete": 159,
+    "insert": ""
+  },
+  {
+    "start": 467,
+    "delete": 7,
+    "insert": "BakedShaders"
+  },
+  {
+    "start": 717,
+    "delete": 27,
+    "insert": "import java.util.ArrayList;\nimport java.util.HashMap;\n"
+  },
+  {
+    "start": 767,
+    "delete": 25,
+    "insert": ""
+  },
+  {
+    "start": 971,
+    "delete": 245,
+    "insert": ""
+  },
+  {
+    "start": 1278,
+    "delete": 3,
+    "insert": "\t"
+  },
+  {
+    "start": 1339,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1390,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1468,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1544,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1620,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1711,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1754,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 1804,
+    "delete": 5,
+    "insert": "\n\t// Deduplicates compiled shader handles across pipelines sharing identical VS/FS source.\n\t// GlProgram.link() does not delete attached shaders, so retained handles stay valid for reuse.\n\tprivate final Map<String, GlShaderModule> shaderCache = new HashMap<>();\n\n\t"
+  },
+  {
+    "start": 1909,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 1947,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 2009,
+    "delete": 4,
+    "insert": [
+      "\n\t}\n\n\tprivate static String shaderCacheKey(",
+      {
+        "copy": 9442,
+        "length": 45
+      },
+      "\n\t\treturn (type == ShaderType.VERTEX ? \"V:\" : \"F:\") + source;\n\t"
+    ]
+  },
+  {
+    "start": 2014,
+    "delete": 5,
+    "insert": "\n\n\t"
+  },
+  {
+    "start": 2056,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 2112,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 2167,
+    "delete": 16,
+    "insert": "\n\t\tif"
+  },
+  {
+    "start": 2184,
+    "delete": 5,
+    "insert": "(this.drawParametersSupported || SHADER_DEBUG_MODE || !\"main\".equals(shaderCreateInfo.entryPoint())) {\n\t\t\tthrow new ShaderCompileException(\"Baked GLSL assumes drawParametersSupported=false, no shader debug mode and entry point main (\"\n\t\t\t\t+ shaderCreateInfo.name() + \")\");\n\t\t}\n\t\tlong hash"
+  },
+  {
+    "start": 2192,
+    "delete": 0,
+    "insert": "BakedShaders.fnv1a64("
+  },
+  {
+    "start": 2207,
+    "delete": 13,
+    "insert": ""
+  },
+  {
+    "start": 2222,
+    "delete": 11,
+    "insert": "\n\t\tString"
+  },
+  {
+    "start": 2234,
+    "delete": 11,
+    "insert": "glsl"
+  },
+  {
+    "start": 2248,
+    "delete": 304,
+    "insert": "BakedShaders"
+  },
+  {
+    "start": 2557,
+    "delete": 1,
+    "insert": ""
+  },
+  {
+    "start": 2559,
+    "delete": 18,
+    "insert": ""
+  },
+  {
+    "start": 2578,
+    "delete": 12,
+    "insert": "glsl"
+  },
+  {
+    "start": 2591,
+    "delete": 41,
+    "insert": "hash"
+  },
+  {
+    "start": 2634,
+    "delete": 1198,
+    "insert": ""
+  },
+  {
+    "start": 3848,
+    "delete": 0,
+    "insert": ");\n\t\tif (glsl"
+  },
+  {
+    "start": 3852,
+    "delete": 17,
+    "insert": "null"
+  },
+  {
+    "start": 3872,
+    "delete": 45,
+    "insert": "\n\t\t\tthrow new ShaderCompileException"
+  },
+  {
+    "start": 3918,
+    "delete": 9,
+    "insert": "\"No"
+  },
+  {
+    "start": 3928,
+    "delete": 14,
+    "insert": "baked"
+  },
+  {
+    "start": 3943,
+    "delete": 2,
+    "insert": "GLSL for"
+  },
+  {
+    "start": 3947,
+    "delete": 49,
+    "insert": ""
+  },
+  {
+    "start": 3997,
+    "delete": 10,
+    "insert": "+ shaderCreateInfo"
+  },
+  {
+    "start": 4008,
+    "delete": 4,
+    "insert": "name"
+  },
+  {
+    "start": 4015,
+    "delete": 98,
+    "insert": "+"
+  },
+  {
+    "start": 4115,
+    "delete": 58,
+    "insert": ""
+  },
+  {
+    "start": 4175,
+    "delete": 17,
+    "insert": "\""
+  },
+  {
+    "start": 4193,
+    "delete": 150,
+    "insert": "+"
+  },
+  {
+    "start": 4361,
+    "delete": 2,
+    "insert": "+"
+  },
+  {
+    "start": 4364,
+    "delete": 10,
+    "insert": "\", spv \" + Long"
+  },
+  {
+    "start": 4375,
+    "delete": 8,
+    "insert": "toHexString(hash"
+  },
+  {
+    "start": 4385,
+    "delete": 117,
+    "insert": "+"
+  },
+  {
+    "start": 4504,
+    "delete": 24,
+    "insert": ")"
+  },
+  {
+    "start": 4531,
+    "delete": 10,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 4542,
+    "delete": 816,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 5365,
+    "delete": 5,
+    "insert": "glsl"
+  },
+  {
+    "start": 5371,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 5376,
+    "delete": 4010,
+    "insert": "\n\n\t"
+  },
+  {
+    "start": 9484,
+    "delete": 0,
+    "insert": ", final String cacheKey"
+  },
+  {
+    "start": 9487,
+    "delete": 7,
+    "insert": "\n\t\tGlShaderModule cached = this.shaderCache.get(cacheKey);\n\t\tif (cached != null) {\n\t\t\treturn cached;\n\t\t}\n\t\t"
+  },
+  {
+    "start": 9559,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 9614,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 9662,
+    "delete": 9,
+    "insert": "\n\t\t//"
+  },
+  {
+    "start": 9672,
+    "delete": 15,
+    "insert": "Defer COMPILE_STATUS check until link failure so KHR_parallel_shader_compile compiles VS & FS concurrently"
+  },
+  {
+    "start": 9688,
+    "delete": 311,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10064,
+    "delete": 10,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10110,
+    "delete": 10,
+    "insert": "\n\t\tthis.shaderCache.put(cacheKey, module);\n\t\t"
+  },
+  {
+    "start": 10134,
+    "delete": 12,
+    "insert": "\n\t"
+  },
+  {
+    "start": 10147,
+    "delete": 5,
+    "insert": "\n\n\t"
+  },
+  {
+    "start": 10173,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 10212,
+    "delete": 0,
+    "insert": "BackendRenderPipeline."
+  },
+  {
+    "start": 10236,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10248,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 10270,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 10354,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 10404,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 10421,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 10493,
+    "delete": 14,
+    "insert": "\n\n\t\t\t\t"
+  },
+  {
+    "start": 10512,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 10551,
+    "delete": 16,
+    "insert": "\n\t\t\t\t\t"
+  },
+  {
+    "start": 10627,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 10641,
+    "delete": 14,
+    "insert": "\n\n\t\t\t\t"
+  },
+  {
+    "start": 10680,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 10691,
+    "delete": 11,
+    "insert": "\n\n\t\t\t"
+  },
+  {
+    "start": 10714,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 10735,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10781,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 10873,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 10895,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10903,
+    "delete": 4,
+    "insert": "\n\t"
+  },
+  {
+    "start": 10908,
+    "delete": 5,
+    "insert": "\n\n\t"
+  },
+  {
+    "start": 10955,
+    "delete": 0,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 10961,
+    "delete": 0,
+    "insert": "BackendRenderPipeline."
+  },
+  {
+    "start": 10994,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 11027,
+    "delete": 0,
+    "insert": "\n\t"
+  },
+  {
+    "start": 11030,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 11103,
+    "delete": 8,
+    "insert": "\n\t\tList<String> compiledKeys = new ArrayList<>();\n\n\t\t"
+  },
+  {
+    "start": 11183,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 11230,
+    "delete": 11,
+    "insert": "\n\n\t\t\t"
+  },
+  {
+    "start": 11246,
+    "delete": 0,
+    "insert": [
+      {
+        "copy": 379,
+        "length": 33
+      }
+    ]
+  },
+  {
+    "start": 11285,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 11354,
+    "delete": 13,
+    "insert": "\n\t\t\t\tShaderType type = shader.module().type();\n\t\t\t\tString cacheKey = shaderCacheKey(type, decompiledSource);\n\t\t\t\t"
+  },
+  {
+    "start": 11433,
+    "delete": 16,
+    "insert": ""
+  },
+  {
+    "start": 11453,
+    "delete": 2,
+    "insert": ""
+  },
+  {
+    "start": 11473,
+    "delete": 0,
+    "insert": ", cacheKey"
+  },
+  {
+    "start": 11475,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 11542,
+    "delete": 16,
+    "insert": "\n\t\t\t\t\t"
+  },
+  {
+    "start": 11570,
+    "delete": 13,
+    "insert": "\n\t\t\t\t"
+  },
+  {
+    "start": 11584,
+    "delete": 14,
+    "insert": "\n\n\t\t\t\t"
+  },
+  {
+    "start": 11634,
+    "delete": 10,
+    "insert": "\n\t\t\t\tcompiledKeys.add(cacheKey);\n\t\t\t"
+  },
+  {
+    "start": 11645,
+    "delete": 11,
+    "insert": "\n\n\t\t\t"
+  },
+  {
+    "start": 11728,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 11792,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 11840,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 11866,
+    "delete": 7,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 11940,
+    "delete": 10,
+    "insert": [
+      "\n\t\t\tfor (int i = 0; i < compiledShaders.size(); i++) {\n\t\t\t\tGlShaderModule s = compiledShaders.get(i);\n\t\t\t\tint shaderId = s.getShaderId();\n\t\t\t\tif (shaderId >= 0 && ",
+      {
+        "copy": 9673,
+        "length": 52
+      },
+      "\n\t\t\t\t\t",
+      {
+        "copy": 9735,
+        "length": 86
+      },
+      "\n\t\t\t\t\t",
+      {
+        "copy": 9831,
+        "length": 65
+      },
+      "s.getType().getName(), s.getLabel(), logInfo);\n\t\t\t\t\tthis.shaderCache.remove(compiledKeys.get(i), s);\n\t\t\t\t\ts.close();\n\t\t\t\t}\n\t\t\t}\n\t\t\t"
+    ]
+  },
+  {
+    "start": 12033,
+    "delete": 10,
+    "insert": "\n\t\t\t"
+  },
+  {
+    "start": 12055,
+    "delete": 90,
+    "insert": "\n\t\t"
+  },
+  {
+    "start": 12146,
+    "delete": 4,
+    "insert": "\n\t"
+  }
+]

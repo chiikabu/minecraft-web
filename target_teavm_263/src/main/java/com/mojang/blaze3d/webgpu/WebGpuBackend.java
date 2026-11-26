@@ -140,6 +140,11 @@ public class WebGpuBackend implements GpuBackend {
 
 	public static final int STARTUP_FRAMES = 300;
 	private static int reportedErrors;
+	private static boolean reloading;
+
+	public static boolean deviceLost() {
+		return WebGpuNatives.state().startsWith("lost");
+	}
 
 	public static boolean startupHealthy(int frames) {
 		String state = WebGpuNatives.state();
@@ -159,7 +164,19 @@ public class WebGpuBackend implements GpuBackend {
 	}
 
 	public static void reloadWithWebGl(String why) {
+		if (reloading) {
+			return;
+		}
+		reloading = true;
 		System.out.println("[26.3-web] graphics: WebGPU failed after start (" + why + "); reloading with WebGL2");
+		try {
+			net.minecraft.client.web.WebSaves.flush();
+		} catch (Throwable ignored) {
+		}
+		try {
+			org.lwjgl.glfw.GLFW.setUnloadPrompt(false);
+		} catch (Throwable ignored) {
+		}
 		reloadWithWebGlJs(why);
 	}
 
@@ -177,8 +194,26 @@ public class WebGpuBackend implements GpuBackend {
 	@JSBody(script = "try { return sessionStorage.getItem('minecraft-web.webgpuFailed') || ''; } catch (e) { return ''; }")
 	private static native String fallbackReason();
 
-	@JSBody(params = {"why"}, script = "try { sessionStorage.setItem('minecraft-web.webgpuFailed', String(why).slice(0, 200)); } catch (e) {}\n"
-		+ "window.location.reload();")
+	@JSBody(params = {"why"}, script =
+		"var marked = false;\n"
+		+ "try { sessionStorage.setItem('minecraft-web.webgpuFailed', String(why).slice(0, 200)); marked = !!sessionStorage.getItem('minecraft-web.webgpuFailed'); } catch (e) {}\n"
+		+ "if (marked) {\n"
+		+ "  window.location.reload();\n"
+		+ "  return;\n"
+		+ "}\n"
+		+ "try {\n"
+		+ "  var u = new URL(window.location.href);\n"
+		+ "  u.searchParams.delete('webgpu');\n"
+		+ "  u.searchParams.set('webgl', '1');\n"
+		+ "  window.location.replace(u.toString());\n"
+		+ "} catch (e2) {\n"
+		+ "  var href = String(window.location.href || '');\n"
+		+ "  var hashIdx = href.indexOf('#');\n"
+		+ "  var base = hashIdx >= 0 ? href.slice(0, hashIdx) : href;\n"
+		+ "  var hash = hashIdx >= 0 ? href.slice(hashIdx) : '';\n"
+		+ "  var sep = base.indexOf('?') >= 0 ? '&' : '?';\n"
+		+ "  window.location.replace(base + sep + 'webgl=1' + hash);\n"
+		+ "}")
 	private static native void reloadWithWebGlJs(String why);
 
 	@JSBody(script = "return !!(navigator.gpu && navigator.gpu.requestAdapter);")
@@ -187,6 +222,39 @@ public class WebGpuBackend implements GpuBackend {
 	@JSBody(script = "if (window.__minecraftWebGpuState) { return; }\n"
 		+ "window.__minecraftWebGpuState = 'probing';\n"
 		+ "var t0 = performance.now();\n"
+		+ "function buildDeviceDesc(adapter) {\n"
+		+ "  var desc = {};\n"
+		+ "  var reqFeatures = [];\n"
+		+ "  var wantFeatures = ['indirect-first-instance', 'timestamp-query', 'float32-filterable', 'depth-clip-control', 'bgra8unorm-storage'];\n"
+		+ "  if (adapter.features && typeof adapter.features.has === 'function') {\n"
+		+ "    for (var fi = 0; fi < wantFeatures.length; fi++) {\n"
+		+ "      if (adapter.features.has(wantFeatures[fi])) { reqFeatures.push(wantFeatures[fi]); }\n"
+		+ "    }\n"
+		+ "  }\n"
+		+ "  if (reqFeatures.length) { desc.requiredFeatures = reqFeatures; }\n"
+		+ "  var reqLimits = {};\n"
+		+ "  var hasLimits = false;\n"
+		+ "  var desired = {\n"
+		+ "    maxBufferSize: 536870912,\n"
+		+ "    maxStorageBufferBindingSize: 268435456,\n"
+		+ "    maxTextureDimension2D: 16384,\n"
+		+ "    maxUniformBufferBindingSize: 262144,\n"
+		+ "    maxComputeWorkgroupStorageSize: 32768,\n"
+		+ "    maxComputeInvocationsPerWorkgroup: 1024,\n"
+		+ "    maxColorAttachmentBytesPerSample: 64\n"
+		+ "  };\n"
+		+ "  if (adapter.limits) {\n"
+		+ "    for (var lk in desired) {\n"
+		+ "      var av = adapter.limits[lk];\n"
+		+ "      if (typeof av === 'number' && isFinite(av) && av > 0) {\n"
+		+ "        reqLimits[lk] = Math.min(desired[lk], av);\n"
+		+ "        hasLimits = true;\n"
+		+ "      }\n"
+		+ "    }\n"
+		+ "  }\n"
+		+ "  if (hasLimits) { desc.requiredLimits = reqLimits; }\n"
+		+ "  return desc;\n"
+		+ "}\n"
 		+ "navigator.gpu.requestAdapter({powerPreference: 'high-performance'}).then(function (adapter) {\n"
 		+ "  if (window.__minecraftWebGpuState !== 'probing') { return; }\n"
 		+ "  if (!adapter) { window.__minecraftWebGpuState = 'no adapter'; return; }\n"
@@ -195,12 +263,15 @@ public class WebGpuBackend implements GpuBackend {
 		+ "  window.__minecraftWebGpuLimits = limits;\n"
 		+ "  window.__minecraftWebGpuAdapterInfo = adapter.info || {};\n"
 		+ "  if (adapter.isFallbackAdapter) { window.__minecraftWebGpuState = 'software fallback adapter'; return; }\n"
-		+ "  return adapter.requestDevice().then(function (device) {\n"
+		+ "  var desc = buildDeviceDesc(adapter);\n"
+		+ "  return adapter.requestDevice(desc).catch(function () { return adapter.requestDevice(); }).then(function (device) {\n"
 		+ "    if (window.__minecraftWebGpuState !== 'probing') { try { device.destroy(); } catch (e) {} return; }\n"
 		+ "    window.__minecraftWebGpuDevice = device;\n"
 		+ "    window.__minecraftWebGpuState = 'ready';\n"
 		+ "    window.__minecraftWebGpuProbeMs = Math.round(performance.now() - t0);\n"
-		+ "    device.lost.then(function (info) { window.__minecraftWebGpuState = 'lost: ' + info.reason; });\n"
+		+ "    if (device.lost && typeof device.lost.then === 'function') {\n"
+		+ "      device.lost.then(function (info) { window.__minecraftWebGpuState = 'lost: ' + (info ? info.reason : 'unknown'); });\n"
+		+ "    }\n"
 		+ "  });\n"
 		+ "}).catch(function (e) {\n"
 		+ "  if (window.__minecraftWebGpuState === 'probing') { window.__minecraftWebGpuState = 'error: ' + e; }\n"

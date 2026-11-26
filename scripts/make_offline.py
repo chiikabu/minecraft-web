@@ -59,6 +59,7 @@ from minecraft_xz import (
     xml_utf8_encode,
 )
 from build_xz_decoder import build as build_decoder
+from ogvp_v4 import encode_ogg_pack
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(REPO, "target_teavm_263", "javascript-wasm-gc")
@@ -205,7 +206,7 @@ def optimize_assets_bundle(assets_bytes, index_bytes):
     new_index_bytes = json.dumps(new_index, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return b"".join(out_chunks), new_index_bytes, counts
 
-def object_pack(sounds_mode):
+def object_pack(sounds_mode, use_ogvp=True, zig="zig"):
     served = gzip.decompress(read(os.path.join(SRC, "objects.bin.gz")))
     served_map = json.loads(text(os.path.join(SRC, "objects_sha.json")))
     sounds = json.loads(text(os.path.join(SRC, "sounds_index.json")))
@@ -216,30 +217,41 @@ def object_pack(sounds_mode):
         sha_map[sha] = [offset, length]
         offset += length
     missing = 0
+    ogvp_paths = {}
     if sounds_mode != "none":
         for name, sha in sorted(sounds.items()):
-            if sha in sha_map:
+            if sha in sha_map or sha in ogvp_paths:
                 continue
             if sounds_mode == "sfx" and ("/music/" in name or "/records/" in name):
                 continue
-            path = os.path.join(MC_OBJECTS, sha[:2], sha)
+            path = os.path.join(SRC, "objects", sha[:2], sha)
+            if not os.path.isfile(path):
+                path = os.path.join(MC_OBJECTS, sha[:2], sha)
             if not os.path.isfile(path):
                 missing += 1
                 continue
             data = read(path)
             if hashlib.sha1(data).hexdigest() != sha:
                 raise ValueError("object %s does not match its hash" % path)
-            chunks.append(data)
-            sha_map[sha] = [offset, len(data)]
-            offset += len(data)
+            if use_ogvp and len(data) >= 64 and data[:4] == b"OggS":
+                ogvp_paths[sha] = path
+            else:
+                chunks.append(data)
+                sha_map[sha] = [offset, len(data)]
+                offset += len(data)
     if missing:
         print("warning: %d sound objects missing from %s" % (missing, MC_OBJECTS))
 
-    sounds = {name: sha for name, sha in sounds.items() if sha in sha_map}
+    ogvp_meta, ogvp_audio, ogvp_wasm = b"", b"", b""
+    if ogvp_paths:
+        ogvp_meta, ogvp_audio, ogvp_wasm = encode_ogg_pack(ogvp_paths, zig=zig)
+
+    present = set(sha_map) | set(ogvp_paths)
+    sounds = {name: sha for name, sha in sounds.items() if sha in present}
     languages["files"] = {name: sha for name, sha in languages["files"].items() if sha in sha_map}
     languages["languages"] = {name: info for name, info in languages["languages"].items()
                               if name == "en_us" or name in languages["files"]}
-    return b"".join(chunks), sha_map, sounds, languages
+    return b"".join(chunks), sha_map, sounds, languages, ogvp_meta, ogvp_audio, ogvp_wasm
 
 XML_PRELUDE = r"""(function () {
 	var X = "http://www.w3.org/1999/xhtml";
@@ -282,7 +294,54 @@ BOOT = r""""use strict";
 			window.__minecraftWebGpuLimits = limits;
 			window.__minecraftWebGpuAdapterInfo = adapter.info || {};
 			if (adapter.isFallbackAdapter) { window.__minecraftWebGpuState = "software fallback adapter"; return null; }
-			return adapter.requestDevice().then(function (device) {
+			var info = window.__minecraftWebGpuAdapterInfo;
+			var gpuDesc = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(" ");
+			var isDiscreteRe = /NVIDIA|GeForce|RTX|GTX|Quadro|Radeon\s*(RX|Pro)|Arc\s*A\d|Apple\s*M/i;
+			var isIntegratedRe = /Intel|UHD|HD Graphics|Iris|Radeon\(TM\) Graphics|Vega|Mali|Adreno/i;
+			var forceWebGpu = false;
+			try { var sp2 = new URLSearchParams(location.search); forceWebGpu = sp2.get("webgpu") === "1"; } catch (e) {}
+			if (!forceWebGpu && gpuDesc && isIntegratedRe.test(gpuDesc) && !isDiscreteRe.test(gpuDesc)) {
+				try {
+					var probeCanvas = document.createElement("canvas");
+					var probeGl = probeCanvas.getContext("webgl2", { powerPreference: "high-performance" });
+					var dbg = probeGl && probeGl.getExtension("WEBGL_debug_renderer_info");
+					var glName = dbg ? String(probeGl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : "";
+					var loseP = probeGl && probeGl.getExtension("WEBGL_lose_context");
+					if (loseP) { loseP.loseContext(); }
+					if (glName && isDiscreteRe.test(glName)) {
+						console.info("[26.3-gpu] WebGPU selected integrated GPU (" + gpuDesc + ") while discrete GPU (" + glName + ") is available via WebGL2; preferring discrete GPU");
+						window.__minecraftWebGpuState = "discrete-webgl2-preferred: " + glName;
+						return null;
+					}
+				} catch (e) {}
+			}
+			var desc = {};
+			var reqFeatures = [];
+			var wantFeatures = ["indirect-first-instance", "timestamp-query", "float32-filterable", "depth-clip-control", "bgra8unorm-storage"];
+			if (adapter.features && typeof adapter.features.has === "function") {
+				for (var fi = 0; fi < wantFeatures.length; fi++) {
+					if (adapter.features.has(wantFeatures[fi])) { reqFeatures.push(wantFeatures[fi]); }
+				}
+			}
+			if (reqFeatures.length) { desc.requiredFeatures = reqFeatures; }
+			var reqLimits = {}, hasLimits = false;
+			var desired = {
+				maxBufferSize: 536870912, maxStorageBufferBindingSize: 268435456,
+				maxTextureDimension2D: 16384, maxUniformBufferBindingSize: 262144,
+				maxComputeWorkgroupStorageSize: 32768, maxComputeInvocationsPerWorkgroup: 1024,
+				maxColorAttachmentBytesPerSample: 64
+			};
+			if (adapter.limits) {
+				for (var lk in desired) {
+					var av = adapter.limits[lk];
+					if (typeof av === "number" && isFinite(av) && av > 0) {
+						reqLimits[lk] = Math.min(desired[lk], av);
+						hasLimits = true;
+					}
+				}
+			}
+			if (hasLimits) { desc.requiredLimits = reqLimits; }
+			return adapter.requestDevice(desc).catch(function () { return adapter.requestDevice(); }).then(function (device) {
 				if (window.__minecraftWebGpuState !== "probing") { try { device.destroy(); } catch (e) {} return null; }
 				window.__minecraftWebGpuDevice = device;
 				window.__minecraftWebGpuState = "ready";
@@ -311,8 +370,10 @@ BOOT = r""""use strict";
 		].join("\n");
 		proto.shaderSource = function (shader, source) {
 			var t = String(source);
-			t = t.split("floatfloat(").join("float(");
-			t = t.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
+			if (t.indexOf("floatfloat(") >= 0) { t = t.split("floatfloat(").join("float("); }
+			if (t.indexOf("_frag_output_00") >= 0) {
+				t = t.replace(/_frag_output_00\s*\[\s*attachmentIndex\s*\]\s*\[\s*i_1\s*\]\s*=\s*coefficients\s*\[\s*\(\s*attachmentIndex\s*\*\s*4\s*\)\s*\+\s*i_1\s*\]\s*;/g, unrolled);
+			}
 			return shaderSource.call(this, shader, t);
 		};
 	}
@@ -348,7 +409,7 @@ BOOT = r""""use strict";
 			}
 			if (!glProbeReady) { return false; }
 			weakGpu = false;
-			var gl = document.createElement("canvas").getContext("webgl2");
+			var gl = document.createElement("canvas").getContext("webgl2", { powerPreference: "high-performance" });
 			var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
 			var name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
 			weakGpu = WEAK_GPU_RE.test(name);
@@ -440,7 +501,74 @@ BOOT = r""""use strict";
 		return b && b.length >= 8 && b[0] === 0 && b[1] === 97 && b[2] === 115 && b[3] === 109;
 	}
 
-	function installObjectShim(bin, map) {
+	async function createOgvpDecoder(wasmBytes, metaBytes, audioBytes) {
+		if (!wasmBytes || !metaBytes || !audioBytes || !wasmBytes.length || !metaBytes.length) { return null; }
+		var loaded = await WebAssembly.instantiate(wasmBytes, {});
+		var ex = loaded.instance.exports;
+		if (typeof ex._initialize === "function") { ex._initialize(); }
+		var dv = new DataView(metaBytes.buffer, metaBytes.byteOffset, metaBytes.byteLength);
+		var magic = "";
+		for (var mi = 0; mi < 8; mi++) { magic += String.fromCharCode(metaBytes[mi]); }
+		if (magic !== "OGVP4M01") { throw new Error("Invalid OGVP4M01 header"); }
+		var numSetups = dv.getUint32(8, true);
+		var numEntries = dv.getUint32(12, true);
+		var priorSize = dv.getUint32(16, true);
+		var off = 20;
+		for (var sid = 0; sid < numSetups; sid++) {
+			var il = dv.getUint16(off, true), sl = dv.getUint16(off + 2, true);
+			off += 4;
+			var idB = metaBytes.subarray(off, off + il); off += il;
+			var suB = metaBytes.subarray(off, off + sl); off += sl;
+			var prB = metaBytes.subarray(off, off + priorSize); off += priorSize;
+			var pId = ex.malloc(il) >>> 0, pSu = ex.malloc(sl) >>> 0, pPr = ex.malloc(priorSize) >>> 0;
+			var mem = new Uint8Array(ex.memory.buffer);
+			mem.set(idB, pId); mem.set(suB, pSu); mem.set(prB, pPr);
+			var rc = ex.ogvp_init_setup(sid, pId, il, pSu, sl, pPr);
+			ex.free(pId); ex.free(pSu); ex.free(pPr);
+			if (rc !== 0) { throw new Error("OGVP setup init failed: " + rc); }
+		}
+		var HEX = "0123456789abcdef";
+		var entries = Object.create(null);
+		for (var ei = 0; ei < numEntries; ei++) {
+			var sha = "";
+			for (var hi = 0; hi < 20; hi++) {
+				var b = metaBytes[off + hi];
+				sha += HEX[(b >>> 4) & 15] + HEX[b & 15];
+			}
+			off += 20;
+			var origLen = dv.getUint32(off, true); off += 4;
+			var aOff = dv.getUint32(off, true); off += 4;
+			var aLen = dv.getUint32(off, true); off += 4;
+			var mLen = dv.getUint32(off, true); off += 4;
+			entries[sha] = [origLen, aOff, aLen, off, mLen];
+			off += mLen;
+		}
+		var pM = 0, capM = 0, pA = 0, capA = 0, pO = 0, capO = 0;
+		return {
+			count: numEntries,
+			decode: function (sha) {
+				var e = entries[sha];
+				if (!e) { return null; }
+				var origLen = e[0], aOff = e[1], aLen = e[2], mOff = e[3], mLen = e[4];
+				var needO = origLen + 4096;
+				if (mLen > capM) { if (pM) { ex.free(pM); } capM = Math.max(4096, mLen); pM = ex.malloc(capM) >>> 0; }
+				if (aLen > capA) { if (pA) { ex.free(pA); } capA = Math.max(65536, aLen); pA = ex.malloc(capA) >>> 0; }
+				if (needO > capO) { if (pO) { ex.free(pO); } capO = Math.max(131072, needO); pO = ex.malloc(capO) >>> 0; }
+				var mem = new Uint8Array(ex.memory.buffer);
+				mem.set(metaBytes.subarray(mOff, mOff + mLen), pM);
+				mem.set(audioBytes.subarray(aOff, aOff + aLen), pA);
+				var outLen = ex.ogvp_decode_split(pM, mLen, pA, aLen, pO, capO);
+				if (outLen !== origLen) {
+					console.error("[26.3-offline] OGVP decode error for " + sha + ": " + outLen + " vs " + origLen);
+					return null;
+				}
+				mem = new Uint8Array(ex.memory.buffer);
+				return mem.slice(pO, pO + outLen);
+			}
+		};
+	}
+
+	function installObjectShim(bin, map, ogvp) {
 		var files = null;
 		var objectUrls = {};
 		var textFor = function (url) {
@@ -453,8 +581,10 @@ BOOT = r""""use strict";
 		var sliceFor = function (url) {
 			var m = /objects\/[0-9a-f]{2}\/([0-9a-f]{40})/.exec(url || "");
 			if (!m) { return null; }
-			var span = map[m[1]];
-			return span ? bin.subarray(span[0], span[0] + span[1]) : null;
+			var sha = m[1];
+			var span = map[sha];
+			if (span) { return bin.subarray(span[0], span[0] + span[1]); }
+			return ogvp ? ogvp.decode(sha) : null;
 		};
 		window.__minecraftObjectUrl = function (url) {
 			var m = /objects\/[0-9a-f]{2}\/([0-9a-f]{40})/.exec(url || "");
@@ -592,8 +722,12 @@ BOOT = r""""use strict";
 							removeEl(document.getElementById("p-loader"));
 							stage("Compiling", 40);
 							console.info("[26.3-offline] warm-boot hit from IndexedDB cache");
+						} else if (compilePromise) {
+							compilePromise.catch(function () {});
+							compilePromise = null;
 						}
 					} catch (cacheErr) {
+						if (compilePromise) { compilePromise.catch(function () {}); }
 						warmHit = false;
 						wasm = null;
 						rest = null;
@@ -673,11 +807,25 @@ BOOT = r""""use strict";
 			var assets = rest.assets.slice();
 			var objects = rest.objects.slice();
 			var shaderPacks = rest.shaderpacks ? rest.shaderpacks.slice() : null;
+			var ogvpWasm = rest.ogvp_wasm ? rest.ogvp_wasm.slice() : null;
+			var ogvpMeta = rest.ogvp_meta ? rest.ogvp_meta.slice() : null;
 			rest = null;
+			var ogvp = null;
+			var sfxEl = document.getElementById("p-sfx");
+			if (sfxEl && ogvpWasm && ogvpMeta) {
+				var sfxT0 = performance.now();
+				var ogvpAudio = window.__minecraftPayloadDecode(sfxEl);
+				removeEl(sfxEl);
+				ogvp = await createOgvpDecoder(ogvpWasm, ogvpMeta, ogvpAudio);
+				ogvpWasm = null;
+				console.info("[26.3-offline] OGVP-V4 lazy audio decoder ready (" + (ogvp ? ogvp.count : 0) + " sounds, " + Math.round(performance.now() - sfxT0) + "ms)");
+			} else if (sfxEl) {
+				removeEl(sfxEl);
+			}
 			window.__minecraftAssetsBinRaw = assets;
 			window.__minecraftWorkerAssetsRaw = assets;
 			window.__minecraftWorkerAssetsIndex = window.__minecraftAssetsIndex;
-			installObjectShim(objects, meta.objects);
+			installObjectShim(objects, meta.objects, ogvp);
 			shell.mark("assets");
 
 			stage("Compiling", 45);
@@ -816,9 +964,10 @@ def load_archive_from_bundle(path, verify_archive=False):
             version = build_match.group(1)
             wasm_sha = build_match.group(2)
             inferred_variant = build_match.group(3)
-    cache_match = re.search(r'<meta\s+name="minecraft-cache-key"\s+content="([0-9a-f]+)_([^"]+)"', doc)
+    cache_match = re.search(r'<meta\s+name="minecraft-cache-key"\s+content="([0-9a-f]+)(?:_[0-9a-f]+)?_([^"_]+)"', doc)
     if cache_match:
-        wasm_sha = cache_match.group(1)
+        if len(cache_match.group(1)) >= len(wasm_sha):
+            wasm_sha = cache_match.group(1)
         inferred_variant = cache_match.group(2)
 
     wasm_body, wasm_enc = _extract_script_payload_with_enc(doc, "p-wasm")
@@ -853,6 +1002,11 @@ def load_archive_from_bundle(path, verify_archive=False):
             out["wasm_" + wasm_enc] = wasm_body
         if rest_enc in ("b122", "xutf"):
             out["rest_" + rest_enc] = rest_body
+        sfx_body, sfx_enc = _extract_script_payload_with_enc(doc, "p-sfx")
+        if sfx_body is not None:
+            out["sfx_packed"] = _decode_payload_text(sfx_body, sfx_enc)
+            if sfx_enc in ("b122", "xutf"):
+                out["sfx_" + sfx_enc] = sfx_body
         return out
 
     # Legacy single-stream bundle reuse
@@ -873,7 +1027,7 @@ def load_archive_from_bundle(path, verify_archive=False):
     return {"version": version, "meta": meta, "xz": xz_body, "xz_enc": xz_enc, "loader": loader_b64,
             "variant": inferred_variant}
 
-def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None, prebuilt_decoder=None):
+def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None, prebuilt_decoder=None, use_ogvp=True):
     started = time.time()
     wasm_dir = os.path.join(SRC, "wasm-gc")
     wasm = read(os.path.join(wasm_dir, "classes263.wasm"))
@@ -891,7 +1045,8 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
         sounds_mode, len(raw_assets) / 1e6, len(assets) / 1e6,
         opt_counts["nbt"], opt_counts["zip"], opt_counts["png"], opt_counts["json"]), flush=True)
 
-    objects, sha_map, sounds, languages = object_pack(sounds_mode)
+    objects, sha_map, sounds, languages, ogvp_meta, ogvp_audio, ogvp_wasm = object_pack(
+        sounds_mode, use_ogvp=use_ogvp, zig=zig)
     version = json.loads(text(os.path.join(SRC, "version.json")))["id"]
     files = {
         "sounds_index.json": json.dumps(sounds, separators=(",", ":")),
@@ -903,6 +1058,9 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
     meta = {"version": version, "files": files, "objects": sha_map, "sounds": sounds_mode,
             "wasmSha256": sha256(wasm), "runtimeSha256": sha256(runtime), "assetsSha256": sha256(assets),
             "built": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if ogvp_audio:
+        meta["ogvp"] = "v4"
+        meta["sfxSha256"] = sha256(ogvp_audio)
     packs, pack_spans = shader_pack_bundle(shaderpacks_dir)
     if pack_spans:
         meta["shaderpacks"] = pack_spans
@@ -915,14 +1073,18 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
         "assets": assets,
         "objects": objects,
     }
+    if ogvp_meta and ogvp_wasm:
+        rest_entries["ogvp_wasm"] = ogvp_wasm
+        rest_entries["ogvp_meta"] = ogvp_meta
     for entry_key, filename in PACKED_SCRIPTS:
         rest_entries[entry_key] = read(os.path.join(SRC, filename))
     if pack_spans:
         rest_entries["shaderpacks"] = packs
         print("[%s] shader packs: %d, %.1f MB" % (sounds_mode, len(pack_spans), len(packs) / 1e6), flush=True)
 
-    print("[%s] 2-stream archive: wasm %.1f MB | rest: assets %.1f MB, objects %.1f MB (%d sounds), %d packed JS; xz -%d%s ..." % (
+    print("[%s] 2-stream archive: wasm %.1f MB | rest: assets %.1f MB, objects %.1f MB (%d sounds%s), %d packed JS; xz -%d%s ..." % (
         sounds_mode, len(wasm) / 1e6, len(assets) / 1e6, len(objects) / 1e6, len(sounds),
+        (", OGVP-V4 %.2f MB raw audio" % (len(ogvp_audio) / 1e6)) if ogvp_audio else "",
         len(PACKED_SCRIPTS), xz_preset, "e" if xz_extreme else ""), flush=True)
     loader_wasm = load_prebuilt_decoder(prebuilt_decoder) if prebuilt_decoder else build_decoder(zig)
 
@@ -935,22 +1097,29 @@ def build_archive(sounds_mode, xz_preset, xz_extreme, zig, shaderpacks_dir=None,
     unpacked_wasm = unpack_container(wasm_packed)
     unpacked_rest = unpack_container(rest_packed)
     if unpacked_wasm["wasm"] != wasm or unpacked_rest["assets"] != assets or unpacked_rest["objects"] != objects \
-            or (pack_spans and unpacked_rest["shaderpacks"] != packs):
+            or (pack_spans and unpacked_rest["shaderpacks"] != packs) \
+            or (ogvp_meta and (unpacked_rest["ogvp_meta"] != ogvp_meta or unpacked_rest["ogvp_wasm"] != ogvp_wasm)):
         raise ValueError("archive round trip failed")
     for entry_key, _ in PACKED_SCRIPTS:
         if unpacked_rest[entry_key] != rest_entries[entry_key]:
             raise ValueError("packed script round trip failed: " + entry_key)
 
-    print("[%s] compressed %.1f MB -> %.1f MB (wasm %.1f MB + rest %.1f MB) in %.0fs" % (
-        sounds_mode, (wasm_raw_b + rest_raw_b) / 1e6, (wasm_packed_b + rest_packed_b) / 1e6,
-        wasm_packed_b / 1e6, rest_packed_b / 1e6, time.time() - started), flush=True)
-    return {
+    print("[%s] compressed %.1f MB -> %.1f MB (wasm %.1f MB + rest %.1f MB%s) in %.0fs" % (
+        sounds_mode, (wasm_raw_b + rest_raw_b) / 1e6,
+        (wasm_packed_b + rest_packed_b + len(ogvp_audio)) / 1e6,
+        wasm_packed_b / 1e6, rest_packed_b / 1e6,
+        (" + ogvp-v4 %.1f MB" % (len(ogvp_audio) / 1e6)) if ogvp_audio else "",
+        time.time() - started), flush=True)
+    res = {
         "version": version,
         "meta": meta,
         "wasm_packed": wasm_packed,
         "rest_packed": rest_packed,
         "loader": base64.b64encode(loader_wasm).decode("ascii"),
     }
+    if ogvp_audio:
+        res["sfx_packed"] = ogvp_audio
+    return res
 
 def page_parts():
     mesh = text(os.path.join(SRC, "minecraft-web-mesh.js"))
@@ -992,8 +1161,9 @@ def _encode_stream(archive, key, fmt):
 def render(fmt, parts, archive, variant):
     xml = fmt != "html"
     wasm_sha = archive["meta"]["wasmSha256"]
+    rest_sha = sha256(archive["rest_packed"])[:16] if "rest_packed" in archive else ""
     build_tag = "%s offline, engine %s, %s" % (archive["version"], wasm_sha[:12], variant)
-    cache_key = "%s_%s" % (wasm_sha, variant)
+    cache_key = "%s_%s_%s" % (wasm_sha[:32], rest_sha, variant) if rest_sha else "%s_%s" % (wasm_sha, variant)
 
     def script(source, name, attrs=""):
         body = cdata("\n" + source + "\n") if xml else "\n" + html_raw(source, name) + "\n"
@@ -1048,6 +1218,9 @@ def render(fmt, parts, archive, variant):
         rest_text, rest_enc = _encode_stream(archive, "rest", fmt)
         body.append(data("p-wasm", wasm_text, wasm_enc))
         body.append(data("p-rest", rest_text, rest_enc))
+        if archive.get("sfx_packed"):
+            sfx_text, sfx_enc = _encode_stream(archive, "sfx", fmt)
+            body.append(data("p-sfx", sfx_text, sfx_enc))
     else:
         body.append(data("p-xz", archive["xz"], archive.get("xz_enc", "h85")))
     body.append(script(BOOT, "boot"))
@@ -1088,6 +1261,8 @@ def main():
     parser.add_argument("--variants", nargs="+", choices=sorted(VARIANTS), default=None)
     parser.add_argument("--xz-preset", type=int, choices=range(0, 10), default=8)
     parser.add_argument("--no-xz-extreme", action="store_true")
+    parser.add_argument("--no-ogvp", action="store_true",
+                        help="disable OGVP-V4 lossless Vorbis bitstream re-coding for sound variants")
     parser.add_argument("--zig", default=DEFAULT_ZIG if os.path.isfile(DEFAULT_ZIG) else "zig")
     parser.add_argument("--prebuilt-decoder", metavar="PATH",
                         help="use a prebuilt XZ decoder .wasm or extract p-loader from an existing offline bundle instead of running zig")
@@ -1116,7 +1291,8 @@ def main():
             parser.error("--out requires exactly one format and one variant")
         archive_iter = (
             (variant, build_archive(VARIANTS[variant], args.xz_preset, not args.no_xz_extreme, args.zig,
-                                    args.shaderpacks, prebuilt_decoder=args.prebuilt_decoder))
+                                    args.shaderpacks, prebuilt_decoder=args.prebuilt_decoder,
+                                    use_ogvp=(not args.no_ogvp and not args.prebuilt_decoder)))
             for variant in variants
         )
 

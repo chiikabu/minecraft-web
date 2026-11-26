@@ -41,7 +41,7 @@ public class TCollections extends TObject {
             return false;
         }
         @Override public boolean containsAll(TCollection<?> c) {
-            return false;
+            return c.isEmpty();
         }
     };
 
@@ -427,13 +427,13 @@ public class TCollections extends TObject {
         if (sz < 0) {
             return -1;
         }
-        if (source instanceof RandomAccess) {
+        if (!(source instanceof RandomAccess)) {
             source = new TArrayList<>(source);
         }
         outer: for (int i = 0; i <= sz; ++i) {
             int j = i;
             for (TIterator<?> iter = target.iterator(); iter.hasNext();) {
-                if (!iter.next().equals(source.get(j++))) {
+                if (!TObjects.equals(iter.next(), source.get(j++))) {
                     continue outer;
                 }
             }
@@ -447,13 +447,13 @@ public class TCollections extends TObject {
         if (start < 0) {
             return -1;
         }
-        if (source instanceof RandomAccess) {
+        if (!(source instanceof RandomAccess)) {
             source = new TArrayList<>(source);
         }
         outer: for (int i = start; i >= 0; --i) {
             int j = i;
             for (TIterator<?> iter = target.iterator(); iter.hasNext();) {
-                if (!iter.next().equals(source.get(j++))) {
+                if (!TObjects.equals(iter.next(), source.get(j++))) {
                     continue outer;
                 }
             }
@@ -864,7 +864,7 @@ public class TCollections extends TObject {
         if (cmp == null) {
             return reverseOrder();
         }
-        return (o1, o2) -> -cmp.compare(o1, o2);
+        return (o1, o2) -> cmp.compare(o2, o1);
     }
 
     public static <T> TEnumeration<T> enumeration(TCollection<T> c) {

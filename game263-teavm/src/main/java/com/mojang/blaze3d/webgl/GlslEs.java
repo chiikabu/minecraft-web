@@ -19,6 +19,12 @@ public final class GlslEs {
 	private static final String[] SAMPLER_TYPES = {
 		"sampler2DArray", "sampler2DShadow", "usampler2D", "isampler2D", "samplerCube", "sampler3D", "sampler2D"
 	};
+	private static final Pattern[] SAMPLER_TYPE_PATTERNS = new Pattern[SAMPLER_TYPES.length];
+	static {
+		for (int i = 0; i < SAMPLER_TYPES.length; i++) {
+			SAMPLER_TYPE_PATTERNS[i] = Pattern.compile("\\b" + SAMPLER_TYPES[i] + "\\b");
+		}
+	}
 
 	private static final Pattern TERRAIN_RGSS_BRANCH = Pattern.compile(
 		"if \\([^)]*\\.UseRgss == 1\\)\\s*\\{\\s*vec2 param = (\\w+);\\s*vec2 param_1 = [^;]+;\\s*(\\w+) = sampleRGSS\\((\\w+), param, param_1\\);\\s*\\}\\s*else\\s*\\{[^}]*\\}"
@@ -28,27 +34,37 @@ public final class GlslEs {
 		if (fragmentShader && "true".equals(System.getProperty("web263.fastTerrainShader")) && source.contains("sampleRGSS(")) {
 			source = TERRAIN_RGSS_BRANCH.matcher(source).replaceAll("$2 = texture($3, $1);");
 		}
-		source = stubOutTextureBuffers(source);
+		source = lowerTextureBuffers(source);
 		source = addExplicitIntToFloatCasts(source);
-		Matcher versionMatch = VERSION_LINE.matcher(source);
 		String body;
 		int versionLineEnd;
-		if (versionMatch.find()) {
-			body = source.substring(0, versionMatch.start()) + "#version 300 es" + source.substring(versionMatch.end());
-			versionLineEnd = versionMatch.start() + "#version 300 es".length();
+		if (source.contains("version")) {
+			Matcher versionMatch = VERSION_LINE.matcher(source);
+			if (versionMatch.find()) {
+				body = source.substring(0, versionMatch.start()) + "#version 300 es" + source.substring(versionMatch.end());
+				versionLineEnd = versionMatch.start() + "#version 300 es".length();
+			} else {
+				body = "#version 300 es\n" + source;
+				versionLineEnd = "#version 300 es".length();
+			}
 		} else {
 			body = "#version 300 es\n" + source;
 			versionLineEnd = "#version 300 es".length();
 		}
 
-		body = EXTENSION_LINE.matcher(body).replaceAll("");
+		if (body.contains("extension")) {
+			body = EXTENSION_LINE.matcher(body).replaceAll("");
+		}
 
 		StringBuilder precision = new StringBuilder();
 		precision.append("precision highp float;\n");
 		precision.append("precision highp int;\n");
-		for (String type : SAMPLER_TYPES) {
-			if (Pattern.compile("\\b" + type + "\\b").matcher(body).find()) {
-				precision.append("precision highp ").append(type).append(";\n");
+		if (body.contains("sampler")) {
+			for (int i = 0; i < SAMPLER_TYPES.length; i++) {
+				String type = SAMPLER_TYPES[i];
+				if (body.contains(type) && SAMPLER_TYPE_PATTERNS[i].matcher(body).find()) {
+					precision.append("precision highp ").append(type).append(";\n");
+				}
 			}
 		}
 
@@ -76,67 +92,164 @@ public final class GlslEs {
 	);
 
 	static String addExplicitIntToFloatCasts(String source) {
-		source = LIGHTMAP_UV_DIV.matcher(source).replaceAll("vec2(uv) / 256.0");
-		source = VERTEX_ID_DIV.matcher(source).replaceAll("float(gl_VertexID $1 $2) / $3");
-		source = CHUNK_OFFSET.matcher(source).replaceAll("vec3(ChunkPosition - CameraBlockPos)");
-		source = TEXTURE_SIZE_DIV.matcher(source).replaceAll("/ vec2(TextureSize)");
-		source = LIGHTMAP_LEVEL.matcher(source).replaceAll("floor($1 * 16.0) / 15.0");
-		source = FOG_INT_LITERAL.matcher(source).replaceAll("linear_fog_value($1, $2.0,");
-		return TEXTURE_LOD_CALL.matcher(source).replaceAll("textureLod($1,$2, float($3))");
+		if (source.contains("256.0") && source.contains("uv")) {
+			source = LIGHTMAP_UV_DIV.matcher(source).replaceAll("vec2(uv) / 256.0");
+		}
+		if (source.contains("gl_VertexID")) {
+			source = VERTEX_ID_DIV.matcher(source).replaceAll("float(gl_VertexID $1 $2) / $3");
+		}
+		if (source.contains("ChunkPosition")) {
+			source = CHUNK_OFFSET.matcher(source).replaceAll("vec3(ChunkPosition - CameraBlockPos)");
+		}
+		if (source.contains("TextureSize")) {
+			source = TEXTURE_SIZE_DIV.matcher(source).replaceAll("/ vec2(TextureSize)");
+		}
+		if (source.contains("texCoord.")) {
+			source = LIGHTMAP_LEVEL.matcher(source).replaceAll("floor($1 * 16.0) / 15.0");
+		}
+		if (source.contains("linear_fog_value(")) {
+			source = FOG_INT_LITERAL.matcher(source).replaceAll("linear_fog_value($1, $2.0,");
+		}
+		if (source.contains("textureLod")) {
+			source = TEXTURE_LOD_CALL.matcher(source).replaceAll("textureLod($1,$2, float($3))");
+		}
+		return source;
 	}
 
 	private static final Pattern SAMPLER_BUFFER_DECL = Pattern.compile(
-		"(?m)^[ \\t]*uniform[ \\t]+([iu]?)samplerBuffer[ \\t]+(\\w+)[ \\t]*;[ \\t]*$"
+		"(?m)^([ \\t]*uniform[ \\t]+)(?:(?:highp|mediump|lowp)[ \\t]+)?([iu]?)samplerBuffer([ \\t]+)(\\w+)([ \\t]*;[ \\t]*)$"
 	);
 
-	static String stubOutTextureBuffers(String source) {
-		Matcher decl = SAMPLER_BUFFER_DECL.matcher(source);
-		String stripped = decl.replaceAll("");
-		if (stripped.equals(source)) {
+	static String lowerTextureBuffers(String source) {
+		if (!source.contains("samplerBuffer")) {
 			return source;
 		}
-		decl.reset();
+		Matcher decl = SAMPLER_BUFFER_DECL.matcher(source);
+		java.util.ArrayList<String> samplers = null;
+		StringBuilder rewritten = new StringBuilder(source.length() + 32);
+		int from = 0;
 		while (decl.find()) {
-			String zero = decl.group(1).isEmpty() ? "vec4(0.0)" : decl.group(1) + "vec4(0)";
-			stripped = replaceTexelFetch(stripped, decl.group(2), zero);
+			if (samplers == null) {
+				samplers = new java.util.ArrayList<>(2);
+			}
+			samplers.add(decl.group(4));
+			rewritten.append(source, from, decl.start())
+				.append(decl.group(1))
+				.append("highp ")
+				.append(decl.group(2))
+				.append("sampler2D")
+				.append(decl.group(3))
+				.append(decl.group(4))
+				.append(decl.group(5));
+			from = decl.end();
 		}
-		return stripped;
+		if (samplers == null) {
+			return source;
+		}
+		rewritten.append(source, from, source.length());
+		String out = rewritten.toString();
+		if (out.contains("texelFetch")) {
+			for (int i = 0; i < samplers.size(); i++) {
+				out = rewriteBufferTexelFetch(out, samplers.get(i));
+			}
+		}
+		return out;
 	}
 
-	private static String replaceTexelFetch(String source, String sampler, String zero) {
-		String needle = "texelFetch(" + sampler;
-		StringBuilder out = new StringBuilder();
+	private static boolean isIdentChar(char c) {
+		return Character.isLetterOrDigit(c) || c == '_';
+	}
+
+	private static String rewriteBufferTexelFetch(String source, String sampler) {
+		final String fn = "texelFetch";
+		final int fnLen = fn.length();
+		final int sLen = sampler.length();
+		final int srcLen = source.length();
+		StringBuilder out = new StringBuilder(srcLen + 64);
 		int from = 0;
 		int at;
-		while ((at = source.indexOf(needle, from)) >= 0) {
-			int argStart = at + needle.length();
-			char next = argStart < source.length() ? source.charAt(argStart) : ' ';
-			if (Character.isLetterOrDigit(next) || next == '_') {
-				out.append(source, from, argStart);
-				from = argStart;
+		while ((at = source.indexOf(fn, from)) >= 0) {
+			if (at > 0 && isIdentChar(source.charAt(at - 1))) {
+				out.append(source, from, at + fnLen);
+				from = at + fnLen;
 				continue;
 			}
+			int p = at + fnLen;
+			while (p < srcLen && Character.isWhitespace(source.charAt(p))) {
+				p++;
+			}
+			if (p >= srcLen || source.charAt(p) != '(') {
+				out.append(source, from, at + fnLen);
+				from = at + fnLen;
+				continue;
+			}
+			int openParen = p;
+			p++;
+			while (p < srcLen && Character.isWhitespace(source.charAt(p))) {
+				p++;
+			}
+			if (p + sLen > srcLen || !source.regionMatches(p, sampler, 0, sLen)
+				|| (p + sLen < srcLen && isIdentChar(source.charAt(p + sLen)))) {
+				out.append(source, from, openParen + 1);
+				from = openParen + 1;
+				continue;
+			}
+			p += sLen;
+			while (p < srcLen && Character.isWhitespace(source.charAt(p))) {
+				p++;
+			}
+			if (p >= srcLen || source.charAt(p) != ',') {
+				out.append(source, from, openParen + 1);
+				from = openParen + 1;
+				continue;
+			}
+			int commaPos = p;
 			int depth = 1;
-			int i = argStart;
-			while (i < source.length() && depth > 0) {
-				char c = source.charAt(i++);
+			int i = commaPos + 1;
+			boolean extraComma = false;
+			while (i < srcLen && depth > 0) {
+				char c = source.charAt(i);
 				if (c == '(') {
 					depth++;
 				} else if (c == ')') {
 					depth--;
+					if (depth == 0) {
+						break;
+					}
+				} else if (c == ',' && depth == 1) {
+					extraComma = true;
 				}
+				i++;
 			}
-			out.append(source, from, at).append(zero);
-			from = i;
+			if (depth != 0 || extraComma) {
+				out.append(source, from, openParen + 1);
+				from = openParen + 1;
+				continue;
+			}
+			String idxExpr = source.substring(commaPos + 1, i).trim();
+			if (idxExpr.contains(fn)) {
+				idxExpr = rewriteBufferTexelFetch(idxExpr, sampler);
+			}
+			out.append(source, from, at)
+				.append("texelFetch(").append(sampler)
+				.append(", ivec2((").append(idxExpr).append(") % textureSize(").append(sampler).append(", 0).x, (")
+				.append(idxExpr).append(") / textureSize(").append(sampler).append(", 0).x), 0)");
+			from = i + 1;
 		}
-		return out.append(source, from, source.length()).toString();
+		return out.append(source, from, srcLen).toString();
 	}
 
 	public static String resolveImports(String source, Function<String, String> loader) {
+		if (!source.contains("moj_import")) {
+			return source;
+		}
 		return resolveImports(source, loader, "minecraft:", new HashSet<>());
 	}
 
 	private static String resolveImports(String source, Function<String, String> loader, String currentDir, Set<String> imported) {
+		if (!source.contains("moj_import")) {
+			return source;
+		}
 		Matcher m = MOJ_IMPORT.matcher(source);
 		StringBuilder out = new StringBuilder();
 		int last = 0;
@@ -174,6 +287,9 @@ public final class GlslEs {
 	}
 
 	private static String commentOutVersionLines(String s) {
+		if (!s.contains("version")) {
+			return s;
+		}
 		Matcher vm = VERSION_LINE.matcher(s);
 		StringBuilder sb = new StringBuilder();
 		int last = 0;

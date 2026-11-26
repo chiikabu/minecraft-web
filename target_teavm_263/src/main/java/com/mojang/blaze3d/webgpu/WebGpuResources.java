@@ -36,6 +36,7 @@ final class WebGpuTexture extends BaseGpuTexture {
 	final JSObject handle;
 	final int id = WebGpuIds.next();
 	final String wgpuFormat;
+	boolean boundInGroup;
 	private boolean closed;
 
 	WebGpuTexture(int usage, String label, GpuFormat format, int width, int height, int depth, int mips, JSObject handle, String wgpuFormat) {
@@ -52,7 +53,9 @@ final class WebGpuTexture extends BaseGpuTexture {
 	public void close() {
 		if (!closed) {
 			closed = true;
-			WebGpuIds.closeGeneration++;
+			if (boundInGroup) {
+				WebGpuIds.closeGeneration++;
+			}
 			WebGpuNatives.destroy(handle);
 		}
 	}
@@ -68,6 +71,7 @@ final class WebGpuTextureView extends BaseGpuTextureView {
 	private JSObject attachmentHandle;
 	final int id = WebGpuIds.next();
 	final WebGpuTexture tex;
+	boolean boundInGroup;
 	private boolean closed;
 
 	WebGpuTextureView(WebGpuTexture texture, int baseMip, int mips) {
@@ -85,8 +89,12 @@ final class WebGpuTextureView extends BaseGpuTextureView {
 
 	@Override
 	public void close() {
-		closed = true;
-		WebGpuIds.closeGeneration++;
+		if (!closed) {
+			closed = true;
+			if (boundInGroup) {
+				WebGpuIds.closeGeneration++;
+			}
+		}
 	}
 
 	@Override
@@ -102,6 +110,7 @@ final class WebGpuBuffer extends BaseGpuBuffer {
 	final boolean owned;
 	byte[] shadow;
 	long cpu;
+	boolean boundInGroup;
 	private boolean closed;
 
 	WebGpuBuffer(int usage, long size, JSObject handle, boolean owned, byte[] shadow) {
@@ -146,7 +155,9 @@ final class WebGpuBuffer extends BaseGpuBuffer {
 	public void close() {
 		if (!closed) {
 			closed = true;
-			WebGpuIds.closeGeneration++;
+			if (boundInGroup) {
+				WebGpuIds.closeGeneration++;
+			}
 			WebGpuNatives.dropLater(jsId);
 			if (owned) {
 				WebGpuNatives.destroy(handle);
@@ -213,6 +224,7 @@ final class WebGpuSampler implements GpuSampler {
 	private final int aniso;
 	private final OptionalDouble lod;
 	final boolean filtering;
+	boolean boundInGroup;
 	private boolean closed;
 
 	WebGpuSampler(AddressMode u, AddressMode v, FilterMode min, FilterMode mag, int aniso, OptionalDouble lod) {
@@ -273,8 +285,12 @@ final class WebGpuSampler implements GpuSampler {
 
 	@Override
 	public void close() {
-		closed = true;
-		WebGpuIds.closeGeneration++;
+		if (!closed) {
+			closed = true;
+			if (boundInGroup) {
+				WebGpuIds.closeGeneration++;
+			}
+		}
 	}
 }
 

@@ -2,6 +2,7 @@
 
 package net.minecraft.client.web.shaderpack;
 
+import com.mojang.blaze3d.webgpu.WebGpuBackend;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -9,25 +10,29 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.MultiLineTextWidget;
 import net.minecraft.client.gui.components.ObjectSelectionList;
-import net.minecraft.client.gui.components.StringWidget;
 import net.minecraft.client.gui.layouts.LinearLayout;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.OptionsSubScreen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.web.WebSaves;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import org.jspecify.annotations.Nullable;
+import org.teavm.jso.JSBody;
 
 public class ShaderPackScreen extends OptionsSubScreen {
 	private static final Component TITLE = Component.literal("Shader Packs");
 	private static final Component OFF = Component.literal("(Off)");
+	private static final int FOOTER_HEIGHT = 96;
 	private @Nullable PackList packList;
 	private @Nullable MultiLineTextWidget statusLine;
 	private @Nullable Button optionsButton;
+	private @Nullable Button applyReloadButton;
+	private boolean reloading;
 
 	public ShaderPackScreen(final Screen lastScreen, final Options options) {
 		super(lastScreen, options, TITLE);
-		this.layout.setFooterHeight(72);
+		this.layout.setFooterHeight(FOOTER_HEIGHT);
 	}
 
 	@Override
@@ -41,21 +46,45 @@ public class ShaderPackScreen extends OptionsSubScreen {
 
 	@Override
 	protected void addFooter() {
-		LinearLayout footer = this.layout.addToFooter(LinearLayout.vertical()).spacing(6);
+		LinearLayout footer = this.layout.addToFooter(LinearLayout.vertical()).spacing(4);
 		footer.defaultCellSetting().alignHorizontallyCenter();
-		this.statusLine = footer.addChild(new MultiLineTextWidget(this.statusText(), this.font).setMaxWidth(310).setCentered(true));
+		this.statusLine = footer.addChild(new MultiLineTextWidget(this.statusText(), this.font).setMaxWidth(318).setCentered(true));
+		this.applyReloadButton = footer.addChild(Button.builder(Component.literal("Apply & Reload"), b -> this.onApplyAndReload()).width(150).build());
 		LinearLayout buttons = footer.addChild(LinearLayout.horizontal().spacing(6));
 		buttons.addChild(Button.builder(Component.literal("Add Pack..."), b -> ShaderPacks.choosePack(this::refresh)).width(75).build());
 		this.optionsButton = buttons.addChild(Button.builder(Component.literal("Options..."), b -> this.openOptions()).width(75).build());
 		buttons.addChild(Button.builder(Component.literal("Remove"), b -> this.removeSelected()).width(75).build());
 		buttons.addChild(Button.builder(CommonComponents.GUI_DONE, b -> this.onDone()).width(75).build());
-		this.updateOptionsButton();
+		this.updateSelectionState();
 	}
 
-	private void updateOptionsButton() {
-		if (this.optionsButton != null) {
-			this.optionsButton.active = this.packList != null && this.packList.getSelected() != null && this.packList.getSelected().file != null;
+	private @Nullable String pickedFile() {
+		return this.packList != null && this.packList.getSelected() != null ? this.packList.getSelected().file : ShaderPacks.selected();
+	}
+
+	private static boolean canSwitchToWebGpu() {
+		return !WebGpuBackend.live() && WebGpuBackend.override() >= 0 && hasWebGpuJs();
+	}
+
+	private boolean needsBackendReload() {
+		String picked = this.pickedFile();
+		if (WebGpuBackend.live()) {
+			return picked != null;
 		}
+		return picked == null && canSwitchToWebGpu();
+	}
+
+	private void updateSelectionState() {
+		String picked = this.pickedFile();
+		if (this.optionsButton != null) {
+			this.optionsButton.active = picked != null && !this.reloading;
+		}
+		if (this.applyReloadButton != null) {
+			boolean show = this.needsBackendReload();
+			this.applyReloadButton.visible = show;
+			this.applyReloadButton.active = show && !this.reloading;
+		}
+		this.updateStatus();
 	}
 
 	private void openOptions() {
@@ -71,13 +100,26 @@ public class ShaderPackScreen extends OptionsSubScreen {
 	@Override
 	public void added() {
 		super.added();
-		this.updateStatus();
+		this.updateSelectionState();
 	}
 
 	private Component statusText() {
+		if (this.reloading) {
+			return Component.literal("Saving selection and reloading...").withColor(0xFFFFD866);
+		}
+		String picked = this.pickedFile();
+		if (WebGpuBackend.live() && picked != null) {
+			String name = picked.endsWith(".zip") ? picked.substring(0, picked.length() - 4) : picked;
+			return Component.literal("Shader packs need WebGL2. Click 'Apply & Reload' to switch to WebGL2 for " + name + ".")
+				.withColor(0xFFFFD866);
+		}
+		if (!WebGpuBackend.live() && picked == null && canSwitchToWebGpu()) {
+			return Component.literal("Shaders off. Click 'Apply & Reload' to switch back to WebGPU, or Done to stay on WebGL2.")
+				.withColor(0xFFA0E0FF);
+		}
 		String selected = ShaderPacks.selected();
 		if (selected == null) {
-			return Component.literal("Shaders are off. Packs shade terrain and water, cast terrain shadows and run their effects; entities and sky stay vanilla.")
+			return Component.literal("Shaders are off. Packs shade terrain, water, entities and cast terrain shadows.")
 				.withColor(0xFFA0A0A0);
 		}
 		String s = ShaderPacks.status();
@@ -102,7 +144,7 @@ public class ShaderPackScreen extends OptionsSubScreen {
 		if (this.packList != null && this.packList.getSelected() != null && this.packList.getSelected().file != null) {
 			ShaderPacks.remove(this.packList.getSelected().file);
 			this.packList.reload();
-			this.updateStatus();
+			this.updateSelectionState();
 		}
 	}
 
@@ -110,6 +152,19 @@ public class ShaderPackScreen extends OptionsSubScreen {
 		if (this.statusLine != null) {
 			this.statusLine.setMessage(this.statusText());
 		}
+	}
+
+	private void onApplyAndReload() {
+		if (this.reloading) {
+			return;
+		}
+		this.reloading = true;
+		if (this.packList != null && this.packList.getSelected() != null) {
+			ShaderPacks.select(this.packList.getSelected().file);
+		}
+		WebSaves.flush();
+		this.updateSelectionState();
+		reloadPageSoon();
 	}
 
 	private void onDone() {
@@ -124,9 +179,15 @@ public class ShaderPackScreen extends OptionsSubScreen {
 		this.onDone();
 	}
 
+	@JSBody(script = "return !!(typeof navigator !== 'undefined' && navigator.gpu && navigator.gpu.requestAdapter);")
+	private static native boolean hasWebGpuJs();
+
+	@JSBody(script = "setTimeout(function() { window.location.reload(); }, 150);")
+	private static native void reloadPageSoon();
+
 	private final class PackList extends ObjectSelectionList<PackList.Entry> {
 		PackList(final Minecraft minecraft) {
-			super(minecraft, ShaderPackScreen.this.width, ShaderPackScreen.this.height - 33 - 72, 33, 18);
+			super(minecraft, ShaderPackScreen.this.width, ShaderPackScreen.this.height - 33 - FOOTER_HEIGHT, 33, 18);
 			this.reload();
 		}
 
@@ -150,7 +211,7 @@ public class ShaderPackScreen extends OptionsSubScreen {
 		@Override
 		public void setSelected(final @Nullable Entry selected) {
 			super.setSelected(selected);
-			ShaderPackScreen.this.updateOptionsButton();
+			ShaderPackScreen.this.updateSelectionState();
 		}
 
 		@Override

@@ -247,7 +247,8 @@ public final class Web263MeshOffload {
       }
    }
 
-   private static final long PUBLISH_BUDGET_NANOS = 3_500_000L;
+   private static final long PUBLISH_BUDGET_NANOS = 6_000_000L;
+   private static final long PUBLISH_BURST_BUDGET_NANOS = 14_000_000L;
 
    private static boolean isThroughputMode() {
       net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
@@ -265,7 +266,8 @@ public final class Web263MeshOffload {
       }
 
       boolean bounded = !isThroughputMode();
-      long deadline = bounded ? System.nanoTime() + PUBLISH_BUDGET_NANOS : Long.MAX_VALUE;
+      long budget = pending.size() >= 16 ? PUBLISH_BURST_BUDGET_NANOS : PUBLISH_BUDGET_NANOS;
+      long deadline = bounded ? System.nanoTime() + budget : Long.MAX_VALUE;
       int published = 0;
 
       int length;

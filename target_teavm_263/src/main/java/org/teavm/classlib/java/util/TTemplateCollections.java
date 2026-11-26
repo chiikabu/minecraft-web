@@ -779,6 +779,11 @@ public final class TTemplateCollections {
         public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> remappingFunction) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     static class ImmutableEntry<K, V> implements TMap.Entry<K, V>, Cloneable {

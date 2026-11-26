@@ -2,39 +2,42 @@
 
 package net.minecraft.client.web.mods;
 
+import com.mojang.blaze3d.webgpu.WebGpuBackend;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.ObjectSelectionList;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.web.shaderpack.ShaderPacks;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Clean Minecraft-styled Modrinth project details &amp; version picker screen.
- * Fetches project metadata, icon thumbnail, version list, and downloadable artifacts
- * strictly through the configured WISP Relays via {@link ModrinthClient}.
+ * Minecraft-styled Modrinth project details &amp; version picker screen.
+ * Works both directly over HTTPS and through configured WISP Relays, previews required
+ * dependencies, and auto-installs missing dependencies bottom-up.
  */
 public class ModrinthProjectScreen extends Screen {
 	private static final int COLOR_WHITE = -1;
 	private static final int COLOR_LIGHT = 0xFFD4D4D4;
 	private static final int COLOR_MUTED = 0xFFA0A0A0;
 	private static final int COLOR_DIM = 0xFF7A7A7A;
-	private static final int COLOR_GREEN = 0xFF55FF55;
-	private static final int COLOR_AQUA = 0xFF55FFFF;
-	private static final int COLOR_GOLD = 0xFFFFAA00;
-	private static final int COLOR_ERROR = 0xFFFF5555;
+	private static final int COLOR_SUCCESS = 0xFF7CE88C;
+	private static final int COLOR_SKY = 0xFF7AD7F0;
+	private static final int COLOR_AMBER = 0xFFF5C156;
+	private static final int COLOR_ERROR = 0xFFFF6B6B;
 
-	private static final int HEADER_H = 26;
-	private static final int HERO_TOP = 30;
-	private static final int HERO_H = 76;
-	private static final int LIST_TOP = 122;
+	private static final int HERO_TOP = 28;
+	private static final int HERO_H = 74;
+	private static final int LIST_TOP = 120;
 	private static final int FOOTER_H = 54;
 
 	private final Screen lastScreen;
@@ -49,7 +52,12 @@ public class ModrinthProjectScreen extends Screen {
 	private int progressTotal;
 	private String statusMessage = "";
 	private int statusColor = COLOR_MUTED;
+	private String depPreviewText = "";
+	private String depPreviewVersionId = "";
 	private boolean loadedInitial;
+	private @Nullable String installedShaderFilename;
+	private boolean shaderNeedsWebGlReload;
+	private @Nullable String lastSelectedVersionId;
 
 	private @Nullable VersionList versionList;
 	private @Nullable Button installButton;
@@ -74,7 +82,7 @@ public class ModrinthProjectScreen extends Screen {
 			int totalW = 114 + 6 + 98 + 6 + 70;
 			int x = (this.width - totalW) / 2;
 			this.installButton = this.addRenderableWidget(
-				Button.builder(Component.literal("Install Version"), b -> this.installSelected())
+				Button.builder(Component.literal("Install Version"), b -> this.onInstallButtonClicked())
 					.bounds(x, btnY, 114, 20).build());
 			this.loaderFilterButton = this.addRenderableWidget(
 				Button.builder(Component.literal(this.fabricOnly ? "Loader: Fabric" : "Loader: All"), b -> this.toggleLoaderFilter())
@@ -86,7 +94,7 @@ public class ModrinthProjectScreen extends Screen {
 			int totalW = 128 + 8 + 80;
 			int x = (this.width - totalW) / 2;
 			this.installButton = this.addRenderableWidget(
-				Button.builder(Component.literal("Install Version"), b -> this.installSelected())
+				Button.builder(Component.literal("Install Version"), b -> this.onInstallButtonClicked())
 					.bounds(x, btnY, 128, 20).build());
 			this.loaderFilterButton = null;
 			this.addRenderableWidget(
@@ -109,7 +117,6 @@ public class ModrinthProjectScreen extends Screen {
 			this.hit.id,
 			d -> this.detail = d,
 			err -> {
-				// Hit metadata is already displayed; ignore non-fatal detail errors.
 			});
 	}
 
@@ -127,10 +134,12 @@ public class ModrinthProjectScreen extends Screen {
 	private void loadVersions() {
 		this.loadingVersions = true;
 		this.versions = new ArrayList<>();
-		this.statusMessage = "Loading versions via Relay...";
+		this.depPreviewText = "";
+		this.depPreviewVersionId = "";
+		this.statusMessage = "Loading versions...";
 		this.statusColor = COLOR_MUTED;
 		if (this.versionList != null) {
-			this.versionList.showMessage("Loading versions through Relay...");
+			this.versionList.showMessage("Loading versions from Modrinth...");
 		}
 		this.updateButtons();
 
@@ -141,7 +150,6 @@ public class ModrinthProjectScreen extends Screen {
 			list -> {
 				this.loadingVersions = false;
 				if (list.isEmpty() && this.fabricOnly) {
-					// Automatically fall back to all loaders if project has no Fabric-tagged releases
 					this.fabricOnly = false;
 					if (this.loaderFilterButton != null) {
 						this.loaderFilterButton.setMessage(Component.literal("Loader: All"));
@@ -155,13 +163,13 @@ public class ModrinthProjectScreen extends Screen {
 				}
 				if (list.isEmpty()) {
 					this.statusMessage = "No downloadable files found on Modrinth";
-					this.statusColor = COLOR_GOLD;
+					this.statusColor = COLOR_AMBER;
 				} else {
 					ModrinthClient.RelayInfo ri = ModrinthClient.relayInfo();
-					String via = ri.relayLabel.isEmpty() ? "Relay" : ri.badgeText();
-					this.statusMessage = list.size() + " versions loaded via " + via + " - select one to install";
+					this.statusMessage = list.size() + " versions via " + ri.badgeText() + " - double-click or press Enter to install";
 					this.statusColor = COLOR_MUTED;
 				}
+				this.updateDepPreview();
 				this.updateButtons();
 			},
 			err -> {
@@ -175,11 +183,83 @@ public class ModrinthProjectScreen extends Screen {
 			});
 	}
 
+	private void updateDepPreview() {
+		ModrinthClient.ProjectVersion sel = this.selectedVersion();
+		if (sel == null) {
+			this.depPreviewText = "";
+			this.depPreviewVersionId = "";
+			return;
+		}
+		if (sel.id.equals(this.depPreviewVersionId)) {
+			return;
+		}
+		this.depPreviewVersionId = sel.id;
+		if (sel.requiredDepIds.isEmpty()) {
+			this.depPreviewText = sel.requiredDepCount > 0
+				? (sel.requiredDepCount + " required dep(s) auto-installed")
+				: "";
+			return;
+		}
+		final String expectedId = sel.id;
+		this.depPreviewText = "Checking dependencies...";
+		ModrinthClient.fetchProjectNames(sel.requiredDepIds, names -> {
+			if (!expectedId.equals(this.depPreviewVersionId)) {
+				return;
+			}
+			if (names.isEmpty()) {
+				this.depPreviewText = sel.requiredDepCount + " required dep(s) auto-installed";
+				return;
+			}
+			StringBuilder sb = new StringBuilder("Requires: ");
+			for (int i = 0; i < Math.min(3, names.size()); i++) {
+				if (i > 0) {
+					sb.append(", ");
+				}
+				sb.append(names.get(i));
+			}
+			if (names.size() > 3) {
+				sb.append(" +").append(names.size() - 3);
+			}
+			sb.append(" (auto-installed)");
+			this.depPreviewText = sb.toString();
+		});
+	}
+
 	private ModrinthClient.@Nullable ProjectVersion selectedVersion() {
 		if (this.versionList == null || this.versionList.getSelected() == null) {
 			return null;
 		}
 		return this.versionList.getSelected().version;
+	}
+
+	private void onInstallButtonClicked() {
+		if (this.installing) {
+			return;
+		}
+		if (this.shaderNeedsWebGlReload && this.installedShaderFilename != null && !this.installedShaderFilename.isEmpty()) {
+			ShaderPacks.select(this.installedShaderFilename);
+			WebMods.reloadNow();
+			return;
+		}
+		this.installSelected();
+	}
+
+	private static String resolveInstalledShaderFilename(final String rawFilename) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < rawFilename.length() && out.length() < 80; i++) {
+			char c = rawFilename.charAt(i);
+			out.append(c == '/' || c == '\\' || c == ':' || c < ' ' ? '_' : c);
+		}
+		String sanitized = out.toString();
+		if (!sanitized.toLowerCase(Locale.ROOT).endsWith(".zip")) {
+			sanitized = sanitized + ".zip";
+		}
+		for (String existing : ShaderPacks.list()) {
+			if (existing.equals(sanitized) || existing.equalsIgnoreCase(sanitized) || existing.equalsIgnoreCase(rawFilename)) {
+				return existing;
+			}
+		}
+		return sanitized;
 	}
 
 	private void installSelected() {
@@ -191,13 +271,16 @@ public class ModrinthProjectScreen extends Screen {
 			return;
 		}
 		this.installing = true;
+		this.shaderNeedsWebGlReload = false;
+		this.installedShaderFilename = null;
 		this.progressLoaded = 0;
 		this.progressTotal = (int) Math.min(Integer.MAX_VALUE, Math.max(0L, v.fileSize));
-		this.statusMessage = "Downloading " + v.filename + " via Relay...";
-		this.statusColor = COLOR_AQUA;
+		this.statusMessage = "Downloading " + v.filename + "...";
+		this.statusColor = COLOR_SKY;
 		this.updateButtons();
 
 		String title = this.hit.title.isEmpty() ? this.hit.slug : this.hit.title;
+		final String installedFile = v.filename;
 		ModrinthClient.downloadAndInstall(
 			this.hit.id,
 			this.hit.slug,
@@ -222,8 +305,15 @@ public class ModrinthProjectScreen extends Screen {
 				this.installing = false;
 				this.progressLoaded = 0;
 				this.progressTotal = 0;
-				this.statusMessage = msg;
-				this.statusColor = ok ? COLOR_GREEN : COLOR_ERROR;
+				if (ok && "shader".equals(this.hit.projectType) && WebGpuBackend.live()) {
+					this.installedShaderFilename = resolveInstalledShaderFilename(installedFile);
+					this.shaderNeedsWebGlReload = true;
+					this.statusMessage = "Installed " + title + " - click 'Enable & Reload' to switch to WebGL2";
+					this.statusColor = COLOR_SUCCESS;
+				} else {
+					this.statusMessage = msg;
+					this.statusColor = ok ? COLOR_SUCCESS : COLOR_ERROR;
+				}
 				this.updateButtons();
 			});
 	}
@@ -232,10 +322,13 @@ public class ModrinthProjectScreen extends Screen {
 		ModrinthClient.ProjectVersion sel = this.selectedVersion();
 		if (this.installButton != null) {
 			if (this.installing) {
-				this.installButton.setMessage(Component.literal("Installing...").withColor(COLOR_GOLD));
+				this.installButton.setMessage(Component.literal("Installing..."));
 				this.installButton.active = false;
+			} else if (this.shaderNeedsWebGlReload && this.installedShaderFilename != null) {
+				this.installButton.setMessage(Component.literal("Enable & Reload").withColor(COLOR_SUCCESS));
+				this.installButton.active = true;
 			} else if (sel != null) {
-				this.installButton.setMessage(Component.literal("Install Version").withColor(COLOR_GREEN));
+				this.installButton.setMessage(Component.literal("Install Version"));
 				this.installButton.active = true;
 			} else {
 				this.installButton.setMessage(Component.literal("Install Version"));
@@ -248,6 +341,15 @@ public class ModrinthProjectScreen extends Screen {
 	}
 
 	@Override
+	public boolean keyPressed(final KeyEvent event) {
+		if (event.isConfirmation() && !this.installing && (this.shaderNeedsWebGlReload || this.selectedVersion() != null)) {
+			this.onInstallButtonClicked();
+			return true;
+		}
+		return super.keyPressed(event);
+	}
+
+	@Override
 	public void onClose() {
 		this.minecraft.gui.setScreen(this.lastScreen);
 	}
@@ -256,29 +358,29 @@ public class ModrinthProjectScreen extends Screen {
 	public void extractRenderState(final GuiGraphicsExtractor graphics, final int mouseX, final int mouseY, final float a) {
 		super.extractRenderState(graphics, mouseX, mouseY, a);
 
-		int panelW = Math.min(this.width - 20, 440);
+		int panelW = Math.min(this.width - 20, 444);
 		int panelL = (this.width - panelW) / 2;
 		int panelR = panelL + panelW;
 
-		// Top header title & relay indicator
+		// Header title & subtle route badge
 		graphics.centeredText(this.font, this.title, this.width / 2, 10, COLOR_WHITE);
 		ModrinthClient.RelayInfo ri = ModrinthClient.relayInfo();
-		String relayBadge = ri.badgeText();
-		int badgeColor = ri.relayCount > 0 ? COLOR_GREEN : COLOR_GOLD;
-		int badgeW = this.font.width(relayBadge);
-		graphics.text(this.font, relayBadge, Math.min(this.width - badgeW - 8, panelR - badgeW), 10, badgeColor);
+		String routeBadge = ri.badgeText();
+		int badgeColor = ri.needsRelaySetup() ? COLOR_AMBER : COLOR_MUTED;
+		int badgeW = this.font.width(routeBadge);
+		graphics.text(this.font, routeBadge, Math.min(this.width - badgeW - 8, panelR - badgeW), 10, badgeColor);
 
 		// Hero project summary card
 		int cardTop = HERO_TOP;
 		int cardBot = HERO_TOP + HERO_H;
-		graphics.fill(panelL, cardTop, panelR, cardBot, 0x88000000);
-		graphics.outline(panelL, cardTop, panelW, HERO_H, 0xFF3A3A3A);
+		graphics.fill(panelL, cardTop, panelR, cardBot, 0x84000000);
+		graphics.outline(panelL, cardTop, panelW, HERO_H, 0xFF3E3E3E);
 
 		// 48x48 thumbnail
 		int thumbX = panelL + 10;
-		int thumbY = cardTop + 14;
+		int thumbY = cardTop + 13;
 		int thumbSize = 48;
-		graphics.fill(thumbX - 1, thumbY - 1, thumbX + thumbSize + 1, thumbY + thumbSize + 1, 0xFF555555);
+		graphics.fill(thumbX - 1, thumbY - 1, thumbX + thumbSize + 1, thumbY + thumbSize + 1, 0xFF525252);
 		graphics.fill(thumbX, thumbY, thumbX + thumbSize, thumbY + thumbSize, 0xFF1A1A1A);
 		String iconUrl = (this.detail != null && !this.detail.iconUrl.isEmpty()) ? this.detail.iconUrl : this.hit.iconUrl;
 		Identifier tex = ModrinthClient.getOrRequestThumbnail(iconUrl, null);
@@ -295,19 +397,18 @@ public class ModrinthProjectScreen extends Screen {
 			graphics.centeredText(this.font, this.hit.monogram(), thumbX + thumbSize / 2, thumbY + thumbSize / 2 - 4, COLOR_WHITE);
 		}
 
-		// Right-hand hero text block
 		int tx = thumbX + thumbSize + 10;
 		int tw = Math.max(40, panelR - tx - 10);
 
 		// Line 1: title + author + right-aligned badges
 		String typeBadge = this.hit.typeBadge();
 		boolean installed = ModrinthClient.isInstalled(this.hit);
-		String instBadge = installed ? "[Installed]" : "";
 		int rightX = panelR - 10;
 		if (installed) {
+			String instBadge = "[Installed]";
 			int iw = this.font.width(instBadge);
 			rightX -= iw;
-			graphics.text(this.font, instBadge, rightX, cardTop + 8, COLOR_GREEN);
+			graphics.text(this.font, instBadge, rightX, cardTop + 8, COLOR_SUCCESS);
 			rightX -= 5;
 		}
 		int tbw = this.font.width(typeBadge);
@@ -327,7 +428,7 @@ public class ModrinthProjectScreen extends Screen {
 			graphics.text(this.font, fitText(titleStr, titleMaxW), tx, cardTop + 8, COLOR_WHITE);
 		}
 
-		// Line 2: stats (downloads, followers, license, client/server)
+		// Line 2: stats
 		long downloads = this.detail != null ? this.detail.downloads : this.hit.downloads;
 		long followers = this.detail != null ? this.detail.followers : this.hit.follows;
 		StringBuilder stats = new StringBuilder();
@@ -341,24 +442,31 @@ public class ModrinthProjectScreen extends Screen {
 		if (!this.hit.clientSide.isEmpty() && !"unknown".equals(this.hit.clientSide)) {
 			stats.append(" | Client: ").append(this.hit.clientSide);
 		}
-		graphics.text(this.font, fitText(stats.toString(), tw), tx, cardTop + 20, COLOR_AQUA);
+		graphics.text(this.font, fitText(stats.toString(), tw), tx, cardTop + 20, COLOR_SKY);
 
-		// Lines 3..5: wrapped description (max 3 clean lines)
+		// Lines 3..5: wrapped description
 		String desc = (this.detail != null && !this.detail.description.isEmpty())
 			? this.detail.description
 			: this.hit.description;
 		List<String> lines = wrapLines(desc, tw, 3);
 		for (int i = 0; i < lines.size(); i++) {
-			graphics.text(this.font, lines.get(i), tx, cardTop + 34 + i * 11, COLOR_LIGHT);
+			graphics.text(this.font, lines.get(i), tx, cardTop + 33 + i * 11, COLOR_LIGHT);
 		}
 
-		// Versions section header
-		graphics.text(this.font, "Available Versions", panelL + 2, LIST_TOP - 12, COLOR_WHITE);
-		String vCount = this.loadingVersions
-			? "Fetching..."
-			: (this.versions.size() + (this.fabricOnly ? " Fabric releases" : " files"));
-		int vcw = this.font.width(vCount);
-		graphics.text(this.font, vCount, panelR - vcw - 2, LIST_TOP - 12, COLOR_MUTED);
+		// Versions section header + live dependency preview
+		graphics.text(this.font, "Available Versions", panelL + 2, LIST_TOP - 13, COLOR_WHITE);
+		if (!this.depPreviewText.isEmpty()) {
+			int leftEnd = panelL + 2 + this.font.width("Available Versions") + 8;
+			int availW = Math.max(40, panelR - leftEnd - 2);
+			String depStr = fitText(this.depPreviewText, availW);
+			graphics.text(this.font, depStr, panelR - this.font.width(depStr) - 2, LIST_TOP - 13, COLOR_SKY);
+		} else {
+			String vCount = this.loadingVersions
+				? "Fetching..."
+				: (this.versions.size() + (this.fabricOnly ? " Fabric releases" : " files"));
+			int vcw = this.font.width(vCount);
+			graphics.text(this.font, vCount, panelR - vcw - 2, LIST_TOP - 13, COLOR_MUTED);
+		}
 
 		// Footer progress bar + status line
 		int statusY = this.height - 46;
@@ -374,11 +482,11 @@ public class ModrinthProjectScreen extends Screen {
 			} else {
 				int pulse = (int) ((System.currentTimeMillis() / 12L) % Math.max(1, barW - 40));
 				fillW = Math.min(barW - 2, 36);
-				graphics.fill(barX + 1 + pulse, barY + 1, Math.min(barX + barW - 1, barX + 1 + pulse + fillW), barY + 4, COLOR_GREEN);
+				graphics.fill(barX + 1 + pulse, barY + 1, Math.min(barX + barW - 1, barX + 1 + pulse + fillW), barY + 4, COLOR_SUCCESS);
 				fillW = -1;
 			}
 			if (fillW > 0) {
-				graphics.fill(barX + 1, barY + 1, barX + 1 + fillW, barY + 4, COLOR_GREEN);
+				graphics.fill(barX + 1, barY + 1, barX + 1 + fillW, barY + 4, COLOR_SUCCESS);
 			}
 			graphics.centeredText(this.font, fitText(this.statusMessage, panelW), this.width / 2, statusY - 1, this.statusColor);
 		} else if (!this.statusMessage.isEmpty()) {
@@ -387,7 +495,7 @@ public class ModrinthProjectScreen extends Screen {
 	}
 
 	private String fitText(final String text, final int maxWidth) {
-		if (text == null || text.isEmpty()) {
+		if (text == null || text.isEmpty() || maxWidth <= 0) {
 			return "";
 		}
 		if (this.font.width(text) <= maxWidth) {
@@ -395,7 +503,7 @@ public class ModrinthProjectScreen extends Screen {
 		}
 		int ellipsisW = this.font.width("...");
 		if (maxWidth <= ellipsisW) {
-			return "";
+			return this.font.plainSubstrByWidth(text, maxWidth);
 		}
 		return this.font.plainSubstrByWidth(text, maxWidth - ellipsisW) + "...";
 	}
@@ -456,25 +564,38 @@ public class ModrinthProjectScreen extends Screen {
 				return;
 			}
 			Entry pick = null;
+			Entry best263 = null;
 			for (ModrinthClient.ProjectVersion v : list) {
 				Entry e = new Entry(v, null);
 				this.addEntry(e);
 				if (keepId != null && keepId.equals(v.id)) {
 					pick = e;
 				}
+				if (best263 == null && has263(v.gameVersions)) {
+					best263 = e;
+				}
 			}
-			this.setSelected(pick != null ? pick : this.children().get(0));
+			this.setSelected(pick != null ? pick : (best263 != null ? best263 : this.children().get(0)));
 		}
 
 		@Override
 		public void setSelected(final @Nullable Entry selected) {
 			super.setSelected(selected);
+			String nextId = (selected != null && selected.version != null) ? selected.version.id : null;
+			if (!ModrinthProjectScreen.this.installing
+					&& ModrinthProjectScreen.this.lastSelectedVersionId != null
+					&& !ModrinthProjectScreen.this.lastSelectedVersionId.equals(nextId)) {
+				ModrinthProjectScreen.this.shaderNeedsWebGlReload = false;
+				ModrinthProjectScreen.this.installedShaderFilename = null;
+			}
+			ModrinthProjectScreen.this.lastSelectedVersionId = nextId;
+			ModrinthProjectScreen.this.updateDepPreview();
 			ModrinthProjectScreen.this.updateButtons();
 		}
 
 		@Override
 		public int getRowWidth() {
-			return Math.min(ModrinthProjectScreen.this.width - 24, 440);
+			return Math.min(ModrinthProjectScreen.this.width - 20, 444);
 		}
 
 		final class Entry extends ObjectSelectionList.Entry<Entry> {
@@ -503,7 +624,7 @@ public class ModrinthProjectScreen extends Screen {
 				}
 
 				if (hovered) {
-					graphics.fill(x, y, x + w, y + this.getContentHeight(), 0x22FFFFFF);
+					graphics.fill(x, y, x + w, y + this.getContentHeight(), 0x1EFFFFFF);
 				}
 
 				String badge = this.version.channelBadge();
@@ -513,8 +634,8 @@ public class ModrinthProjectScreen extends Screen {
 				String rightInfo = buildRightMeta(this.version);
 				int rightW = ModrinthProjectScreen.this.font.width(rightInfo);
 				int rightX = x + w - rightW - 3;
-				boolean isModern = hasModernMc(this.version.gameVersions);
-				graphics.text(ModrinthProjectScreen.this.font, rightInfo, rightX, y + 3, isModern ? COLOR_AQUA : COLOR_MUTED);
+				boolean is26x = has26x(this.version.gameVersions);
+				graphics.text(ModrinthProjectScreen.this.font, rightInfo, rightX, y + 3, is26x ? COLOR_SKY : COLOR_MUTED);
 
 				String label = this.version.name.isEmpty() ? this.version.versionNumber : this.version.name;
 				int maxLabelW = Math.max(24, rightX - (x + 3 + badgeW + 5) - 6);
@@ -590,9 +711,18 @@ public class ModrinthProjectScreen extends Screen {
 			return sb.toString();
 		}
 
-		private boolean hasModernMc(final List<String> gameVersions) {
+		private boolean has263(final List<String> gameVersions) {
 			for (String gv : gameVersions) {
-				if (gv.startsWith("26.") || gv.startsWith("1.21")) {
+				if ("26.3".equals(gv)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private boolean has26x(final List<String> gameVersions) {
+			for (String gv : gameVersions) {
+				if (gv.startsWith("26.")) {
 					return true;
 				}
 			}

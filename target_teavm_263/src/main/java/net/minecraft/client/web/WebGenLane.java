@@ -118,7 +118,9 @@ public final class WebGenLane implements Web263GenOffload.Handler {
 		+ "var cores = n.hardwareConcurrency || 2, memory = n.deviceMemory || 8;"
 		+ "var isCrOS = /\\bCrOS\\b/.test(n.userAgent || '');"
 		+ "if (cores <= 2 || memory <= 4 || (isCrOS && cores <= 4)) return 0;"
-		+ "return cores <= 4 ? 1 : 2;")
+		+ "if (cores <= 4 || memory < 6) return 1;"
+		+ "if (cores <= 7 || memory < 8) return 2;"
+		+ "return cores >= 12 ? 4 : 3;")
 	private static native int defaultWorkers();
 
 	public static void drainResults() {

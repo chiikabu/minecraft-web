@@ -1121,6 +1121,23 @@
 
 	var activeBridgeCtx = null;
 
+	function formatHookError(e) {
+		if (!e) { return String(e); }
+		if (e.__cls) { return e.__cls + (e.detailMessage ? ": " + e.detailMessage : ""); }
+		if (e.message) { return String(e.message); }
+		return String(e);
+	}
+
+	function logHookErrorOnce(ctx, hookName, modId, e) {
+		if (!ctx._loggedHookErrors) { ctx._loggedHookErrors = Object.create(null); }
+		var key = String(modId || "") + "|" + String(hookName || "") + "|" + formatHookError(e);
+		if (ctx._loggedHookErrors[key]) { return; }
+		ctx._loggedHookErrors[key] = true;
+		if (typeof console !== "undefined" && console.warn) {
+			console.warn("[jvm-bridge] hook skipped (" + (modId ? modId + ":" : "") + hookName + "): " + formatHookError(e));
+		}
+	}
+
 	function fireHooks(ctx, hookName, payload) {
 		if (!ctx) { return payload; }
 		var rt = ctx.rt;
@@ -1132,17 +1149,17 @@
 					for (var ri = 0; ri < rList.length; ri++) {
 						var rEntry = rList[ri];
 						if (!rEntry) { continue; }
-						try { rEntry.fn(payload, rt); } catch (e) { console.error("[jvm-bridge] hook error (" + hookName + "):", e); }
+						try { rEntry.fn(payload, rt); } catch (e) { logHookErrorOnce(ctx, hookName, rEntry.modId, e); }
 					}
 				}
 				return payload;
 			}
 			if (typeof rt.dispatchHook === "function") {
-				try { rt.dispatchHook(hookName, payload); } catch (e) { console.error("[jvm-bridge] hook error (" + hookName + "):", e); }
+				try { rt.dispatchHook(hookName, payload); } catch (e) { logHookErrorOnce(ctx, hookName, "", e); }
 				return payload;
 			}
 			if (typeof rt.emitHook === "function") {
-				try { rt.emitHook(hookName, payload); } catch (e) { console.error("[jvm-bridge] hook error (" + hookName + "):", e); }
+				try { rt.emitHook(hookName, payload); } catch (e) { logHookErrorOnce(ctx, hookName, "", e); }
 				return payload;
 			}
 		}
@@ -1151,7 +1168,7 @@
 			for (var i = 0; i < list.length; i++) {
 				var entry = list[i];
 				if (!entry) { continue; }
-				try { entry.fn(payload); } catch (e) { console.error("[jvm-bridge] hook error (" + hookName + "):", e); }
+				try { entry.fn(payload); } catch (e) { logHookErrorOnce(ctx, hookName, entry.modId, e); }
 			}
 		}
 		return payload;
@@ -5348,6 +5365,34 @@
 		ctx.regClass("net/fabricmc/fabric/api/client/screen/v1/ScreenEvents", {
 			statics: { BEFORE_INIT: scrBefore, AFTER_INIT: scrAfter }
 		});
+		var noopScreenEvt = createFabricEvent(function () {});
+		ctx.regClass("net/fabricmc/fabric/impl/client/screen/ScreenExtensions", {
+			isInterface: true,
+			methods: {
+				fabric_getRemoveEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeRenderEvent: function () { return noopScreenEvt; },
+				fabric_getAfterRenderEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeTickEvent: function () { return noopScreenEvt; },
+				fabric_getAfterTickEvent: function () { return noopScreenEvt; },
+				fabric_getAllowMouseClickEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeMouseClickEvent: function () { return noopScreenEvt; },
+				fabric_getAfterMouseClickEvent: function () { return noopScreenEvt; },
+				fabric_getAllowMouseReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeMouseReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getAfterMouseReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getAllowMouseScrollEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeMouseScrollEvent: function () { return noopScreenEvt; },
+				fabric_getAfterMouseScrollEvent: function () { return noopScreenEvt; },
+				fabric_getAllowKeyPressEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeKeyPressEvent: function () { return noopScreenEvt; },
+				fabric_getAfterKeyPressEvent: function () { return noopScreenEvt; },
+				fabric_getAllowKeyReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getBeforeKeyReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getAfterKeyReleaseEvent: function () { return noopScreenEvt; },
+				fabric_getButtons: function () { return makeJavaList(ctx, []); }
+			}
+		});
+		ctx._noopScreenEvt = noopScreenEvt;
 
 		// ---- Brigadier Command Engine ----
 		ctx.regClass("com/mojang/brigadier/Command", { isInterface: true });
@@ -5807,11 +5852,35 @@
 		if (name === "TitleScreen") { cls = "net/minecraft/client/gui/screens/TitleScreen"; }
 		else if (name === "PauseScreen") { cls = "net/minecraft/client/gui/screens/PauseScreen"; }
 		else if (name === "ChatScreen") { cls = "net/minecraft/client/gui/screens/ChatScreen"; }
+		var noopEvt = ctx._noopScreenEvt || null;
 		var scr = ctx.makeObj(cls, {
 			_screenName: name,
 			_title: makeComponentLiteral(ctx, t),
+			minecraft: getMinecraftInstance(ctx),
 			width: w,
-			height: h
+			height: h,
+			__interfaces: ["net/fabricmc/fabric/impl/client/screen/ScreenExtensions"],
+			fabric_getRemoveEvent: function () { return noopEvt; },
+			fabric_getBeforeRenderEvent: function () { return noopEvt; },
+			fabric_getAfterRenderEvent: function () { return noopEvt; },
+			fabric_getBeforeTickEvent: function () { return noopEvt; },
+			fabric_getAfterTickEvent: function () { return noopEvt; },
+			fabric_getAllowMouseClickEvent: function () { return noopEvt; },
+			fabric_getBeforeMouseClickEvent: function () { return noopEvt; },
+			fabric_getAfterMouseClickEvent: function () { return noopEvt; },
+			fabric_getAllowMouseReleaseEvent: function () { return noopEvt; },
+			fabric_getBeforeMouseReleaseEvent: function () { return noopEvt; },
+			fabric_getAfterMouseReleaseEvent: function () { return noopEvt; },
+			fabric_getAllowMouseScrollEvent: function () { return noopEvt; },
+			fabric_getBeforeMouseScrollEvent: function () { return noopEvt; },
+			fabric_getAfterMouseScrollEvent: function () { return noopEvt; },
+			fabric_getAllowKeyPressEvent: function () { return noopEvt; },
+			fabric_getBeforeKeyPressEvent: function () { return noopEvt; },
+			fabric_getAfterKeyPressEvent: function () { return noopEvt; },
+			fabric_getAllowKeyReleaseEvent: function () { return noopEvt; },
+			fabric_getBeforeKeyReleaseEvent: function () { return noopEvt; },
+			fabric_getAfterKeyReleaseEvent: function () { return noopEvt; },
+			fabric_getButtons: function () { return makeJavaList(ctx, []); }
 		});
 		ctx._cachedScreenName = name;
 		ctx._cachedScreenTitle = t;
@@ -7910,6 +7979,25 @@
 			canonicalTarget === "net/minecraft/client/gui/Hud") { return getGuiInstance(ctx); }
 		if (canonicalTarget === "net/minecraft/client/gui/components/ChatComponent") { return getGuiInstance(ctx).getChat(); }
 		if (canonicalTarget === "com/mojang/blaze3d/platform/Window") { return getWindowInstance(ctx); }
+		if (canonicalTarget === "net/minecraft/client/KeyboardHandler") {
+			if (!ctx._keyboardHandlerObj) {
+				var mcK = getMinecraftInstance(ctx);
+				ctx._keyboardHandlerObj = ctx.makeObj("net/minecraft/client/KeyboardHandler", { minecraft: mcK, field_1778: mcK });
+			}
+			return ctx._keyboardHandlerObj;
+		}
+		if (canonicalTarget === "net/minecraft/client/MouseHandler") {
+			if (!ctx._mouseHandlerObj) {
+				var mcM = getMinecraftInstance(ctx);
+				ctx._mouseHandlerObj = ctx.makeObj("net/minecraft/client/MouseHandler", { minecraft: mcM, field_1779: mcM, xpos: 0, ypos: 0 });
+			}
+			return ctx._mouseHandlerObj;
+		}
+		if (canonicalTarget === "net/minecraft/client/gui/screens/Screen" ||
+			canonicalTarget === "net/minecraft/client/gui/screens/TitleScreen" ||
+			canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen") {
+			return ctx._cachedScreenObj || makeScreenObj(ctx, "Screen", "Screen");
+		}
 		return null;
 	}
 
@@ -7927,6 +8015,18 @@
 			inst.__cls = mixinClassName;
 			inst.__class = mixinClassName;
 			inst.$class = mixinClassName;
+		}
+		// Mixin classes are woven into their target class on a real JVM, so (Target)(Object)this must pass checkcast.
+		if (canonicalTarget) {
+			var ifaces = inst.__interfaces ? inst.__interfaces.slice() : [];
+			if (ifaces.indexOf(canonicalTarget) < 0) { ifaces.push(canonicalTarget); }
+			if ((canonicalTarget === "net/minecraft/client/gui/screens/Screen" ||
+				canonicalTarget === "net/minecraft/client/gui/screens/TitleScreen" ||
+				canonicalTarget === "net/minecraft/client/gui/screens/PauseScreen") &&
+				ifaces.indexOf("net/fabricmc/fabric/impl/client/screen/ScreenExtensions") < 0) {
+				ifaces.push("net/fabricmc/fabric/impl/client/screen/ScreenExtensions");
+			}
+			inst.__interfaces = ifaces;
 		}
 		// Wire @Shadow fields dynamically to the live Minecraft target object
 		if (shadows && shadows.length) {
@@ -8718,6 +8818,13 @@
 			};
 		}
 
+		// When WebMods.java drives JVM lifecycle hooks directly (jsEmitJvmTick, jsEmitJvmHudRender,
+		// jsDispatchJvmScreenInit/WorldJoin/WorldLeave), skip registering permanent __global__
+		// EaglerMods listeners to avoid double/triple dispatch and keep the zero-overhead vanilla fast path.
+		if (root.__mcWebModsDrivesJvm) {
+			return;
+		}
+
 		em.onTick(function (st, tickNum) {
 			if (typeof tickNum === "number" && tickNum === ctx.lastTickNumber) { return; }
 			ctx.lastTickNumber = tickNum;
@@ -8838,8 +8945,27 @@
 		attachMixins: function (rt, modRecord, mixinConfigs, parsedClasses) {
 			return attachMixinsImpl(rt, modRecord, mixinConfigs, parsedClasses);
 		},
+		renderHudOverlayDispatchesHud: true,
 		renderHudOverlay: function (ctx) {
 			return renderHudOverlayImpl(ctx);
+		},
+		prepareTick: function (tickNum, passedState) {
+			if (!activeBridgeCtx) { return; }
+			activeBridgeCtx.lastTickNumber = tickNum;
+			activeBridgeCtx.lastTickTimeMs = Date.now();
+			activeBridgeCtx.sprintingLocal = null;
+			activeBridgeCtx.yawLocal = null;
+			activeBridgeCtx.pitchLocal = null;
+			activeBridgeCtx.refreshStateCache(passedState || null, -1);
+		},
+		invalidateStateCache: function () {
+			if (!activeBridgeCtx) { return; }
+			activeBridgeCtx.cachedStateSeq = -1;
+			activeBridgeCtx.cachedStateTime = 0;
+			activeBridgeCtx.refreshStateCache(null, -1);
+		},
+		makeScreenObj: function (next, title) {
+			return activeBridgeCtx ? makeScreenObj(activeBridgeCtx, next, title) : null;
 		},
 		clearHudOverlay: function () {
 			if (activeBridgeCtx) { clearHudOverlayForCtx(activeBridgeCtx); }

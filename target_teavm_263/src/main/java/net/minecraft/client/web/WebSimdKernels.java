@@ -111,6 +111,7 @@ public final class WebSimdKernels {
 			return;
 		}
 		Web263Culling.simdCullHook = WebSimdKernels::cullAabbsFrustumFog;
+		Web263Culling.simdSortHook = WebSimdKernels::createDistanceSorting;
 		System.out.println("[26.3-simd] client SIMD kernels installed (Fog/Frustum Cull, Translucent Sort)");
 	}
 
